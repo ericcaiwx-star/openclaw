@@ -282,6 +282,8 @@ describe("spawnSubagentDirect seam flow", () => {
     expect(result.status).toBe("accepted");
     expect(result.sessionKey).toBe(result.childSessionKey);
     expect(result.expectsCompletionMessage).toBe(false);
+    expect(typeof result.sessionId).toBe("string");
+    expect(readStore()[result.childSessionKey!]?.sessionId).toBe(result.sessionId);
     const registerInput = firstRegisteredSubagentRun();
     expect(registerInput).toMatchObject({
       runId: result.runId,

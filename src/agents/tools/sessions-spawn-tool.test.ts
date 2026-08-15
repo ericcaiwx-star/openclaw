@@ -276,6 +276,7 @@ describe("sessions_spawn tool", () => {
       runId: "run-visible",
       cleanup: "keep",
     });
+    expect(result.details).not.toHaveProperty("sessionId");
     expect(callGateway).toHaveBeenCalledWith("sessions.create", {
       ...worktree,
       agentId: "main",
