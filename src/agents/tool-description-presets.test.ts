@@ -99,3 +99,17 @@ describe("sessions_spawn delegation guidance", () => {
     expect(description).not.toContain("auth probing");
   });
 });
+
+describe("sessions_spawn tool description", () => {
+  it("scopes durable sessionId to hidden native accepts", () => {
+    const description = describeSessionsSpawnTool();
+    expect(description).toContain("Hidden native accepts include durable `sessionId`");
+    expect(description).toContain("prefer over parsing `childSessionKey`");
+    expect(description).toContain("ACP and `visible=true` accepts omit it");
+
+    const hiddenAcp = describeSessionsSpawnTool({ acpAvailable: false });
+    expect(hiddenAcp).toContain("Hidden native accepts include durable `sessionId`");
+    expect(hiddenAcp).toContain("`visible=true` accepts omit it");
+    expect(hiddenAcp).not.toContain("ACP");
+  });
+});
