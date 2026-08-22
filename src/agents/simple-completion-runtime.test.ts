@@ -277,6 +277,23 @@ describe("prepareSimpleCompletionModel", () => {
     );
   });
 
+  it("locks explicit @profile pins even when bindAuthOwner is off", async () => {
+    hoisted.getApiKeyForModelMock.mockRejectedValueOnce(new Error("missing-profile"));
+    const result = await prepareSimpleCompletionModel({
+      cfg: {},
+      provider: "anthropic",
+      modelId: "claude-opus-4-6",
+      profileId: "anthropic:missing",
+    });
+    expect(result).toMatchObject({ error: expect.stringContaining("missing-profile") });
+    expect(hoisted.getApiKeyForModelMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        profileId: "anthropic:missing",
+        lockedProfile: true,
+      }),
+    );
+  });
+
   it("returns error when model resolution fails", async () => {
     hoisted.resolveModelMock.mockReturnValueOnce({
       error: "Unknown model: anthropic/missing-model",

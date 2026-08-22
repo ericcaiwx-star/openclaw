@@ -298,7 +298,11 @@ async function prepareSimpleCompletionModelCore(
           profileId: params.profileId,
           preferredProfile: params.preferredProfile,
           ...(authStore ? { store: authStore } : {}),
-          ...(params.bindAuthOwner && params.profileId ? { lockedProfile: true } : {}),
+          // Trailing model `@profile` is an explicit pin (docs: forces that
+          // auth profile). Lock it even when bindAuthOwner is off so an
+          // unresolvable pin fails closed instead of deferring to synthetic
+          // or ambient credentials.
+          ...(params.profileId ? { lockedProfile: true } : {}),
           modelId: initialModel.id,
           secretSentinels: true,
         })
@@ -310,7 +314,7 @@ async function prepareSimpleCompletionModelCore(
           profileId: params.profileId,
           preferredProfile: params.preferredProfile,
           ...(authStore ? { store: authStore } : {}),
-          ...(params.bindAuthOwner && params.profileId ? { lockedProfile: true } : {}),
+          ...(params.profileId ? { lockedProfile: true } : {}),
           secretSentinels: true,
         });
     if (routeResolution?.kind === "routes") {
@@ -392,7 +396,7 @@ async function prepareSimpleCompletionModelCore(
           profileId: auth.profileId,
           preferredProfile: params.preferredProfile,
           ...(authStore ? { store: authStore } : {}),
-          ...(params.bindAuthOwner && params.profileId ? { lockedProfile: true } : {}),
+          ...(params.profileId ? { lockedProfile: true } : {}),
           secretSentinels: true,
         });
       }
