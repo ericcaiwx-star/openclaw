@@ -41,7 +41,6 @@ import {
   restorePriorAgentsDefaultsModelUnlessOptIn,
   resolveProviderMatch,
 } from "../../plugins/provider-auth-choice-helpers.js";
-import { applyAuthProfileConfig } from "../../plugins/provider-auth-helpers.js";
 import { prepareProviderAuthProfilesForPersistence } from "../../plugins/provider-auth-persistence.js";
 import { createVpsAwareOAuthHandlers } from "../../plugins/provider-oauth-flow.js";
 import { resolvePluginProvidersCore } from "../../plugins/providers.runtime.js";
@@ -716,11 +715,12 @@ export async function modelsAuthPasteTokenCommand(
     agentDir,
   });
 
-  await updateConfig((cfg) => applyAuthProfileConfig(cfg, { profileId, provider, mode: "token" }));
-
+  // Pasted credentials are agent-scoped: the profile lives only in the
+  // targeted agent's store. Do not write global `auth.profiles`/`auth.order`
+  // metadata — that declares a profile the default agent cannot resolve and
+  // breaks its auth routing after a secondary-agent paste.
   await refreshRunningGatewayAuthState(agentId);
 
-  logConfigUpdated(runtime);
   runtime.log(`Auth profile: ${profileId} (${provider}/token)`);
   if (provider === "anthropic") {
     runtime.log("Anthropic setup-token auth is supported in OpenClaw.");
@@ -774,13 +774,12 @@ export async function modelsAuthPasteApiKeyCommand(
     agentDir,
   });
 
-  await updateConfig((cfg) =>
-    applyAuthProfileConfig(cfg, { profileId, provider, mode: "api_key" }),
-  );
-
+  // Pasted credentials are agent-scoped: the profile lives only in the
+  // targeted agent's store. Do not write global `auth.profiles`/`auth.order`
+  // metadata — that declares a profile the default agent cannot resolve and
+  // breaks its auth routing after a secondary-agent paste.
   await refreshRunningGatewayAuthState(agentId);
 
-  logConfigUpdated(runtime);
   runtime.log(`Auth profile: ${profileId} (${provider}/api_key)`);
 }
 
