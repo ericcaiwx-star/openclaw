@@ -71,7 +71,11 @@ Do not write `type: "aws-sdk"` into the credential store; stored credentials are
 
 ## Declared profiles fail closed
 
-A profile that is declared — in `auth.profiles` config metadata, a store credential, or a per-agent auth order — but cannot be resolved fails closed with guidance. It never silently falls through to an undeclared env/config credential: the operator named a profile, so a substitute could bill a different account. `models auth paste-api-key` and `paste-token` keep credentials agent-scoped on purpose; they write only the targeted agent's SQLite store and never add global `auth.profiles`/`auth.order` metadata, so a secondary-agent paste cannot declare a profile the default agent cannot resolve.
+An explicitly selected profile — a session pin, a locked `profileId`, or any named profile passed into resolution — that cannot be resolved fails closed with guidance. It never silently falls through to an undeclared env/config credential: the operator named a profile, so a substitute could bill a different account.
+
+Automatic selection filters unresolved declared profiles, then continues to remaining profiles and undeclared env/config credentials. `models auth paste-api-key` and `paste-token` keep credentials agent-scoped on purpose; they write only the targeted agent's SQLite store and never add global `auth.profiles`/`auth.order` metadata, so a secondary-agent paste cannot declare a profile the default agent cannot resolve.
+
+Older installs may still have leftover global paste declarations from before that producer change. `openclaw doctor --fix` removes an `api_key` or `token` `auth.profiles` entry (and that id from `auth.order`) only when the secret exists in a non-default agent store and not in the default or shared store. It leaves `oauth`, `aws-sdk`, shared secrets, and anything it cannot prove stale.
 
 ## Explicit auth order filtering
 

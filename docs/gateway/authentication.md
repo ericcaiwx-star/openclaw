@@ -78,9 +78,18 @@ agent's store only. Credentials stay agent-scoped: pasting into
 `--agent <non-default>` does not copy or overwrite the default agent's key,
 and it does not write global `auth.profiles`/`auth.order` metadata, so a
 secondary-agent paste cannot declare a profile the default agent cannot
-resolve. A profile that is declared (in `auth.profiles` or the store) but
-cannot be resolved fails closed with guidance instead of silently falling
-through to an undeclared env/config credential.
+resolve. An explicitly selected profile (session pin, locked `profileId`, or
+a named profile passed into resolution) that cannot be resolved fails closed
+with guidance instead of silently falling through to an undeclared env/config
+credential. Automatic selection filters unresolved declared profiles, then
+continues to remaining profiles and undeclared env/config credentials.
+
+Older installs may still have leftover global paste declarations from before
+that producer change. `openclaw doctor --fix` removes an `api_key` or
+`token` `auth.profiles` entry (and that id from `auth.order`) only when the
+secret exists in a non-default agent store and not in the default or shared
+store. It leaves `oauth`, `aws-sdk`, shared secrets, and anything it cannot
+prove stale.
 
 OpenClaw reads auth profiles from each agent's `openclaw-agent.sqlite`. Endpoint details (`baseUrl`, `api`, model ids, headers, timeouts) belong under `models.providers.<id>` in `openclaw.json` or `models.json`, not in auth profiles.
 

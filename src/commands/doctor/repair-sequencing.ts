@@ -51,6 +51,7 @@ import {
 } from "./shared/plugin-metadata-snapshot-scope.js";
 import { repairStaleAgentModelRefs } from "./shared/stale-agent-model-ref-repair.js";
 import { maybeRepairStaleConfiguredAuthOrders } from "./shared/stale-auth-order.js";
+import { maybeRepairStaleGlobalPasteProfiles } from "./shared/stale-global-paste-profiles.js";
 import { repairStaleOAuthProfileShadows } from "./shared/stale-oauth-profile-shadows.js";
 import { maybeRepairStalePluginConfig } from "./shared/stale-plugin-config.js";
 import { maybeRepairStaleSubagentAllowlists } from "./shared/stale-subagent-allowlist.js";
@@ -367,6 +368,11 @@ export async function runDoctorRepairSequence(params: {
     env,
   });
   applyMutation(staleAuthOrderRepair);
+  const staleGlobalPasteRepair = maybeRepairStaleGlobalPasteProfiles({
+    cfg: state.candidate,
+    env,
+  });
+  applyMutation(staleGlobalPasteRepair);
   const authProfilesRepaired =
     legacyOAuthSidecarRepair.changes.length > 0 ||
     staleOAuthShadowRepair.changes.length > 0 ||

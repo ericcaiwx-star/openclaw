@@ -504,6 +504,43 @@ describe("noteAuthProfileHealth", () => {
       "Agent coder auth profile openai:coder is expired (0m).",
     ]);
   });
+
+  it("includes leftover secondary-agent paste metadata in auth profile findings", async () => {
+    const opsDir = path.join(tempDir, "agents", "ops", "agent");
+    fs.mkdirSync(opsDir, { recursive: true });
+    writePersistedAuthProfileStoreRaw(
+      {
+        version: 1,
+        profiles: {
+          "openrouter:default": { type: "api_key", provider: "openrouter", key: "sk-ops-only" },
+        },
+      },
+      opsDir,
+    );
+    authProfileMocks.ensureAuthProfileStore.mockReturnValue({ version: 1, profiles: {} });
+
+    const findings = await collectAuthProfileHealthFindings({
+      cfg: {
+        agents: {
+          list: [{ id: "main", default: true }, { id: "ops" }],
+        },
+        auth: {
+          profiles: {
+            "openrouter:default": { provider: "openrouter", mode: "api_key" },
+          },
+        },
+      } as OpenClawConfig,
+    });
+
+    expect(findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          checkId: "core/doctor/auth-stale-global-paste",
+          target: "openrouter:default",
+        }),
+      ]),
+    );
+  });
   it("skips external auth profile resolution when no auth source exists", async () => {
     await noteAuthProfileHealth({
       cfg: {
