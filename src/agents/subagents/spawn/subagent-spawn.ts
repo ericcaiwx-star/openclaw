@@ -55,7 +55,7 @@ import type {
 } from "./subagent-spawn-contract.js";
 import { setSubagentSpawnDepsForTest } from "./subagent-spawn-deps.js";
 import {
-  buildSubagentExecutionSessionSpawnContext,
+  buildSubagentLaunchExecutionIdentityFacts,
   withSubagentGatewayExecutionIdentity,
 } from "./subagent-spawn-execution-identity.js";
 import { callNativeSubagentGateway, readGatewayRunId } from "./subagent-spawn-gateway.js";
@@ -65,6 +65,9 @@ import { resolveSubagentSpawnRequest } from "./subagent-spawn-request.js";
 import {
   createInitialSubagentSession,
   persistInitialChildSessionRuntimeModel,
+  resolveAcceptedChildSessionEntry,
+  resolveAcceptedChildSessionId,
+  syncProvisionalSessionIdentityForFork,
 } from "./subagent-spawn-session-patch.js";
 import { bindThreadForSubagentSpawn } from "./subagent-spawn-thread-binding.js";
 import {
@@ -241,6 +244,12 @@ export async function spawnSubagentDirect(
         expectedLifecycleRevision: childEntry.lifecycleRevision,
       };
     }
+    if (preparedSpawnContext.mode === "fork") {
+      syncProvisionalSessionIdentityForFork({
+        identity: provisionalSessionIdentity,
+        forkedSessionId: preparedSpawnContext.forked.sessionId,
+      });
+    }
     if (resolvedModel) {
       const runtimeModelPersistError = await persistInitialChildSessionRuntimeModel({
         cfg,
@@ -366,19 +375,10 @@ export async function spawnSubagentDirect(
     // Prefer the post-context persisted child entry so fork paths record and
     // return the same durable UUID (fork.transcript.sessionId), not the
     // provisional pre-fork entry identity.
-    const acceptedChildEntry =
-      preparedSpawnContext.mode === "fork"
-        ? {
-            ...(childEntry ?? {
-              sessionId: preparedSpawnContext.forked.sessionId,
-              updatedAt: Date.now(),
-            }),
-            sessionId: preparedSpawnContext.forked.sessionId,
-            ...(preparedSpawnContext.forked.sessionFile
-              ? { sessionFile: preparedSpawnContext.forked.sessionFile }
-              : {}),
-          }
-        : childEntry;
+    const acceptedChildEntry = resolveAcceptedChildSessionEntry({
+      persistedChildEntry: childEntry,
+      forked: preparedSpawnContext.mode === "fork" ? preparedSpawnContext.forked : undefined,
+    });
     if (acceptedChildEntry) {
       recordSessionCreated({
         sessionKey: childSessionKey,
@@ -392,10 +392,6 @@ export async function spawnSubagentDirect(
       requesterSessionKey: requesterInternalKey,
       agentId: targetAgentId,
     });
-    const resolveAcceptedChildSessionId = (): string | undefined =>
-      typeof acceptedChildEntry?.sessionId === "string" && acceptedChildEntry.sessionId.trim()
-        ? acceptedChildEntry.sessionId.trim()
-        : undefined;
     const launchChildRun = async () =>
       await callNativeSubagentGateway(
         withSubagentGatewayExecutionIdentity(
@@ -404,22 +400,19 @@ export async function spawnSubagentDirect(
             params: childLaunch.request,
             timeoutMs: childLaunch.timeoutMs,
           },
-          {
-            sessionSpawnContext: buildSubagentExecutionSessionSpawnContext({
-              enabled: isExecutionIdentityCollectionEnabled(cfg),
-              backend: "subagent",
-              parentAgentId: requesterAgentId,
-              requesterRef: requesterInternalKey,
-              controllerRef: ownership.controllerSessionKey,
-              depth: childDepth,
-              maxDepth: maxSpawnDepth,
-              targetAgentId,
-              sandbox: sandboxMode,
-              inheritedToolAllowlist: ctx.inheritedToolAllowlist,
-              inheritedToolDenylist: ctx.inheritedToolDenylist,
-            }),
+          buildSubagentLaunchExecutionIdentityFacts({
+            enabled: isExecutionIdentityCollectionEnabled(cfg),
+            parentAgentId: requesterAgentId,
+            requesterRef: requesterInternalKey,
+            controllerRef: ownership.controllerSessionKey,
+            depth: childDepth,
+            maxDepth: maxSpawnDepth,
+            targetAgentId,
+            sandbox: sandboxMode,
+            inheritedToolAllowlist: ctx.inheritedToolAllowlist,
+            inheritedToolDenylist: ctx.inheritedToolDenylist,
             parentExecutionIdentityToken: readParentExecutionIdentity(ctx),
-          },
+          }),
         ),
         childLaunch.authorization,
         gatewayContextResolver,
@@ -446,6 +439,13 @@ export async function spawnSubagentDirect(
         ...provisionalSessionIdentity,
         waitForSessionDeletion,
       });
+    const childParticipantRecord = {
+      promptedAt,
+      identity: { type: "agent", id: requesterAgentId } as const,
+      agentId: targetAgentId,
+      sessionKey: childSessionKey,
+      storePath: resolveSessionStorePathCore(cfg.session?.store, { agentId: targetAgentId }),
+    };
     type SubagentBackendState = { contextEnginePreparation?: SubagentSpawnPreparation };
     // Set once the gateway accepts the child run, so a later failure can tell an
     // accepted run apart from one that never started.
@@ -478,13 +478,7 @@ export async function spawnSubagentDirect(
         const launch = await launchChildRun();
         taskRowOwnership = launch.taskRowOwnership;
         acceptedChildRunId = readGatewayRunId(launch.response) ?? childIdem;
-        recordSessionParticipantBestEffort({
-          promptedAt,
-          identity: { type: "agent", id: requesterAgentId },
-          agentId: targetAgentId,
-          sessionKey: childSessionKey,
-          storePath: resolveSessionStorePathCore(cfg.session?.store, { agentId: targetAgentId }),
-        });
+        recordSessionParticipantBestEffort(childParticipantRecord);
         return { runId: acceptedChildRunId };
       },
       async cleanupOnFailure({ phase, state }) {
@@ -627,15 +621,7 @@ export async function spawnSubagentDirect(
             // Queued registration already owns the task row before either dispatch route starts.
             // Out-of-process Gateway tracking finds that exact runId and suppresses its CLI row.
             const gatewayRunId = readGatewayRunId(launch.response) ?? childRunId;
-            recordSessionParticipantBestEffort({
-              promptedAt,
-              identity: { type: "agent", id: requesterAgentId },
-              agentId: targetAgentId,
-              sessionKey: childSessionKey,
-              storePath: resolveSessionStorePathCore(cfg.session?.store, {
-                agentId: targetAgentId,
-              }),
-            });
+            recordSessionParticipantBestEffort(childParticipantRecord);
             try {
               const started = gatewayContextResolver
                 ? startQueuedSubagentRun(
@@ -717,7 +703,7 @@ export async function spawnSubagentDirect(
     return {
       status: "accepted",
       childSessionKey,
-      sessionId: resolveAcceptedChildSessionId(),
+      sessionId: resolveAcceptedChildSessionId(acceptedChildEntry),
       // sessionKey remains collector-launch only; ordinary spawns expose durable
       // identity via sessionId + childSessionKey without redefining sessionKey.
       ...(collectorSessionKey ? { sessionKey: collectorSessionKey } : {}),
