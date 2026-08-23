@@ -18,7 +18,7 @@ import { listAuthProfileRepairCandidates } from "../../doctor-auth-legacy-paths.
 
 const CHECK_ID = "core/doctor/auth-stale-global-paste";
 
-export type StaleGlobalPasteProfile = {
+type StaleGlobalPasteProfile = {
   profileId: string;
   provider: string;
   mode: "api_key" | "token";
@@ -84,7 +84,7 @@ function labelAgentDir(cfg: OpenClawConfig, env: NodeJS.ProcessEnv, agentDir: st
 }
 
 /** Portable config metadata whose secret exists only on a non-default agent. */
-export function findStaleGlobalPasteDeclarations(params: {
+function findStaleGlobalPasteDeclarations(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
 }): StaleGlobalPasteProfile[] {
