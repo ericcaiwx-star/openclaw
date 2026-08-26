@@ -85,11 +85,11 @@ credential. Automatic selection filters unresolved declared profiles, then
 continues to remaining profiles and undeclared env/config credentials.
 
 Older installs may still have leftover global paste declarations from before
-that producer change. `openclaw doctor --fix` removes an `api_key` or
-`token` `auth.profiles` entry (and that id from `auth.order`) only when the
-secret exists in a non-default agent store and not in the default or shared
-store. It leaves `oauth`, `aws-sdk`, shared secrets, and anything it cannot
-prove stale.
+that producer change. Doctor warns when a global `api_key` or `token`
+declaration is only resolvable in a secondary agent store. It does not delete
+that metadata: a secondary-only secret is not proof the declaration came from
+an old paste. Paste the credential into the default agent, or remove the
+declaration yourself, if that is what you want.
 
 OpenClaw reads auth profiles from each agent's `openclaw-agent.sqlite`. Endpoint details (`baseUrl`, `api`, model ids, headers, timeouts) belong under `models.providers.<id>` in `openclaw.json` or `models.json`, not in auth profiles.
 

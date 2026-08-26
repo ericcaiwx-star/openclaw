@@ -1,4 +1,6 @@
-// Removes leftover global paste metadata that only a secondary agent can resolve.
+// Diagnose global auth.profiles that only a secondary agent can resolve.
+// Doctor never deletes them: a secondary-only secret is not proof the
+// declaration came from an old paste. An operator can intend that order.
 import path from "node:path";
 import {
   listAgentIds,
@@ -18,7 +20,7 @@ import { listAuthProfileRepairCandidates } from "../../doctor-auth-legacy-paths.
 
 const CHECK_ID = "core/doctor/auth-stale-global-paste";
 
-type StaleGlobalPasteProfile = {
+type UnresolvedSecondaryOnlyGlobalProfile = {
   profileId: string;
   provider: string;
   mode: "api_key" | "token";
@@ -83,11 +85,10 @@ function labelAgentDir(cfg: OpenClawConfig, env: NodeJS.ProcessEnv, agentDir: st
   return path.basename(path.dirname(agentDir)) || agentDir;
 }
 
-/** Portable config metadata whose secret exists only on a non-default agent. */
-function findStaleGlobalPasteDeclarations(params: {
+function findUnresolvedSecondaryOnlyGlobalProfiles(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
-}): StaleGlobalPasteProfile[] {
+}): UnresolvedSecondaryOnlyGlobalProfile[] {
   const env = params.env ?? process.env;
   const profiles = params.cfg.auth?.profiles;
   if (!isRecord(profiles) || Object.keys(profiles).length === 0) {
@@ -126,7 +127,7 @@ function findStaleGlobalPasteDeclarations(params: {
     }
   }
 
-  const hits: StaleGlobalPasteProfile[] = [];
+  const hits: UnresolvedSecondaryOnlyGlobalProfile[] = [];
   for (const [profileId, profile] of Object.entries(profiles)) {
     const paste = readPasteProfile(profile);
     if (!paste || defaultHas.has(profileId)) {
@@ -146,67 +147,17 @@ function findStaleGlobalPasteDeclarations(params: {
   return hits;
 }
 
-function removeProfileDeclaration(cfg: OpenClawConfig, profileId: string): OpenClawConfig {
-  const profiles = { ...cfg.auth?.profiles };
-  delete profiles[profileId];
-  const orderEntries = Object.entries(cfg.auth?.order ?? {}).flatMap(([provider, ids]) => {
-    if (!Array.isArray(ids)) {
-      return [];
-    }
-    const next = ids.filter((id) => id !== profileId);
-    return next.length > 0 ? [[provider, next] as const] : [];
-  });
-  const auth: NonNullable<OpenClawConfig["auth"]> = { ...cfg.auth };
-  if (Object.keys(profiles).length > 0) {
-    auth.profiles = profiles;
-  } else {
-    delete auth.profiles;
-  }
-  if (orderEntries.length > 0) {
-    auth.order = Object.fromEntries(orderEntries);
-  } else {
-    delete auth.order;
-  }
-  if (!auth.profiles && !auth.order) {
-    const next = { ...cfg };
-    delete next.auth;
-    return next;
-  }
-  return { ...cfg, auth };
-}
-
-/** Drop demonstrably stale global paste declarations; leave unproven routes alone. */
-export function maybeRepairStaleGlobalPasteProfiles(params: {
-  cfg: OpenClawConfig;
-  env?: NodeJS.ProcessEnv;
-}): { config: OpenClawConfig; changes: string[] } {
-  const hits = findStaleGlobalPasteDeclarations(params);
-  if (hits.length === 0) {
-    return { config: params.cfg, changes: [] };
-  }
-  let config = params.cfg;
-  const changes: string[] = [];
-  for (const hit of hits) {
-    config = removeProfileDeclaration(config, hit.profileId);
-    changes.push(
-      `auth.profiles.${hit.profileId}: removed leftover ${hit.mode} metadata (credential lives only on agent ${hit.foundInAgents.join(", ")}).`,
-    );
-  }
-  return { config, changes };
-}
-
-/** Doctor detect findings for leftover secondary-agent paste metadata. */
+/** Doctor detect findings for globally declared profiles only a secondary agent can resolve. */
 export function collectStaleGlobalPasteFindings(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
-  doctorFixCommand?: string;
 }): HealthFinding[] {
-  const fix = params.doctorFixCommand ?? "openclaw doctor --fix";
-  return findStaleGlobalPasteDeclarations(params).map((hit) => ({
+  return findUnresolvedSecondaryOnlyGlobalProfiles(params).map((hit) => ({
     checkId: CHECK_ID,
     severity: "warning",
-    message: `auth.profiles.${hit.profileId} is leftover secondary-agent ${hit.mode} metadata; the default agent cannot resolve it.`,
+    message: `auth.profiles.${hit.profileId} is declared globally, but only agent ${hit.foundInAgents.join(", ")} has a usable ${hit.mode}; the default agent cannot resolve it.`,
     target: hit.profileId,
-    fixHint: `Run \`${fix}\` to drop this global declaration. The credential stays in agent ${hit.foundInAgents.join(", ")}.`,
+    fixHint:
+      "Leave the declaration if it is intentional. To give the default agent this profile, paste the credential into that agent. Doctor --fix will not delete global auth.profiles or auth.order from this warning.",
   }));
 }

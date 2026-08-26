@@ -75,7 +75,7 @@ An explicitly selected profile — a session pin, a locked `profileId`, or any n
 
 Automatic selection filters unresolved declared profiles, then continues to remaining profiles and undeclared env/config credentials. `models auth paste-api-key` and `paste-token` keep credentials agent-scoped on purpose; they write only the targeted agent's SQLite store and never add global `auth.profiles`/`auth.order` metadata, so a secondary-agent paste cannot declare a profile the default agent cannot resolve.
 
-Older installs may still have leftover global paste declarations from before that producer change. `openclaw doctor --fix` removes an `api_key` or `token` `auth.profiles` entry (and that id from `auth.order`) only when the secret exists in a non-default agent store and not in the default or shared store. It leaves `oauth`, `aws-sdk`, shared secrets, and anything it cannot prove stale.
+Older installs may still have leftover global paste declarations from before that producer change. Doctor warns when a global `api_key` or `token` declaration is only resolvable in a secondary agent store. It does not delete that metadata: a secondary-only secret is not proof the declaration came from an old paste. Paste the credential into the default agent, or remove the declaration yourself, if that is what you want.
 
 ## Explicit auth order filtering
 

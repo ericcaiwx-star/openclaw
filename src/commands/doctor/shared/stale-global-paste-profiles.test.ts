@@ -1,4 +1,4 @@
-// Doctor leftover-global-paste tests cover conservative auth.profiles cleanup.
+// Doctor leftover-global-paste tests cover report-only diagnostics.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -8,10 +8,7 @@ import type { AuthProfileStore } from "../../../agents/auth-profiles/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../../state/openclaw-state-db.js";
-import {
-  collectStaleGlobalPasteFindings,
-  maybeRepairStaleGlobalPasteProfiles,
-} from "./stale-global-paste-profiles.js";
+import { collectStaleGlobalPasteFindings } from "./stale-global-paste-profiles.js";
 
 const PROFILE_ID = "openrouter:default";
 
@@ -75,92 +72,8 @@ async function writeAgentStore(
   writePersistedAuthProfileStoreRaw(store, dir);
 }
 
-describe("maybeRepairStaleGlobalPasteProfiles", () => {
-  it("removes leftover api_key metadata when the secret lives only on a secondary agent", async () => {
-    await withStateDir("openclaw-stale-paste-", async (stateDir) => {
-      const env = { OPENCLAW_STATE_DIR: stateDir };
-      await writeAgentStore(stateDir, "ops", apiKeyStore("sk-ops-only"));
-      const cfg = leftoverConfig();
-
-      const result = maybeRepairStaleGlobalPasteProfiles({ cfg, env });
-
-      expect(result.config.auth).toBeUndefined();
-      expect(result.changes).toEqual([
-        "auth.profiles.openrouter:default: removed leftover api_key metadata (credential lives only on agent ops).",
-      ]);
-    });
-  });
-
-  it("removes leftover token metadata and strips that id from auth.order", async () => {
-    await withStateDir("openclaw-stale-paste-token-", async (stateDir) => {
-      const env = { OPENCLAW_STATE_DIR: stateDir };
-      await writeAgentStore(stateDir, "ops", tokenStore("tok-ops-only"));
-      const cfg = leftoverConfig({ mode: "token" });
-      cfg.auth = {
-        ...cfg.auth,
-        order: { openrouter: [PROFILE_ID, "openrouter:keep"] },
-        profiles: {
-          ...cfg.auth?.profiles,
-          "openrouter:keep": { provider: "openrouter", mode: "oauth" },
-        },
-      };
-
-      const result = maybeRepairStaleGlobalPasteProfiles({ cfg, env });
-
-      expect(result.config.auth).toEqual({
-        profiles: { "openrouter:keep": { provider: "openrouter", mode: "oauth" } },
-        order: { openrouter: ["openrouter:keep"] },
-      });
-      expect(result.changes).toHaveLength(1);
-    });
-  });
-
-  it("keeps oauth and aws-sdk declarations even when a secondary agent has a paste secret", async () => {
-    await withStateDir("openclaw-stale-paste-oauth-", async (stateDir) => {
-      const env = { OPENCLAW_STATE_DIR: stateDir };
-      await writeAgentStore(stateDir, "ops", apiKeyStore("sk-ops-only"));
-
-      for (const mode of ["oauth", "aws-sdk"] as const) {
-        const cfg = leftoverConfig({ mode });
-        const result = maybeRepairStaleGlobalPasteProfiles({ cfg, env });
-        expect(result).toEqual({ config: cfg, changes: [] });
-      }
-    });
-  });
-
-  it("keeps the declaration when the default agent already has the secret", async () => {
-    await withStateDir("openclaw-stale-paste-default-", async (stateDir) => {
-      const env = { OPENCLAW_STATE_DIR: stateDir };
-      await writeAgentStore(stateDir, "main", apiKeyStore("sk-main"));
-      await writeAgentStore(stateDir, "ops", apiKeyStore("sk-ops"));
-      const cfg = leftoverConfig();
-
-      const result = maybeRepairStaleGlobalPasteProfiles({ cfg, env });
-
-      expect(result).toEqual({ config: cfg, changes: [] });
-    });
-  });
-
-  it("keeps the declaration when no agent store has a usable secret", async () => {
-    await withStateDir("openclaw-stale-paste-empty-", async (stateDir) => {
-      const env = { OPENCLAW_STATE_DIR: stateDir };
-      await writeAgentStore(stateDir, "ops", {
-        version: 1,
-        profiles: {
-          [PROFILE_ID]: { type: "api_key", provider: "openrouter" },
-        },
-      });
-      const cfg = leftoverConfig();
-
-      const result = maybeRepairStaleGlobalPasteProfiles({ cfg, env });
-
-      expect(result).toEqual({ config: cfg, changes: [] });
-    });
-  });
-});
-
 describe("collectStaleGlobalPasteFindings", () => {
-  it("emits a warning with a doctor --fix hint for leftover secondary-agent paste metadata", async () => {
+  it("warns when a global declaration is only resolvable on a secondary agent", async () => {
     await withStateDir("openclaw-stale-paste-findings-", async (stateDir) => {
       const env = { OPENCLAW_STATE_DIR: stateDir };
       await writeAgentStore(stateDir, "ops", apiKeyStore("sk-ops-only"));
@@ -170,12 +83,83 @@ describe("collectStaleGlobalPasteFindings", () => {
           checkId: "core/doctor/auth-stale-global-paste",
           severity: "warning",
           message:
-            "auth.profiles.openrouter:default is leftover secondary-agent api_key metadata; the default agent cannot resolve it.",
+            "auth.profiles.openrouter:default is declared globally, but only agent ops has a usable api_key; the default agent cannot resolve it.",
           target: PROFILE_ID,
           fixHint:
-            "Run `openclaw doctor --fix` to drop this global declaration. The credential stays in agent ops.",
+            "Leave the declaration if it is intentional. To give the default agent this profile, paste the credential into that agent. Doctor --fix will not delete global auth.profiles or auth.order from this warning.",
         },
       ]);
+    });
+  });
+
+  it("warns for token metadata without offering a mutating repair", async () => {
+    await withStateDir("openclaw-stale-paste-token-", async (stateDir) => {
+      const env = { OPENCLAW_STATE_DIR: stateDir };
+      await writeAgentStore(stateDir, "ops", tokenStore("tok-ops-only"));
+      const cfg = leftoverConfig({ mode: "token" });
+
+      const findings = collectStaleGlobalPasteFindings({ cfg, env });
+      expect(findings).toHaveLength(1);
+      expect(findings[0]?.message).toContain("usable token");
+      expect(findings[0]?.fixHint).toContain("Doctor --fix will not delete");
+      expect(cfg.auth?.profiles?.[PROFILE_ID]).toEqual({
+        provider: "openrouter",
+        mode: "token",
+      });
+      expect(cfg.auth?.order?.openrouter).toEqual([PROFILE_ID]);
+    });
+  });
+
+  it("keeps an intentional global order when only a secondary agent has the secret", async () => {
+    await withStateDir("openclaw-stale-paste-intentional-", async (stateDir) => {
+      const env = { OPENCLAW_STATE_DIR: stateDir };
+      await writeAgentStore(stateDir, "ops", apiKeyStore("sk-ops-only"));
+      const cfg = leftoverConfig();
+      const before = structuredClone(cfg);
+
+      collectStaleGlobalPasteFindings({ cfg, env });
+
+      expect(cfg).toEqual(before);
+      expect(cfg.auth?.order?.openrouter).toEqual([PROFILE_ID]);
+      expect(cfg.auth?.profiles?.[PROFILE_ID]).toEqual({
+        provider: "openrouter",
+        mode: "api_key",
+      });
+    });
+  });
+
+  it("does not warn for oauth or aws-sdk declarations", async () => {
+    await withStateDir("openclaw-stale-paste-oauth-", async (stateDir) => {
+      const env = { OPENCLAW_STATE_DIR: stateDir };
+      await writeAgentStore(stateDir, "ops", apiKeyStore("sk-ops-only"));
+
+      for (const mode of ["oauth", "aws-sdk"] as const) {
+        expect(collectStaleGlobalPasteFindings({ cfg: leftoverConfig({ mode }), env })).toEqual([]);
+      }
+    });
+  });
+
+  it("does not warn when the default agent already has the secret", async () => {
+    await withStateDir("openclaw-stale-paste-default-", async (stateDir) => {
+      const env = { OPENCLAW_STATE_DIR: stateDir };
+      await writeAgentStore(stateDir, "main", apiKeyStore("sk-main"));
+      await writeAgentStore(stateDir, "ops", apiKeyStore("sk-ops"));
+
+      expect(collectStaleGlobalPasteFindings({ cfg: leftoverConfig(), env })).toEqual([]);
+    });
+  });
+
+  it("does not warn when no agent store has a usable secret", async () => {
+    await withStateDir("openclaw-stale-paste-empty-", async (stateDir) => {
+      const env = { OPENCLAW_STATE_DIR: stateDir };
+      await writeAgentStore(stateDir, "ops", {
+        version: 1,
+        profiles: {
+          [PROFILE_ID]: { type: "api_key", provider: "openrouter" },
+        },
+      });
+
+      expect(collectStaleGlobalPasteFindings({ cfg: leftoverConfig(), env })).toEqual([]);
     });
   });
 });

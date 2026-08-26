@@ -537,10 +537,12 @@ describe("noteAuthProfileHealth", () => {
         expect.objectContaining({
           checkId: "core/doctor/auth-stale-global-paste",
           target: "openrouter:default",
+          fixHint: expect.stringContaining("Doctor --fix will not delete"),
         }),
       ]),
     );
   });
+
   it("skips external auth profile resolution when no auth source exists", async () => {
     await noteAuthProfileHealth({
       cfg: {

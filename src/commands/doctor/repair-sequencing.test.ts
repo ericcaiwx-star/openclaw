@@ -24,7 +24,6 @@ const mocks = vi.hoisted(() => ({
   maybeRepairOpenPolicyAllowFrom: vi.fn(),
   maybeRepairStaleManagedNpmBundledPlugins: vi.fn(),
   maybeRepairStaleConfiguredAuthOrders: vi.fn(),
-  maybeRepairStaleGlobalPasteProfiles: vi.fn(),
   maybeRepairStalePluginConfig: vi.fn(),
   repairStaleOAuthProfileShadows: vi.fn(),
   repairMissingConfiguredPluginInstalls: vi.fn(),
@@ -181,10 +180,6 @@ vi.mock("./shared/stale-auth-order.js", () => ({
   maybeRepairStaleConfiguredAuthOrders: mocks.maybeRepairStaleConfiguredAuthOrders,
 }));
 
-vi.mock("./shared/stale-global-paste-profiles.js", () => ({
-  maybeRepairStaleGlobalPasteProfiles: mocks.maybeRepairStaleGlobalPasteProfiles,
-}));
-
 vi.mock("./shared/invalid-plugin-config.js", () => ({
   maybeRepairInvalidPluginConfig: (cfg: OpenClawConfig) => ({
     config: cfg,
@@ -298,9 +293,6 @@ describe("doctor repair sequencing", () => {
     }));
     mocks.maybeRepairStaleManagedNpmBundledPlugins.mockReturnValue(null);
     mocks.maybeRepairStaleConfiguredAuthOrders.mockImplementation(
-      ({ cfg }: { cfg: OpenClawConfig }) => ({ config: cfg, changes: [] }),
-    );
-    mocks.maybeRepairStaleGlobalPasteProfiles.mockImplementation(
       ({ cfg }: { cfg: OpenClawConfig }) => ({ config: cfg, changes: [] }),
     );
     mocks.repairMissingConfiguredPluginInstalls.mockResolvedValue({
@@ -505,33 +497,26 @@ describe("doctor repair sequencing", () => {
     expect(result.authProfilesRepaired).toBe(false);
   });
 
-  it("applies leftover global paste profile repair", async () => {
+  it("leaves an intentional global auth order untouched during repair", async () => {
     const cfg = {
       auth: {
         profiles: { "openrouter:default": { provider: "openrouter", mode: "api_key" } },
+        order: { openrouter: ["openrouter:default"] },
       },
     } satisfies OpenClawConfig;
-    mocks.maybeRepairStaleGlobalPasteProfiles.mockReturnValueOnce({
-      config: {},
-      changes: [
-        "auth.profiles.openrouter:default: removed leftover api_key metadata (credential lives only on agent ops).",
-      ],
-    });
 
     const result = await runDoctorRepairSequence({
       state: {
         cfg,
-        candidate: cfg,
+        candidate: structuredClone(cfg),
         pendingChanges: false,
         fixHints: [],
       },
       doctorFixCommand: "openclaw doctor --fix",
     });
 
-    expect(result.state.candidate.auth).toBeUndefined();
-    expect(result.configChangeNotes).toContain(
-      "auth.profiles.openrouter:default: removed leftover api_key metadata (credential lives only on agent ops).",
-    );
+    expect(result.state.candidate.auth).toEqual(cfg.auth);
+    expect(result.configChangeNotes.join("\n")).not.toMatch(/openrouter:default/);
     expect(result.authProfilesRepaired).toBe(false);
   });
 
@@ -646,10 +631,6 @@ describe("doctor repair sequencing", () => {
       events.push("stale-auth-order");
       return { config: cfg, changes: [] };
     });
-    mocks.maybeRepairStaleGlobalPasteProfiles.mockImplementationOnce(({ cfg }) => {
-      events.push("stale-global-paste");
-      return { config: cfg, changes: [] };
-    });
 
     const result = await runDoctorRepairSequence({
       state: {
@@ -666,7 +647,6 @@ describe("doctor repair sequencing", () => {
       "stale-oauth-shadows",
       "sqlite-migration",
       "stale-auth-order",
-      "stale-global-paste",
     ]);
     expect(mocks.maybeRepairLegacyOAuthSidecarProfiles).toHaveBeenCalledWith({
       cfg: {},
