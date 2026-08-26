@@ -427,6 +427,101 @@ describe("runCapability local no-auth audio providers", () => {
     });
   });
 
+  it("does not use a literal provider apiKey when a named media profile is missing", async () => {
+    await withIsolatedAgentDir(async (agentDir) => {
+      await withEnvAsync(AUTH_ENV, async () => {
+        await withAudioFixture(
+          "openclaw-audio-missing-profile-literal-key",
+          async ({ ctx, media, cache }) => {
+            const transcribeAudio = vi.fn(async (req: AudioTranscriptionRequest) => ({
+              text: `literal:${req.apiKey}`,
+              model: req.model,
+            }));
+            const cfg = createAudioCfg({
+              provider: "openai",
+              model: "whisper-1",
+              providerConfig: {
+                apiKey: "literal-direct-key",
+                models: [],
+              },
+              entry: { profile: "openai:missing" },
+            });
+
+            const result = await runCapability({
+              capability: "audio",
+              cfg,
+              ctx,
+              attachments: cache,
+              media,
+              agentDir,
+              providerRegistry: buildProviderRegistry({
+                openai: createAudioProvider("openai", transcribeAudio),
+              }),
+            });
+
+            expect(result.decision.outcome).toBe("failed");
+            expect(result.decision.attachments[0]?.attempts[0]?.reason).toContain(
+              'No credentials found for profile "openai:missing"',
+            );
+            expect(transcribeAudio).not.toHaveBeenCalled();
+          },
+        );
+      });
+    });
+  });
+
+  it("uses a named media profile instead of a sibling literal provider apiKey", async () => {
+    modelAuthTestControl.store = {
+      version: 1,
+      profiles: {
+        "openai:manual": {
+          type: "api_key",
+          provider: "openai",
+          key: "stored-profile-key",
+        },
+      },
+    };
+    await withIsolatedAgentDir(async (agentDir) => {
+      await withEnvAsync(AUTH_ENV, async () => {
+        await withAudioFixture(
+          "openclaw-audio-named-profile-over-literal",
+          async ({ ctx, media, cache }) => {
+            const transcribeAudio = vi.fn(async (req: AudioTranscriptionRequest) => ({
+              text: `profile:${req.apiKey}`,
+              model: req.model,
+            }));
+            const cfg = createAudioCfg({
+              provider: "openai",
+              model: "whisper-1",
+              providerConfig: {
+                apiKey: "literal-direct-key",
+                models: [],
+              },
+              entry: { profile: "openai:manual" },
+            });
+
+            const result = await runCapability({
+              capability: "audio",
+              cfg,
+              ctx,
+              attachments: cache,
+              media,
+              agentDir,
+              providerRegistry: buildProviderRegistry({
+                openai: createAudioProvider("openai", transcribeAudio),
+              }),
+            });
+
+            expect(result.decision.outcome).toBe("success");
+            expect(result.outputs[0]?.text).toBe("profile:stored-profile-key");
+            expect(transcribeAudio).toHaveBeenCalledTimes(1);
+            expect(transcribeAudio.mock.calls[0]?.[0].apiKey).toBe("stored-profile-key");
+          },
+        );
+      });
+    });
+  });
+
   it("prefers literal configured provider apiKey over media no-auth hook", async () => {
     await withIsolatedAgentDir(async (agentDir) => {
       await withEnvAsync(AUTH_ENV, async () => {

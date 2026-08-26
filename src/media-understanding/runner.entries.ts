@@ -502,11 +502,15 @@ async function resolveProviderExecutionAuth(params: {
     capability: params.capability,
     providerId: params.providerId,
   });
+  const hasExplicitMediaProfile = Boolean(params.entry.profile);
   const literalApiKey = resolveLiteralProviderApiKey({
     cfg: params.cfg,
     providerId: params.providerId,
   });
-  if (literalApiKey) {
+  // A named media-entry profile is an operator pin. Do not let a sibling
+  // models.providers.<id>.apiKey shortcut it; that can bill a different
+  // account than the selected profile.
+  if (literalApiKey && !hasExplicitMediaProfile) {
     return {
       kind: "api-key",
       apiKeys: collectProviderApiKeysForExecution({
@@ -589,8 +593,9 @@ async function resolveProviderExecutionAuth(params: {
     };
   } catch (err) {
     if (
-      !isProviderAuthError(err, "missing-provider-auth") &&
-      !isProviderAuthError(err, "missing-api-key")
+      hasExplicitMediaProfile ||
+      (!isProviderAuthError(err, "missing-provider-auth") &&
+        !isProviderAuthError(err, "missing-api-key"))
     ) {
       throw err;
     }
