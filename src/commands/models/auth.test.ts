@@ -1449,6 +1449,12 @@ describe("modelsAuthLoginCommand", () => {
       },
       agentDir: "/tmp/openclaw/agents/coder",
     });
+    expect(mocks.promoteAuthProfileInOrder).toHaveBeenCalledWith({
+      agentDir: "/tmp/openclaw/agents/coder",
+      provider: "openai",
+      profileId: "openai:manual",
+      createIfMissing: false,
+    });
     expect(mocks.callGateway).toHaveBeenCalledWith({
       method: "models.authStatus",
       params: { refresh: true, agentId: "coder" },
@@ -1562,6 +1568,12 @@ describe("modelsAuthLoginCommand", () => {
         agentDir: "/tmp/openclaw/agents/main",
       }),
     );
+    expect(mocks.promoteAuthProfileInOrder).toHaveBeenCalledWith({
+      agentDir: "/tmp/openclaw/agents/coder",
+      provider: "openai",
+      profileId: "openai:manual",
+      createIfMissing: false,
+    });
     // Pasted credentials are agent-scoped: no global auth.profiles metadata
     // is written, so other agents never see a declared profile they cannot
     // resolve (issue #116243 default-agent key loss after a secondary paste).
@@ -1573,6 +1585,56 @@ describe("modelsAuthLoginCommand", () => {
       params: { refresh: true, agentId: "coder" },
       timeoutMs: 3000,
     });
+  });
+
+  it("promotes pasted tokens into the target agent order when configured order exists", async () => {
+    const runtime = createRuntime();
+    useCoderAgentConfig();
+    currentConfig = {
+      ...currentConfig,
+      auth: {
+        order: {
+          openai: ["openai:old-login"],
+        },
+      },
+    };
+    mocks.clackPassword.mockResolvedValue("openai-token");
+
+    await modelsAuthPasteTokenCommand({ provider: "openai", agent: "coder" }, runtime);
+
+    expect(mocks.promoteAuthProfileInOrder).toHaveBeenCalledWith({
+      agentDir: "/tmp/openclaw/agents/coder",
+      provider: "openai",
+      profileId: "openai:manual",
+      createIfMissing: true,
+      createFromOrder: ["openai:old-login"],
+    });
+    expect(lastUpdatedConfig).toBeNull();
+  });
+
+  it("promotes pasted API keys into the target agent order when configured order exists", async () => {
+    const runtime = createRuntime();
+    useCoderAgentConfig();
+    currentConfig = {
+      ...currentConfig,
+      auth: {
+        order: {
+          openai: ["openai:old-login"],
+        },
+      },
+    };
+    mocks.clackPassword.mockResolvedValue("sk-openai-chatgpt-api-key-value");
+
+    await modelsAuthPasteApiKeyCommand({ provider: "openai", agent: "coder" }, runtime);
+
+    expect(mocks.promoteAuthProfileInOrder).toHaveBeenCalledWith({
+      agentDir: "/tmp/openclaw/agents/coder",
+      provider: "openai",
+      profileId: "openai:manual",
+      createIfMissing: true,
+      createFromOrder: ["openai:old-login"],
+    });
+    expect(lastUpdatedConfig).toBeNull();
   });
 
   it("writes piped OpenAI Codex API keys to API-key profiles", async () => {

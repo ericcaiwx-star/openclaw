@@ -542,6 +542,25 @@ function resolveConfiguredAuthSelectionForProvider(
     : { createIfMissing: false };
 }
 
+async function promotePastedProfileInAgentOrder(params: {
+  agentDir: string;
+  provider: string;
+  profileId: string;
+  config: OpenClawConfig;
+}) {
+  const configuredSelection = resolveConfiguredAuthSelectionForProvider(
+    params.config,
+    params.provider,
+  );
+  await promoteAuthProfileInOrder({
+    agentDir: params.agentDir,
+    provider: params.provider,
+    profileId: params.profileId,
+    createIfMissing: configuredSelection.createIfMissing,
+    ...(configuredSelection.order ? { createFromOrder: configuredSelection.order } : {}),
+  });
+}
+
 async function runProviderAuthMethod(params: {
   config: OpenClawConfig;
   agentId: string;
@@ -668,7 +687,8 @@ export async function modelsAuthPasteTokenCommand(
   },
   runtime: RuntimeEnv,
 ) {
-  const { agentId, agentDir } = await resolveModelsAuthAgent(opts.agent);
+  const config = await loadValidConfigOrThrow();
+  const { agentId, agentDir } = await resolveModelsAuthAgent(opts.agent, config);
   const rawProvider = normalizeOptionalString(opts.provider);
   if (!rawProvider) {
     throw new Error(
@@ -715,6 +735,8 @@ export async function modelsAuthPasteTokenCommand(
     agentDir,
   });
 
+  await promotePastedProfileInAgentOrder({ agentDir, provider, profileId, config });
+
   // Pasted credentials are agent-scoped: the profile lives only in the
   // targeted agent's store. Do not write global `auth.profiles`/`auth.order`
   // metadata — that declares a profile the default agent cannot resolve and
@@ -738,7 +760,8 @@ export async function modelsAuthPasteApiKeyCommand(
   },
   runtime: RuntimeEnv,
 ) {
-  const { agentId, agentDir } = await resolveModelsAuthAgent(opts.agent);
+  const config = await loadValidConfigOrThrow();
+  const { agentId, agentDir } = await resolveModelsAuthAgent(opts.agent, config);
   const rawProvider = normalizeOptionalString(opts.provider);
   if (!rawProvider) {
     throw new Error(
@@ -773,6 +796,8 @@ export async function modelsAuthPasteApiKeyCommand(
     },
     agentDir,
   });
+
+  await promotePastedProfileInAgentOrder({ agentDir, provider, profileId, config });
 
   // Pasted credentials are agent-scoped: the profile lives only in the
   // targeted agent's store. Do not write global `auth.profiles`/`auth.order`
