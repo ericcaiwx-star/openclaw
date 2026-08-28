@@ -7,10 +7,12 @@ import {
   resolveAgentDir,
   resolveDefaultAgentDir,
 } from "../../../agents/agent-scope.js";
+import { evaluateStoredCredentialEligibility } from "../../../agents/auth-profiles/credential-state.js";
 import {
   loadPersistedAuthProfileStore,
   loadPersistedSharedAuthProfileStore,
 } from "../../../agents/auth-profiles/persisted.js";
+import { isAuthProfileConfigCompatible } from "../../../agents/auth-profiles/profile-config-compat.js";
 import { resolveSharedMainAuthAgentDir } from "../../../agents/auth-profiles/shared-main-dir.js";
 import type { AuthProfileStore } from "../../../agents/auth-profiles/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
@@ -40,15 +42,24 @@ function readPasteProfile(value: unknown): {
   return { provider: value.provider, mode: value.mode };
 }
 
-function hasPasteCredential(store: AuthProfileStore | null, profileId: string): boolean {
+function hasPasteCredential(
+  store: AuthProfileStore | null,
+  profileId: string,
+  cfg: OpenClawConfig,
+): boolean {
   const credential = store?.profiles[profileId];
-  if (credential?.type === "api_key") {
-    return Boolean(credential.key || credential.keyRef);
+  if (credential?.type !== "api_key" && credential?.type !== "token") {
+    return false;
   }
-  if (credential?.type === "token") {
-    return Boolean(credential.token || credential.tokenRef);
+  if (!evaluateStoredCredentialEligibility({ credential }).eligible) {
+    return false;
   }
-  return false;
+  return isAuthProfileConfigCompatible({
+    cfg,
+    profileId,
+    provider: credential.provider,
+    mode: credential.type,
+  });
 }
 
 function loadCandidateStore(
@@ -105,7 +116,7 @@ function findUnresolvedSecondaryOnlyGlobalProfiles(params: {
     }
     if (isDefaultResolutionDir(candidate.agentDir, params.cfg, env)) {
       for (const profileId of Object.keys(profiles)) {
-        if (hasPasteCredential(store, profileId)) {
+        if (hasPasteCredential(store, profileId, params.cfg)) {
           defaultHas.add(profileId);
         }
       }
@@ -116,7 +127,7 @@ function findUnresolvedSecondaryOnlyGlobalProfiles(params: {
     }
     const agentLabel = labelAgentDir(params.cfg, env, candidate.agentDir);
     for (const profileId of Object.keys(profiles)) {
-      if (!hasPasteCredential(store, profileId)) {
+      if (!hasPasteCredential(store, profileId, params.cfg)) {
         continue;
       }
       const existing = secondaryHits.get(profileId) ?? [];

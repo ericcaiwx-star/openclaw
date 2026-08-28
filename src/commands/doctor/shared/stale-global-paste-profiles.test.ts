@@ -149,6 +149,29 @@ describe("collectStaleGlobalPasteFindings", () => {
     });
   });
 
+  it("does not warn when a secondary secret uses a different provider", async () => {
+    await withStateDir("openclaw-stale-paste-provider-", async (stateDir) => {
+      const env = { OPENCLAW_STATE_DIR: stateDir };
+      await writeAgentStore(stateDir, "ops", {
+        version: 1,
+        profiles: {
+          [PROFILE_ID]: { type: "api_key", provider: "anthropic", key: "sk-anthropic-ops" },
+        },
+      });
+
+      expect(collectStaleGlobalPasteFindings({ cfg: leftoverConfig(), env })).toEqual([]);
+    });
+  });
+
+  it("does not warn when a secondary secret uses an incompatible mode", async () => {
+    await withStateDir("openclaw-stale-paste-mode-", async (stateDir) => {
+      const env = { OPENCLAW_STATE_DIR: stateDir };
+      await writeAgentStore(stateDir, "ops", tokenStore("tok-ops-only"));
+
+      expect(collectStaleGlobalPasteFindings({ cfg: leftoverConfig(), env })).toEqual([]);
+    });
+  });
+
   it("does not warn when no agent store has a usable secret", async () => {
     await withStateDir("openclaw-stale-paste-empty-", async (stateDir) => {
       const env = { OPENCLAW_STATE_DIR: stateDir };
