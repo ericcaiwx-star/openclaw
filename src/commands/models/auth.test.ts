@@ -91,7 +91,6 @@ vi.mock("../../agents/auth-profiles/profiles.js", () => ({
   upsertAuthProfileWithLockOrThrow: mocks.upsertAuthProfileWithLock,
 }));
 
-
 vi.mock("@clack/prompts", () => ({
   cancel: mocks.clackCancel,
   confirm: mocks.clackConfirm,
