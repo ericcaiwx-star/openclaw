@@ -543,6 +543,45 @@ describe("noteAuthProfileHealth", () => {
     );
   });
 
+  it("notes leftover secondary-agent paste metadata on the normal doctor path", async () => {
+    const opsDir = path.join(tempDir, "agents", "ops", "agent");
+    fs.mkdirSync(opsDir, { recursive: true });
+    writePersistedAuthProfileStoreRaw(
+      {
+        version: 1,
+        profiles: {
+          "openrouter:default": { type: "api_key", provider: "openrouter", key: "sk-ops-only" },
+        },
+      },
+      opsDir,
+    );
+    authProfileMocks.ensureAuthProfileStore.mockReturnValue({ version: 1, profiles: {} });
+
+    await noteAuthProfileHealth({
+      cfg: {
+        agents: {
+          list: [{ id: "main", default: true }, { id: "ops" }],
+        },
+        auth: {
+          profiles: {
+            "openrouter:default": { provider: "openrouter", mode: "api_key" },
+          },
+        },
+      } as OpenClawConfig,
+      prompter: {} as DoctorPrompter,
+      allowKeychainPrompt: false,
+    });
+
+    expect(noteMock).toHaveBeenCalledWith(
+      expect.stringContaining("only agent ops has a usable api_key"),
+      "Auth profiles",
+    );
+    expect(noteMock).toHaveBeenCalledWith(
+      expect.stringContaining("Doctor --fix will not delete"),
+      "Auth profiles",
+    );
+  });
+
   it("skips external auth profile resolution when no auth source exists", async () => {
     await noteAuthProfileHealth({
       cfg: {
