@@ -3,10 +3,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 /** Bearer-token auth modes that are interchangeable (oauth tokens and raw tokens). */
 const BEARER_AUTH_MODES = new Set(["oauth", "token"]);
 
-export function isCompatibleAuthModeType(
-  mode: string | undefined,
-  type: string | undefined,
-): boolean {
+function isCompatibleAuthModeType(mode: string | undefined, type: string | undefined): boolean {
   if (!mode || !type) {
     return false;
   }
