@@ -497,29 +497,6 @@ describe("doctor repair sequencing", () => {
     expect(result.authProfilesRepaired).toBe(false);
   });
 
-  it("leaves an intentional global auth order untouched during repair", async () => {
-    const cfg = {
-      auth: {
-        profiles: { "openrouter:default": { provider: "openrouter", mode: "api_key" } },
-        order: { openrouter: ["openrouter:default"] },
-      },
-    } satisfies OpenClawConfig;
-
-    const result = await runDoctorRepairSequence({
-      state: {
-        cfg,
-        candidate: structuredClone(cfg),
-        pendingChanges: false,
-        fixHints: [],
-      },
-      doctorFixCommand: "openclaw doctor --fix",
-    });
-
-    expect(result.state.candidate.auth).toEqual(cfg.auth);
-    expect(result.configChangeNotes.join("\n")).not.toMatch(/openrouter:default/);
-    expect(result.authProfilesRepaired).toBe(false);
-  });
-
   it("repairs managed npm plugin drift before missing plugin install repair", async () => {
     const events: string[] = [];
     const refreshedSnapshot = {

@@ -75,8 +75,6 @@ An explicitly selected profile — a session pin, a locked `profileId`, or any n
 
 Automatic selection filters unresolved declared profiles, then continues to remaining profiles and undeclared env/config credentials. `models auth paste-api-key` and `paste-token` keep credentials agent-scoped on purpose; they write only the targeted agent's SQLite store and never add global `auth.profiles`/`auth.order` metadata, so a secondary-agent paste cannot declare a profile the default agent cannot resolve.
 
-Older installs may still have leftover global paste declarations from before that producer change. Doctor warns when a global `api_key` or `token` declaration is only resolvable in a secondary agent store. It does not delete that metadata: a secondary-only secret is not proof the declaration came from an old paste. Paste the credential into the default agent, or remove the declaration yourself, if that is what you want.
-
 ## Explicit auth order filtering
 
 - When `auth.order.<provider>` or the auth-store order override is set for a provider, `models status --probe` only probes profile ids that remain in the resolved auth order for that provider. The stored override wins over `auth.order` config.

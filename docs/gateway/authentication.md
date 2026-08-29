@@ -84,13 +84,6 @@ with guidance instead of silently falling through to an undeclared env/config
 credential. Automatic selection filters unresolved declared profiles, then
 continues to remaining profiles and undeclared env/config credentials.
 
-Older installs may still have leftover global paste declarations from before
-that producer change. Doctor warns when a global `api_key` or `token`
-declaration is only resolvable in a secondary agent store. It does not delete
-that metadata: a secondary-only secret is not proof the declaration came from
-an old paste. Paste the credential into the default agent, or remove the
-declaration yourself, if that is what you want.
-
 OpenClaw reads auth profiles from each agent's `openclaw-agent.sqlite`. Endpoint details (`baseUrl`, `api`, model ids, headers, timeouts) belong under `models.providers.<id>` in `openclaw.json` or `models.json`, not in auth profiles.
 
 If an older install still has `auth-profiles.json`, `auth-state.json`, or a flat shape like `{ "openrouter": { "apiKey": "..." } }`, run `openclaw doctor --fix` to import it into SQLite; doctor keeps timestamped backups beside the original JSON files.

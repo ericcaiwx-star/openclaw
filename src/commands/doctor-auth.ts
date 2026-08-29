@@ -41,7 +41,6 @@ import type { HealthFinding } from "../flows/health-checks.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { isRecord } from "../utils.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
-import { collectStaleGlobalPasteFindings } from "./doctor/shared/stale-global-paste-profiles.js";
 
 const OPENAI_PROVIDER_ID = "openai";
 const LEGACY_CODEX_PROVIDER_ID = "openai-codex";
@@ -138,21 +137,6 @@ function buildCodexProviderOverrideWarning(providerOverride: unknown): string {
     "- Custom proxies and header-only overrides can stay; this warning only targets old OpenAI transport settings.",
   );
   return lines.join("\n");
-}
-
-function noteStaleGlobalPasteFindings(cfg: OpenClawConfig): void {
-  const findings = collectStaleGlobalPasteFindings({ cfg });
-  if (findings.length === 0) {
-    return;
-  }
-  note(
-    findings
-      .map((finding) =>
-        finding.fixHint ? `- ${finding.message}\n  ${finding.fixHint}` : `- ${finding.message}`,
-      )
-      .join("\n"),
-    "Auth profiles",
-  );
 }
 
 function legacyCodexProviderOverrideToHealthFinding(providerOverride: unknown): HealthFinding {
@@ -500,7 +484,6 @@ export async function collectAuthProfileHealthFindings(params: {
   ) {
     findings.push(legacyCodexProviderOverrideToHealthFinding(providerOverride));
   }
-  findings.push(...collectStaleGlobalPasteFindings({ cfg: params.cfg }));
   return findings;
 }
 
@@ -578,10 +561,6 @@ export async function noteAuthProfileHealth(params: {
   prompter: DoctorPrompter;
   allowKeychainPrompt: boolean;
 }): Promise<void> {
-  // Leftover global paste metadata is report-only and can exist with no usable
-  // store target. Note it before the empty-target return so ordinary doctor
-  // prints the same warning as collectAuthProfileHealthFindings.
-  noteStaleGlobalPasteFindings(params.cfg);
   const activeTargets = listAuthProfileHealthTargets(params.cfg);
   if (activeTargets.length === 0) {
     return;
