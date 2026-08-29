@@ -227,10 +227,6 @@ export async function resolveApiKeyForProviderCore(params: {
       forceRefresh: params.forceRefresh,
     });
     if (!resolved) {
-      // A named profile that cannot resolve fails closed. Declared profiles
-      // (config `auth.profiles` or a store credential) may bill a specific
-      // account, so silently falling through to env/config here would let an
-      // undeclared credential substitute for the operator's declared one.
       throw new Error(`No credentials found for profile "${profileId}".`);
     }
     const resolvedProfileId = resolved.profileId ?? profileId;

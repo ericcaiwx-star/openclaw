@@ -502,15 +502,11 @@ async function resolveProviderExecutionAuth(params: {
     capability: params.capability,
     providerId: params.providerId,
   });
-  const hasExplicitMediaProfile = Boolean(params.entry.profile);
   const literalApiKey = resolveLiteralProviderApiKey({
     cfg: params.cfg,
     providerId: params.providerId,
   });
-  // A named media-entry profile is an operator pin. Do not let a sibling
-  // models.providers.<id>.apiKey shortcut it; that can bill a different
-  // account than the selected profile.
-  if (literalApiKey && !hasExplicitMediaProfile) {
+  if (literalApiKey) {
     return {
       kind: "api-key",
       apiKeys: collectProviderApiKeysForExecution({
@@ -573,10 +569,6 @@ async function resolveProviderExecutionAuth(params: {
       cfg: params.cfg,
       profileId: params.entry.profile,
       preferredProfile: params.entry.preferredProfile,
-      // Explicit media-entry profile selections are operator-locked; missing
-      // secrets must fail closed instead of deferring to synthetic or
-      // ambient credentials.
-      ...(params.entry.profile ? { lockedProfile: true as const } : {}),
       agentDir: params.agentDir,
       workspaceDir: params.workspaceDir,
       modelApi,
@@ -593,9 +585,8 @@ async function resolveProviderExecutionAuth(params: {
     };
   } catch (err) {
     if (
-      hasExplicitMediaProfile ||
-      (!isProviderAuthError(err, "missing-provider-auth") &&
-        !isProviderAuthError(err, "missing-api-key"))
+      !isProviderAuthError(err, "missing-provider-auth") &&
+      !isProviderAuthError(err, "missing-api-key")
     ) {
       throw err;
     }

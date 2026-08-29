@@ -78,11 +78,7 @@ agent's store only. Credentials stay agent-scoped: pasting into
 `--agent <non-default>` does not copy or overwrite the default agent's key,
 and it does not write global `auth.profiles`/`auth.order` metadata, so a
 secondary-agent paste cannot declare a profile the default agent cannot
-resolve. An explicitly selected profile (session pin, locked `profileId`, or
-a named profile passed into resolution) that cannot be resolved fails closed
-with guidance instead of silently falling through to an undeclared env/config
-credential. Automatic selection filters unresolved declared profiles, then
-continues to remaining profiles and undeclared env/config credentials.
+resolve.
 
 OpenClaw reads auth profiles from each agent's `openclaw-agent.sqlite`. Endpoint details (`baseUrl`, `api`, model ids, headers, timeouts) belong under `models.providers.<id>` in `openclaw.json` or `models.json`, not in auth profiles.
 
