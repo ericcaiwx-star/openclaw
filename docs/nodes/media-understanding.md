@@ -117,7 +117,11 @@ Each `models[]` entry is a **provider** entry (default) or a **CLI** entry:
 
 ### Provider credentials
 
-Provider media understanding uses the same auth resolution as normal model calls: auth profiles, environment variables, then `models.providers.<providerId>.apiKey`. `tools.media.models[]` entries do not accept an inline `apiKey` field.
+`tools.media.models[]` entries do not accept an inline `apiKey` field.
+
+When an entry omits `profile`, provider media understanding uses the same auth resolution as normal model calls: auth profiles, environment variables, then `models.providers.<providerId>.apiKey`.
+
+When an entry sets `profile`, that name is an explicit pin. It overrides a sibling `models.providers.<providerId>.apiKey` and does not fall through to that literal key. If the named profile cannot be resolved, media understanding fails closed. Paste or repair that profile, or remove `profile` from the entry to restore automatic resolution. Mixed configs that set both `tools.media.models[].profile` and a provider `apiKey` now use the profile (or fail) instead of the provider key. See [Auth credential semantics](/auth-credential-semantics).
 
 ```json5
 {
