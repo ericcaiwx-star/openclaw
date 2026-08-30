@@ -12,7 +12,6 @@ import { createOpenClawReadTool } from "./agent-tools.read.js";
 import {
   readCodeModeSkill,
   resolveCodeModeSkills,
-  resolveSkillRelativePath,
   type CodeModeSkill,
 } from "./code-mode-skills.js";
 import { applyCodeModeCatalog } from "./code-mode.js";
@@ -217,9 +216,6 @@ describe("Code Mode skills and read tools", () => {
       escaped: 'invalid skill relative path "../secret.md"',
     });
     expect(codeModeTools[0]?.description).toContain("skills.read(name,");
-    expect(resolveSkillRelativePath("/host/skills/demo/SKILL.md", "modules/during-dining.md")).toBe(
-      "/host/skills/demo/modules/during-dining.md",
-    );
     await expect(readCodeModeSkill(codeModeSkills[0]!, undefined, "../etc/passwd")).rejects.toThrow(
       /invalid skill relative path/,
     );

@@ -46,20 +46,6 @@ function normalizeSkillRelativePath(relativePath: string): string {
   return trimmed;
 }
 
-/** Resolve a filesystem skill-root-relative path. Rejects absolute paths and `.` / `..` segments. */
-export function resolveSkillRelativePath(skillFilePath: string, relativePath: string): string {
-  if (isNodeHostedSkillLocator(skillFilePath)) {
-    throw new Error(`invalid skill relative path ${JSON.stringify(relativePath)}`);
-  }
-  const trimmed = normalizeSkillRelativePath(relativePath);
-  const root = path.dirname(path.resolve(skillFilePath));
-  const target = path.resolve(root, trimmed);
-  if (target !== root && !target.startsWith(root + path.sep)) {
-    throw new Error(`skill relative path escapes skill root: ${JSON.stringify(relativePath)}`);
-  }
-  return target;
-}
-
 function resolveNodeSkillRelativeLocator(skillFileLocator: string, relativePath: string): string {
   const trimmed = normalizeSkillRelativePath(relativePath);
   const normalized = skillFileLocator.replaceAll("\\", "/");
