@@ -1,5 +1,6 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
+import { FsSafeError, readFileWithinRoot } from "../infra/fs-safe.js";
 import type { Skill } from "../skills/loading/skill-contract.js";
 
 export type CodeModeSkill = {
@@ -29,8 +30,11 @@ function readSkillField(block: string, field: "location" | "name"): string | und
   return match === undefined ? undefined : decodeXml(match);
 }
 
-/** Resolve a skill-root-relative path. Rejects absolute paths and `.` / `..` segments. */
-export function resolveSkillRelativePath(skillFilePath: string, relativePath: string): string {
+function isNodeHostedSkillLocator(value: string): boolean {
+  return value.startsWith("node://");
+}
+
+function normalizeSkillRelativePath(relativePath: string): string {
   const trimmed = relativePath.trim().replaceAll("\\", "/");
   if (
     !trimmed ||
@@ -39,12 +43,35 @@ export function resolveSkillRelativePath(skillFilePath: string, relativePath: st
   ) {
     throw new Error(`invalid skill relative path ${JSON.stringify(relativePath)}`);
   }
+  return trimmed;
+}
+
+/** Resolve a filesystem skill-root-relative path. Rejects absolute paths and `.` / `..` segments. */
+export function resolveSkillRelativePath(skillFilePath: string, relativePath: string): string {
+  if (isNodeHostedSkillLocator(skillFilePath)) {
+    throw new Error(`invalid skill relative path ${JSON.stringify(relativePath)}`);
+  }
+  const trimmed = normalizeSkillRelativePath(relativePath);
   const root = path.dirname(path.resolve(skillFilePath));
   const target = path.resolve(root, trimmed);
   if (target !== root && !target.startsWith(root + path.sep)) {
     throw new Error(`skill relative path escapes skill root: ${JSON.stringify(relativePath)}`);
   }
   return target;
+}
+
+function resolveNodeSkillRelativeLocator(skillFileLocator: string, relativePath: string): string {
+  const trimmed = normalizeSkillRelativePath(relativePath);
+  const normalized = skillFileLocator.replaceAll("\\", "/");
+  const root = normalized.replace(/\/SKILL\.md$/i, "");
+  if (!isNodeHostedSkillLocator(root)) {
+    throw new Error(`invalid skill relative path ${JSON.stringify(relativePath)}`);
+  }
+  return `${root}/${trimmed}`;
+}
+
+function skillRelativeEscapeError(relativePath: string): Error {
+  return new Error(`skill relative path escapes skill root: ${JSON.stringify(relativePath)}`);
 }
 
 /** Select Code Mode skills from the exact catalog rendered into this run's prompt. */
@@ -80,6 +107,26 @@ export function resolveCodeModeSkills(params: {
   return result;
 }
 
+async function readFilesystemSkillRelative(
+  skillFilePath: string,
+  relativePath: string,
+): Promise<string> {
+  const relative = normalizeSkillRelativePath(relativePath);
+  const skillRoot = path.dirname(path.resolve(skillFilePath));
+  try {
+    const result = await readFileWithinRoot({
+      rootDir: skillRoot,
+      relativePath: relative,
+    });
+    return result.buffer.toString("utf8");
+  } catch (error) {
+    if (error instanceof FsSafeError) {
+      throw skillRelativeEscapeError(relativePath);
+    }
+    throw error;
+  }
+}
+
 export async function readCodeModeSkill(
   skill: CodeModeSkill,
   signal?: AbortSignal,
@@ -96,11 +143,22 @@ export async function readCodeModeSkill(
     return await readFile(skill.source.filePath, { encoding: "utf8", signal });
   }
 
-  const hostTarget = resolveSkillRelativePath(skill.source.filePath, relative);
+  const locator = isNodeHostedSkillLocator(skill.location) ? skill.location : skill.source.filePath;
+  if (isNodeHostedSkillLocator(locator)) {
+    const nodeTarget = resolveNodeSkillRelativeLocator(locator, relative);
+    if (!skill.reader) {
+      throw new Error(
+        `node-hosted skill relative reads require a skill reader: ${JSON.stringify(relative)}`,
+      );
+    }
+    return await skill.reader({ location: nodeTarget, signal });
+  }
+
+  const trimmed = normalizeSkillRelativePath(relative);
   if (skill.reader) {
     const guestRoot = path.posix.dirname(skill.location.replaceAll("\\", "/"));
-    const guestTarget = path.posix.join(guestRoot, relative.replaceAll("\\", "/"));
+    const guestTarget = path.posix.join(guestRoot, trimmed);
     return await skill.reader({ location: guestTarget, signal });
   }
-  return await readFile(hostTarget, { encoding: "utf8", signal });
+  return await readFilesystemSkillRelative(skill.source.filePath, relative);
 }

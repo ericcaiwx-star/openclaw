@@ -399,7 +399,8 @@ export async function runBridgeRequest(params: {
           const message = error instanceof Error ? error.message : String(error);
           if (
             message.includes("invalid skill relative path") ||
-            message.includes("escapes skill root")
+            message.includes("escapes skill root") ||
+            message.includes("node-hosted skill")
           ) {
             throw new ToolInputError(message);
           }

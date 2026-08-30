@@ -1,5 +1,8 @@
 /** Tests Code Mode skills and read tools. */
 
+import fs from "node:fs/promises";
+import os from "node:os";
+import nodePath from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Skill } from "../skills/loading/skill-contract.js";
@@ -10,6 +13,7 @@ import {
   readCodeModeSkill,
   resolveCodeModeSkills,
   resolveSkillRelativePath,
+  type CodeModeSkill,
 } from "./code-mode-skills.js";
 import { applyCodeModeCatalog } from "./code-mode.js";
 import {
@@ -220,6 +224,68 @@ describe("Code Mode skills and read tools", () => {
       /invalid skill relative path/,
     );
   });
+
+  it("reads a node-hosted skill module through the locator reader", async () => {
+    const reader = vi.fn(async ({ location }: { location: string }) => {
+      if (location === "node://node-1/skills/demo/modules/during-dining.md") {
+        return "# dining module\n";
+      }
+      return "# skill\n";
+    });
+    const skill: CodeModeSkill = {
+      name: "demo",
+      description: "demo",
+      location: "node://node-1/skills/demo/SKILL.md",
+      source: {
+        filePath: "node://node-1/skills/demo/SKILL.md",
+        readContent: "# skill\n",
+      },
+      reader,
+    };
+    await expect(readCodeModeSkill(skill, undefined, "modules/during-dining.md")).resolves.toBe(
+      "# dining module\n",
+    );
+    expect(reader).toHaveBeenCalledWith({
+      location: "node://node-1/skills/demo/modules/during-dining.md",
+      signal: undefined,
+    });
+    await expect(
+      readCodeModeSkill({ ...skill, reader: undefined }, undefined, "modules/x.md"),
+    ).rejects.toThrow(/node-hosted skill relative reads require a skill reader/);
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "rejects a real symlink that escapes the skill root",
+    async () => {
+      const tmpParent = await fs.realpath(
+        await fs.mkdtemp(nodePath.join(os.tmpdir(), "oc-skill-root-")),
+      );
+      const skillRoot = nodePath.join(tmpParent, "demo");
+      const outside = nodePath.join(tmpParent, "outside.txt");
+      await fs.mkdir(nodePath.join(skillRoot, "modules"), { recursive: true });
+      await fs.writeFile(nodePath.join(skillRoot, "SKILL.md"), "# skill\n", "utf8");
+      await fs.writeFile(
+        nodePath.join(skillRoot, "modules", "during-dining.md"),
+        "# dining\n",
+        "utf8",
+      );
+      await fs.writeFile(outside, "secret\n", "utf8");
+      await fs.symlink(outside, nodePath.join(skillRoot, "modules", "link.md"));
+      const skill: CodeModeSkill = {
+        name: "demo",
+        description: "demo",
+        location: nodePath.join(skillRoot, "SKILL.md"),
+        source: { filePath: nodePath.join(skillRoot, "SKILL.md") },
+      };
+      await expect(readCodeModeSkill(skill, undefined, "modules/during-dining.md")).resolves.toBe(
+        "# dining\n",
+      );
+      await expect(readCodeModeSkill(skill, undefined, "modules/link.md")).rejects.toThrow(
+        /escapes skill root/,
+      );
+      await fs.rm(tmpParent, { recursive: true, force: true });
+    },
+  );
 
   it.each([
     {
