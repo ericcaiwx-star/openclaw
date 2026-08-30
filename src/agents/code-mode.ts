@@ -165,7 +165,7 @@ function createCodeModeExecDescription(
       ? "\n- nodes: paired Gateway nodes; nodes.list(), (await nodes.get(id)).invoke(command, params)\n"
       : "";
   const skillsGuidance = ctx.codeModeSkills?.length
-    ? " Skills are available through the async `skills` global: use `await skills.list()` and `await skills.read(name)`."
+    ? ' Skills are available through the async `skills` global: use `await skills.list()`, `await skills.read(name)` for SKILL.md, and `await skills.read(name, "modules/foo.md")` for a file under that skill root.'
     : "";
   const { maxOutputBytes } = config;
   const projection = catalog

@@ -6,7 +6,11 @@ import type { Skill } from "../skills/loading/skill-contract.js";
 import { resolveSkillsPrompt } from "../skills/loading/workspace-skill-prompt.js";
 import { createFixtureSkillEntry } from "../skills/test-support/test-helpers.js";
 import { createOpenClawReadTool } from "./agent-tools.read.js";
-import { resolveCodeModeSkills } from "./code-mode-skills.js";
+import {
+  readCodeModeSkill,
+  resolveCodeModeSkills,
+  resolveSkillRelativePath,
+} from "./code-mode-skills.js";
 import { applyCodeModeCatalog } from "./code-mode.js";
 import {
   resetCodeModeTestState,
@@ -144,6 +148,77 @@ describe("Code Mode skills and read tools", () => {
       location: "/guest/skills/demo/SKILL.md",
       signal: expect.any(AbortSignal),
     });
+  });
+
+  it("reads a skill-root relative file and rejects path escape", async () => {
+    const demo = skillCandidate({
+      name: "demo",
+      description: "Full demo description",
+      filePath: "/host/skills/demo/SKILL.md",
+    });
+    const reader = vi.fn(async ({ location }: { location: string }) => {
+      if (location === "/guest/skills/demo/modules/during-dining.md") {
+        return "# dining module\n";
+      }
+      return "# skill\n";
+    });
+    const codeModeSkills = resolveCodeModeSkills({
+      skillsPrompt: [
+        "<available_skills>",
+        "  <skill>",
+        "    <name>demo</name>",
+        "    <description>Short prompt description</description>",
+        "    <location>/guest/skills/demo/SKILL.md</location>",
+        "  </skill>",
+        "</available_skills>",
+      ].join("\n"),
+      candidates: [demo],
+      reader,
+    });
+    const {
+      config,
+      catalogRef,
+      tools: codeModeTools,
+    } = createCodeModeHarness({
+      codeModeSkills,
+    });
+    applyCodeModeCatalog({
+      tools: [...codeModeTools, pluginTool("fake_noop", "Noop")],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+      codeModeSkills,
+    });
+
+    const details = await runUntilCompleted({
+      execTool: expectDefined(codeModeTools[0], "codeModeTools[0] test invariant"),
+      waitTool: expectDefined(codeModeTools[1], "codeModeTools[1] test invariant"),
+      code: `
+        const moduleBody = await skills.read("demo", "modules/during-dining.md");
+        let escaped;
+        try {
+          await skills.read("demo", "../secret.md");
+        } catch (error) {
+          escaped = error.message;
+        }
+        return { moduleBody, escaped };
+      `,
+    });
+
+    expect(details.status).toBe("completed");
+    expect(details.value).toEqual({
+      moduleBody: "# dining module\n",
+      escaped: 'invalid skill relative path "../secret.md"',
+    });
+    expect(codeModeTools[0]?.description).toContain("skills.read(name,");
+    expect(resolveSkillRelativePath("/host/skills/demo/SKILL.md", "modules/during-dining.md")).toBe(
+      "/host/skills/demo/modules/during-dining.md",
+    );
+    await expect(readCodeModeSkill(codeModeSkills[0]!, undefined, "../etc/passwd")).rejects.toThrow(
+      /invalid skill relative path/,
+    );
   });
 
   it.each([
