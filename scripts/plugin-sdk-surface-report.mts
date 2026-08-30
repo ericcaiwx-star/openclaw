@@ -338,7 +338,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +2: shipped conversation-binding inspection function and result type.
       // +4: canonical node CLI option, envelope, presentation, and error owners.
       // +1: Gateway caller ownership for standalone browser routing.
-      4369,
+      // +1: agent-scoped outbound media resolver on the media-local-roots subpath.
+      4370,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -417,7 +418,6 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +2: session-catalog family and node-host binding composers.
       // +2: bounded provider stream and read-only SecretRef resolver.
       // -1: remove the obsolete transcript tool-call predicate.
-      // -1: remove the obsolete transcript tool-call predicate.
       // +2: lightweight agent config resolution and nonthrowing default-agent lookup.
       // +1: focused media-store URL/path ingestion (saveMediaSource) off the deprecated barrel.
       // +2: structural Gateway transport and request-error guards for plugin CLI routing.
@@ -452,7 +452,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: shipped read-only conversation-binding inspection function.
       // +4: canonical node CLI option, envelope, presentation, and error owners.
       // +1: Gateway caller ownership for standalone browser routing.
-      2603,
+      // +1: agent-scoped outbound media resolver on the media-local-roots subpath.
+      2604,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
