@@ -1586,55 +1586,48 @@ describe("modelsAuthLoginCommand", () => {
     });
   });
 
-  it("promotes pasted tokens into the target agent order when configured order exists", async () => {
-    const runtime = createRuntime();
-    useCoderAgentConfig();
-    currentConfig = {
-      ...currentConfig,
-      auth: {
-        order: {
-          openai: ["openai:old-login"],
+  it.each([
+    {
+      label: "paste-token",
+      secret: "openai-token",
+      run: (runtime: RuntimeEnv) =>
+        modelsAuthPasteTokenCommand({ provider: "openai", agent: "coder" }, runtime),
+    },
+    {
+      label: "paste-api-key",
+      secret: "sk-openai-chatgpt-api-key-value",
+      run: (runtime: RuntimeEnv) =>
+        modelsAuthPasteApiKeyCommand({ provider: "openai", agent: "coder" }, runtime),
+    },
+  ])(
+    "$label with existing auth.order does not request a stored override",
+    async ({ secret, run }) => {
+      const runtime = createRuntime();
+      useCoderAgentConfig();
+      currentConfig = {
+        ...currentConfig,
+        auth: {
+          order: {
+            openai: ["openai:old-login"],
+          },
         },
-      },
-    };
-    mocks.clackPassword.mockResolvedValue("openai-token");
+      };
+      mocks.clackPassword.mockResolvedValue(secret);
 
-    await modelsAuthPasteTokenCommand({ provider: "openai", agent: "coder" }, runtime);
+      await run(runtime);
 
-    expect(mocks.promoteAuthProfileInOrder).toHaveBeenCalledWith({
-      agentDir: "/tmp/openclaw/agents/coder",
-      provider: "openai",
-      profileId: "openai:manual",
-      createIfMissing: true,
-      createFromOrder: ["openai:old-login"],
-    });
-    expect(lastUpdatedConfig).toBeNull();
-  });
-
-  it("promotes pasted API keys into the target agent order when configured order exists", async () => {
-    const runtime = createRuntime();
-    useCoderAgentConfig();
-    currentConfig = {
-      ...currentConfig,
-      auth: {
-        order: {
-          openai: ["openai:old-login"],
-        },
-      },
-    };
-    mocks.clackPassword.mockResolvedValue("sk-openai-chatgpt-api-key-value");
-
-    await modelsAuthPasteApiKeyCommand({ provider: "openai", agent: "coder" }, runtime);
-
-    expect(mocks.promoteAuthProfileInOrder).toHaveBeenCalledWith({
-      agentDir: "/tmp/openclaw/agents/coder",
-      provider: "openai",
-      profileId: "openai:manual",
-      createIfMissing: true,
-      createFromOrder: ["openai:old-login"],
-    });
-    expect(lastUpdatedConfig).toBeNull();
-  });
+      expect(mocks.promoteAuthProfileInOrder).toHaveBeenCalledWith({
+        agentDir: "/tmp/openclaw/agents/coder",
+        provider: "openai",
+        profileId: "openai:manual",
+        createIfMissing: false,
+      });
+      expect(mocks.promoteAuthProfileInOrder.mock.calls[0]?.[0]).not.toHaveProperty(
+        "createFromOrder",
+      );
+      expect(lastUpdatedConfig).toBeNull();
+    },
+  );
 
   it("writes piped OpenAI Codex API keys to API-key profiles", async () => {
     const runtime = createRuntime();

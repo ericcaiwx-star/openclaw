@@ -546,18 +546,16 @@ async function promotePastedProfileInAgentOrder(params: {
   agentDir: string;
   provider: string;
   profileId: string;
-  config: OpenClawConfig;
 }) {
-  const configuredSelection = resolveConfiguredAuthSelectionForProvider(
-    params.config,
-    params.provider,
-  );
+  // Paste must not persist a store order copied from global auth.order.
+  // Stored order wins over config (`resolveExplicitAuthOrderSelection`), so
+  // creating one from the current global list would freeze that agent against
+  // later auth.order edits. Operators opt in with `models auth order set`.
   await promoteAuthProfileInOrder({
     agentDir: params.agentDir,
     provider: params.provider,
     profileId: params.profileId,
-    createIfMissing: configuredSelection.createIfMissing,
-    ...(configuredSelection.order ? { createFromOrder: configuredSelection.order } : {}),
+    createIfMissing: false,
   });
 }
 
@@ -735,7 +733,7 @@ export async function modelsAuthPasteTokenCommand(
     agentDir,
   });
 
-  await promotePastedProfileInAgentOrder({ agentDir, provider, profileId, config });
+  await promotePastedProfileInAgentOrder({ agentDir, provider, profileId });
 
   // Pasted credentials are agent-scoped: the profile lives only in the
   // targeted agent's store. Do not write global `auth.profiles`/`auth.order`
@@ -797,7 +795,7 @@ export async function modelsAuthPasteApiKeyCommand(
     agentDir,
   });
 
-  await promotePastedProfileInAgentOrder({ agentDir, provider, profileId, config });
+  await promotePastedProfileInAgentOrder({ agentDir, provider, profileId });
 
   // Pasted credentials are agent-scoped: the profile lives only in the
   // targeted agent's store. Do not write global `auth.profiles`/`auth.order`
