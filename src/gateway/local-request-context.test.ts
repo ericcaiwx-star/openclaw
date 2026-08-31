@@ -14,7 +14,16 @@ import { loadCronStore, resolveCronJobsStorePath, saveCronStore } from "../cron/
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withLocalGatewayRequestScope } from "./local-request-context.js";
-import { dispatchGatewayMethodInProcessRaw } from "./server-plugins.js";
+import {
+  dispatchGatewayMethodInProcess,
+  dispatchGatewayMethodInProcessRaw,
+} from "./server-plugins.js";
+
+const createAgentTurnService = vi.hoisted(() =>
+  vi.fn<typeof import("./agent-turn/agent-turn-service.js").createAgentTurnService>(),
+);
+
+vi.mock("./agent-turn/agent-turn-service.js", () => ({ createAgentTurnService }));
 
 type PublishedOwnerSnapshot = Awaited<
   ReturnType<typeof preparedModelCatalog.loadPublishedPreparedModelCatalogOwnerSnapshot>
@@ -48,6 +57,41 @@ describe("local gateway request context", () => {
   it("lets embedded local runs dispatch gateway methods in-process", () => {
     expect(response.ok).toBe(true);
     expect(response.payload).toMatchObject({ agentId: "main" });
+  });
+
+  it("does not claim Gateway application readiness without a running Gateway", () => {
+    withLocalGatewayRequestScope({ deps: {} as CliDeps, getRuntimeConfig: () => ({}) }, () =>
+      expect(getPluginRuntimeGatewayRequestScope()?.context?.isConfigReloadSettled()).toBe(false),
+    );
+  });
+
+  it("binds typed agent turns to the embedded context", async () => {
+    await withLocalGatewayRequestScope(
+      { deps: {} as CliDeps, getRuntimeConfig: () => ({}) },
+      async () => {
+        const context = getPluginRuntimeGatewayRequestScope()?.context;
+        if (!context) {
+          throw new Error("expected local gateway request context");
+        }
+        const payload = { runId: "local-turn", status: "accepted" };
+        createAgentTurnService.mockReturnValue({
+          startTurn: async ({ io }) => io.emitAcceptance([true, payload, undefined]),
+          waitForTurn: vi.fn(),
+        });
+
+        await expect(
+          dispatchGatewayMethodInProcess(
+            "agent",
+            { message: "local turn", idempotencyKey: "local-turn" },
+            { forceSyntheticClient: true, operatorRoleActor: { kind: "system" } },
+          ),
+        ).resolves.toEqual(payload);
+        expect(createAgentTurnService).toHaveBeenCalledWith(
+          expect.objectContaining({ context }),
+          expect.any(Function),
+        );
+      },
+    );
   });
 
   it("defaults local model catalog snapshot reads to read-only", async () => {

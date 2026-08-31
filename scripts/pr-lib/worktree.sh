@@ -7,6 +7,13 @@ repo_root() {
   # the same from main checkout or any linked worktree.
   local base_dir
   local common_git_dir
+  # Anchor-exec handoff (see scripts/pr): the wrapper runs from materialized
+  # temp-dir bytes with no git context of its own; the handoff env carries the
+  # repository the run addresses.
+  if [ -n "${OPENCLAW_PR_ANCHOR_REPO_ROOT:-}" ]; then
+    (cd "$OPENCLAW_PR_ANCHOR_REPO_ROOT" && pwd)
+    return
+  fi
   base_dir="${script_parent_dir:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
 
   if common_git_dir=$(git -C "$base_dir" rev-parse --path-format=absolute --git-common-dir 2>/dev/null); then
@@ -354,9 +361,12 @@ pr_meta_json() {
 
   actual_file_count=$(printf '%s\n' "$files" | jq -r 'length')
   if [ "$actual_file_count" -ne "$expected_file_count" ]; then
+    local repo_nwo
+    repo_nwo=$(gh_plain repo view --json nameWithOwner --jq .nameWithOwner) || return 1
+    # Pin the base repository and revalidate every page before the final head check.
     if ! files=$(
       set -o pipefail
-      gh_plain api --paginate "repos/{owner}/{repo}/pulls/$pr/files?per_page=100" |
+      gh_plain api --paginate "repos/$repo_nwo/pulls/$pr/files?per_page=100" -H 'Cache-Control: max-age=0' |
         jq -cs '
           add
           | map({
