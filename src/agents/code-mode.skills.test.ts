@@ -258,6 +258,39 @@ describe("Code Mode skills and read tools", () => {
     ).rejects.toThrow(/node-hosted skill relative reads require a node skill reader/);
   });
 
+  it("does not advertise companion reads when every selected skill is node-hosted", () => {
+    const codeModeSkills: CodeModeSkill[] = [
+      {
+        name: "demo",
+        description: "demo",
+        location: "node://node-1/skills/demo/SKILL.md",
+        source: {
+          filePath: "node://node-1/skills/demo/SKILL.md",
+          readContent: "# skill\n",
+        },
+      },
+    ];
+    const {
+      config,
+      catalogRef,
+      tools: codeModeTools,
+    } = createCodeModeHarness({
+      codeModeSkills,
+    });
+    applyCodeModeCatalog({
+      tools: [...codeModeTools, pluginTool("fake_noop", "Noop")],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+      codeModeSkills,
+    });
+    expect(codeModeTools[0]?.description).toContain("`await skills.read(name)`");
+    expect(codeModeTools[0]?.description).not.toContain("skills.read(name,");
+    expect(codeModeTools[0]?.description).toContain("not available for node-hosted skills");
+  });
+
   it("rejects an oversized companion file before returning it", async () => {
     const tmpParent = await fs.realpath(
       await fs.mkdtemp(nodePath.join(os.tmpdir(), "oc-skill-bound-")),
