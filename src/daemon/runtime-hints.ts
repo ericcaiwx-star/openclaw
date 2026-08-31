@@ -3,6 +3,7 @@ import {
   formatLaunchdStderrRewriteGuidance,
   readPersistedLaunchdStderrPath,
   resolveAdvertisedLaunchdStderr,
+  type LaunchdStderrRewriteCommands,
 } from "./launchd-stdio.js";
 import { normalizeWindowsPathSeparators } from "./output.js";
 import { resolveGatewayRestartLogPath, resolveGatewaySupervisorLogPaths } from "./restart-logs.js";
@@ -17,6 +18,7 @@ export function buildPlatformRuntimeLogHints(params: {
   env?: NodeJS.ProcessEnv;
   systemdServiceName: string;
   windowsTaskName: string;
+  rewriteCommands?: LaunchdStderrRewriteCommands;
 }): string[] {
   const platform = params.platform ?? process.platform;
   const env = { ...process.env, ...params.env };
@@ -26,7 +28,7 @@ export function buildPlatformRuntimeLogHints(params: {
     const stderrHint =
       advertisedStderr.kind === "file"
         ? `Launchd stderr (if installed): ${toDarwinDisplayPath(advertisedStderr.path)}`
-        : `Launchd stderr (if installed): suppressed (/dev/null). ${formatLaunchdStderrRewriteGuidance(env)}`;
+        : `Launchd stderr (if installed): suppressed (/dev/null). ${formatLaunchdStderrRewriteGuidance(env, params.rewriteCommands)}`;
     // Display launchd paths as POSIX-style paths even in cross-platform tests
     // where mocked env values may carry Windows drive prefixes.
     return [
