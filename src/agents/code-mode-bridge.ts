@@ -400,6 +400,7 @@ export async function runBridgeRequest(params: {
           if (
             message.includes("invalid skill relative path") ||
             message.includes("escapes skill root") ||
+            message.includes("skill relative file exceeds") ||
             message.includes("node-hosted skill") ||
             message.includes("node skill reader")
           ) {

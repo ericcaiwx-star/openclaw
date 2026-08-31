@@ -273,7 +273,7 @@ describe("Code Mode skills and read tools", () => {
       source: { filePath: nodePath.join(skillRoot, "SKILL.md") },
     };
     await expect(readCodeModeSkill(skill, undefined, "huge.md")).rejects.toThrow(
-      /escapes skill root|exceeds 256000 bytes/,
+      'skill relative file exceeds 256000 bytes: "huge.md"',
     );
     const reader = vi.fn(async () => "y".repeat(256_001));
     await expect(

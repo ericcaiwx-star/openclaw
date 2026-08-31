@@ -121,6 +121,12 @@ async function readFilesystemSkillRelative(
     return result.buffer.toString("utf8");
   } catch (error) {
     if (error instanceof FsSafeError) {
+      // Size and other non-containment failures are not root escapes.
+      if (error.code === "too-large") {
+        throw new Error(
+          `skill relative file exceeds ${CODE_MODE_SKILL_FILE_MAX_BYTES} bytes: ${JSON.stringify(relativePath)}`,
+        );
+      }
       throw skillRelativeEscapeError(relativePath);
     }
     throw error;
