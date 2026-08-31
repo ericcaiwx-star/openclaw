@@ -93,6 +93,19 @@ export function resolveCodeModeSkills(params: {
   return result;
 }
 
+// Same host-side bound as skill-root discovery. Companion reads must fail
+// before materializing a larger file; Code Mode truncation is not a cap.
+const CODE_MODE_SKILL_FILE_MAX_BYTES = 256_000;
+
+function assertSkillFileWithinBound(text: string, relativePath: string): string {
+  if (Buffer.byteLength(text, "utf8") > CODE_MODE_SKILL_FILE_MAX_BYTES) {
+    throw new Error(
+      `skill relative file exceeds ${CODE_MODE_SKILL_FILE_MAX_BYTES} bytes: ${JSON.stringify(relativePath)}`,
+    );
+  }
+  return text;
+}
+
 async function readFilesystemSkillRelative(
   skillFilePath: string,
   relativePath: string,
@@ -103,6 +116,7 @@ async function readFilesystemSkillRelative(
     const result = await readFileWithinRoot({
       rootDir: skillRoot,
       relativePath: relative,
+      maxBytes: CODE_MODE_SKILL_FILE_MAX_BYTES,
     });
     return result.buffer.toString("utf8");
   } catch (error) {
@@ -134,17 +148,21 @@ export async function readCodeModeSkill(
     const nodeTarget = resolveNodeSkillRelativeLocator(locator, relative);
     if (!skill.reader) {
       throw new Error(
-        `node-hosted skill relative reads require a skill reader: ${JSON.stringify(relative)}`,
+        `node-hosted skill relative reads require a node skill reader: ${JSON.stringify(relative)}`,
       );
     }
-    return await skill.reader({ location: nodeTarget, signal });
+    return assertSkillFileWithinBound(
+      await skill.reader({ location: nodeTarget, signal }),
+      relative,
+    );
   }
 
-  const trimmed = normalizeSkillRelativePath(relative);
-  if (skill.reader) {
-    const guestRoot = path.posix.dirname(skill.location.replaceAll("\\", "/"));
-    const guestTarget = path.posix.join(guestRoot, trimmed);
-    return await skill.reader({ location: guestTarget, signal });
+  // Companion files stay on the selected skill root. The sandbox reader is
+  // collection-scoped and would follow a symlink into a sibling skill.
+  if (isNodeHostedSkillLocator(skill.source.filePath)) {
+    throw new Error(
+      `node-hosted skill relative reads require a node skill reader: ${JSON.stringify(relative)}`,
+    );
   }
   return await readFilesystemSkillRelative(skill.source.filePath, relative);
 }

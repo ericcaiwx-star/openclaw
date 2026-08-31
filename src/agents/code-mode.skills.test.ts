@@ -154,17 +154,23 @@ describe("Code Mode skills and read tools", () => {
   });
 
   it("reads a skill-root relative file and rejects path escape", async () => {
+    const tmpParent = await fs.realpath(
+      await fs.mkdtemp(nodePath.join(os.tmpdir(), "oc-skill-relative-")),
+    );
+    const skillRoot = nodePath.join(tmpParent, "demo");
+    await fs.mkdir(nodePath.join(skillRoot, "modules"), { recursive: true });
+    await fs.writeFile(nodePath.join(skillRoot, "SKILL.md"), "# skill\n", "utf8");
+    await fs.writeFile(
+      nodePath.join(skillRoot, "modules", "during-dining.md"),
+      "# dining module\n",
+      "utf8",
+    );
     const demo = skillCandidate({
       name: "demo",
       description: "Full demo description",
-      filePath: "/host/skills/demo/SKILL.md",
+      filePath: nodePath.join(skillRoot, "SKILL.md"),
     });
-    const reader = vi.fn(async ({ location }: { location: string }) => {
-      if (location === "/guest/skills/demo/modules/during-dining.md") {
-        return "# dining module\n";
-      }
-      return "# skill\n";
-    });
+    const reader = vi.fn(async () => "# skill from collection reader\n");
     const codeModeSkills = resolveCodeModeSkills({
       skillsPrompt: [
         "<available_skills>",
@@ -215,10 +221,12 @@ describe("Code Mode skills and read tools", () => {
       moduleBody: "# dining module\n",
       escaped: 'invalid skill relative path "../secret.md"',
     });
+    expect(reader).not.toHaveBeenCalled();
     expect(codeModeTools[0]?.description).toContain("skills.read(name,");
     await expect(readCodeModeSkill(codeModeSkills[0]!, undefined, "../etc/passwd")).rejects.toThrow(
       /invalid skill relative path/,
     );
+    await fs.rm(tmpParent, { recursive: true, force: true });
   });
 
   it("reads a node-hosted skill module through the locator reader", async () => {
@@ -247,7 +255,44 @@ describe("Code Mode skills and read tools", () => {
     });
     await expect(
       readCodeModeSkill({ ...skill, reader: undefined }, undefined, "modules/x.md"),
-    ).rejects.toThrow(/node-hosted skill relative reads require a skill reader/);
+    ).rejects.toThrow(/node-hosted skill relative reads require a node skill reader/);
+  });
+
+  it("rejects an oversized companion file before returning it", async () => {
+    const tmpParent = await fs.realpath(
+      await fs.mkdtemp(nodePath.join(os.tmpdir(), "oc-skill-bound-")),
+    );
+    const skillRoot = nodePath.join(tmpParent, "demo");
+    await fs.mkdir(skillRoot, { recursive: true });
+    await fs.writeFile(nodePath.join(skillRoot, "SKILL.md"), "# skill\n", "utf8");
+    await fs.writeFile(nodePath.join(skillRoot, "huge.md"), "x".repeat(256_001), "utf8");
+    const skill: CodeModeSkill = {
+      name: "demo",
+      description: "demo",
+      location: nodePath.join(skillRoot, "SKILL.md"),
+      source: { filePath: nodePath.join(skillRoot, "SKILL.md") },
+    };
+    await expect(readCodeModeSkill(skill, undefined, "huge.md")).rejects.toThrow(
+      /escapes skill root|exceeds 256000 bytes/,
+    );
+    const reader = vi.fn(async () => "y".repeat(256_001));
+    await expect(
+      readCodeModeSkill(
+        {
+          name: "demo",
+          description: "demo",
+          location: "node://node-1/skills/demo/SKILL.md",
+          source: {
+            filePath: "node://node-1/skills/demo/SKILL.md",
+            readContent: "# skill\n",
+          },
+          reader,
+        },
+        undefined,
+        "modules/huge.md",
+      ),
+    ).rejects.toThrow(/exceeds 256000 bytes/);
+    await fs.rm(tmpParent, { recursive: true, force: true });
   });
 
   it.runIf(process.platform !== "win32")(
