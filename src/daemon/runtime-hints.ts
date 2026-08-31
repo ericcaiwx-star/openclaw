@@ -1,6 +1,9 @@
 /** Builds platform-specific log and start hints for daemon status output. */
-import { formatCliCommand } from "../cli/command-format.js";
-import { readPersistedLaunchdStderrPath, resolveAdvertisedLaunchdStderr } from "./launchd-stdio.js";
+import {
+  formatLaunchdStderrRewriteGuidance,
+  readPersistedLaunchdStderrPath,
+  resolveAdvertisedLaunchdStderr,
+} from "./launchd-stdio.js";
 import { normalizeWindowsPathSeparators } from "./output.js";
 import { resolveGatewayRestartLogPath, resolveGatewaySupervisorLogPaths } from "./restart-logs.js";
 
@@ -23,7 +26,7 @@ export function buildPlatformRuntimeLogHints(params: {
     const stderrHint =
       advertisedStderr.kind === "file"
         ? `Launchd stderr (if installed): ${toDarwinDisplayPath(advertisedStderr.path)}`
-        : `Launchd stderr (if installed): suppressed (/dev/null). Rewrite the LaunchAgent with ${formatCliCommand("openclaw gateway install", env)}.`;
+        : `Launchd stderr (if installed): suppressed (/dev/null). ${formatLaunchdStderrRewriteGuidance(env)}`;
     // Display launchd paths as POSIX-style paths even in cross-platform tests
     // where mocked env values may carry Windows drive prefixes.
     return [
