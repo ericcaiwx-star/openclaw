@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
-import { FsSafeError, readFileWithinRoot } from "../infra/fs-safe.js";
+import { FsSafeError, readFileWithinRoot, type FsSafeErrorCode } from "../infra/fs-safe.js";
 import type { Skill } from "../skills/loading/skill-contract.js";
 
 export type CodeModeSkill = {
@@ -58,6 +58,16 @@ function resolveNodeSkillRelativeLocator(skillFileLocator: string, relativePath:
 
 function skillRelativeEscapeError(relativePath: string): Error {
   return new Error(`skill relative path escapes skill root: ${JSON.stringify(relativePath)}`);
+}
+
+function isSkillRelativeContainmentError(code: FsSafeErrorCode): boolean {
+  return (
+    code === "outside-workspace" ||
+    code === "path-mismatch" ||
+    code === "path-alias" ||
+    code === "invalid-path" ||
+    code === "symlink"
+  );
 }
 
 /** Select Code Mode skills from the exact catalog rendered into this run's prompt. */
@@ -121,13 +131,17 @@ async function readFilesystemSkillRelative(
     return result.buffer.toString("utf8");
   } catch (error) {
     if (error instanceof FsSafeError) {
-      // Size and other non-containment failures are not root escapes.
       if (error.code === "too-large") {
         throw new Error(
           `skill relative file exceeds ${CODE_MODE_SKILL_FILE_MAX_BYTES} bytes: ${JSON.stringify(relativePath)}`,
         );
       }
-      throw skillRelativeEscapeError(relativePath);
+      if (isSkillRelativeContainmentError(error.code)) {
+        throw skillRelativeEscapeError(relativePath);
+      }
+      throw new Error(`skill relative file ${error.code}: ${JSON.stringify(relativePath)}`, {
+        cause: error,
+      });
     }
     throw error;
   }

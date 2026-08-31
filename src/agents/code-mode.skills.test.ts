@@ -328,6 +328,82 @@ describe("Code Mode skills and read tools", () => {
     await fs.rm(tmpParent, { recursive: true, force: true });
   });
 
+  it("preserves missing and directory companion failures through the worker bridge", async () => {
+    const tmpParent = await fs.realpath(
+      await fs.mkdtemp(nodePath.join(os.tmpdir(), "oc-skill-ops-")),
+    );
+    const skillRoot = nodePath.join(tmpParent, "demo");
+    await fs.mkdir(nodePath.join(skillRoot, "modules"), { recursive: true });
+    await fs.writeFile(nodePath.join(skillRoot, "SKILL.md"), "# skill\n", "utf8");
+    const demo = skillCandidate({
+      name: "demo",
+      description: "Full demo description",
+      filePath: nodePath.join(skillRoot, "SKILL.md"),
+    });
+    const codeModeSkills = resolveCodeModeSkills({
+      skillsPrompt: [
+        "<available_skills>",
+        "  <skill>",
+        "    <name>demo</name>",
+        "    <description>Short prompt description</description>",
+        "    <location>/guest/skills/demo/SKILL.md</location>",
+        "  </skill>",
+        "</available_skills>",
+      ].join("\n"),
+      candidates: [demo],
+    });
+    const {
+      config,
+      catalogRef,
+      tools: codeModeTools,
+    } = createCodeModeHarness({
+      codeModeSkills,
+    });
+    applyCodeModeCatalog({
+      tools: [...codeModeTools, pluginTool("fake_noop", "Noop")],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+      codeModeSkills,
+    });
+
+    const details = await runUntilCompleted({
+      execTool: expectDefined(codeModeTools[0], "codeModeTools[0] test invariant"),
+      waitTool: expectDefined(codeModeTools[1], "codeModeTools[1] test invariant"),
+      code: `
+        let missing;
+        try {
+          await skills.read("demo", "missing.md");
+        } catch (error) {
+          missing = error.message;
+        }
+        let directory;
+        try {
+          await skills.read("demo", "modules");
+        } catch (error) {
+          directory = error.message;
+        }
+        return { missing, directory };
+      `,
+    });
+
+    expect(details.status).toBe("completed");
+    const value = details.value as { missing: string; directory: string };
+    expect(value.missing).toMatch(/^skill relative file not-found: "missing.md"/);
+    expect(value.missing).not.toMatch(/escapes skill root/);
+    expect(value.directory).toMatch(/^skill relative file not-file: "modules"/);
+    expect(value.directory).not.toMatch(/escapes skill root/);
+    await expect(readCodeModeSkill(codeModeSkills[0]!, undefined, "missing.md")).rejects.toThrow(
+      /skill relative file not-found/,
+    );
+    await expect(readCodeModeSkill(codeModeSkills[0]!, undefined, "modules")).rejects.toThrow(
+      /skill relative file not-file/,
+    );
+    await fs.rm(tmpParent, { recursive: true, force: true });
+  });
+
   it.runIf(process.platform !== "win32")(
     "rejects a real symlink that escapes the skill root",
     async () => {
