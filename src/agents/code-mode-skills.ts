@@ -66,7 +66,8 @@ function isSkillRelativeContainmentError(code: FsSafeErrorCode): boolean {
     code === "path-mismatch" ||
     code === "path-alias" ||
     code === "invalid-path" ||
-    code === "symlink"
+    code === "symlink" ||
+    code === "hardlink"
   );
 }
 

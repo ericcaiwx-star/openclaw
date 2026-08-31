@@ -437,6 +437,31 @@ describe("Code Mode skills and read tools", () => {
     },
   );
 
+  it.runIf(process.platform !== "win32")(
+    "rejects a hardlink that aliases an inode outside the skill root",
+    async () => {
+      const tmpParent = await fs.realpath(
+        await fs.mkdtemp(nodePath.join(os.tmpdir(), "oc-skill-hardlink-")),
+      );
+      const skillRoot = nodePath.join(tmpParent, "demo");
+      const outside = nodePath.join(tmpParent, "outside.txt");
+      await fs.mkdir(nodePath.join(skillRoot, "modules"), { recursive: true });
+      await fs.writeFile(nodePath.join(skillRoot, "SKILL.md"), "# skill\n", "utf8");
+      await fs.writeFile(outside, "secret\n", "utf8");
+      await fs.link(outside, nodePath.join(skillRoot, "modules", "alias.md"));
+      const skill: CodeModeSkill = {
+        name: "demo",
+        description: "demo",
+        location: nodePath.join(skillRoot, "SKILL.md"),
+        source: { filePath: nodePath.join(skillRoot, "SKILL.md") },
+      };
+      await expect(readCodeModeSkill(skill, undefined, "modules/alias.md")).rejects.toThrow(
+        /escapes skill root/,
+      );
+      await fs.rm(tmpParent, { recursive: true, force: true });
+    },
+  );
+
   it.each([
     {
       name: "existing ordinary file",
