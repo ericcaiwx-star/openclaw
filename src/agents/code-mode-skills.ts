@@ -56,8 +56,10 @@ function resolveNodeSkillRelativeLocator(skillFileLocator: string, relativePath:
   return `${root}/${trimmed}`;
 }
 
-function skillRelativeEscapeError(relativePath: string): Error {
-  return new Error(`skill relative path escapes skill root: ${JSON.stringify(relativePath)}`);
+function skillRelativeEscapeError(relativePath: string, cause: unknown): Error {
+  return new Error(`skill relative path escapes skill root: ${JSON.stringify(relativePath)}`, {
+    cause,
+  });
 }
 
 // fs-safe 0.5.6 categorizeFsSafeError marks not-file and too-large as policy.
@@ -139,10 +141,11 @@ async function readFilesystemSkillRelative(
       if (error.code === "too-large") {
         throw new Error(
           `skill relative file exceeds ${CODE_MODE_SKILL_FILE_MAX_BYTES} bytes: ${JSON.stringify(relativePath)}`,
+          { cause: error },
         );
       }
       if (isSkillRelativeContainmentError(error.code)) {
-        throw skillRelativeEscapeError(relativePath);
+        throw skillRelativeEscapeError(relativePath, error);
       }
       throw new Error(`skill relative file ${error.code}: ${JSON.stringify(relativePath)}`, {
         cause: error,
