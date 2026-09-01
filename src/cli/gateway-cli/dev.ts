@@ -55,8 +55,13 @@ async function writeFileIfMissing(filePath: string, content: string) {
       flag: "wx",
     });
   } catch (err) {
-    const anyErr = err as { code?: string };
-    if (anyErr.code !== "EEXIST") {
+    // Exclusive create can report EPERM/EACCES on Windows when the target
+    // already exists or is briefly held. Accept only after the path is
+    // present; a missing target still fails closed.
+    try {
+      await fs.promises.access(filePath);
+      return;
+    } catch {
       throw err;
     }
   }

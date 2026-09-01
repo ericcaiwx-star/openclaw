@@ -199,6 +199,69 @@ describe("ensureAgentWorkspace", () => {
     expect(readWorkspaceStateSnapshot(tempDir).attestation).toBeDefined();
   });
 
+  it.each(["EPERM", "EACCES"] as const)(
+    "keeps an existing bootstrap file when exclusive create reports %s",
+    async (code) => {
+      const tempDir = await makeTempWorkspace("openclaw-workspace-");
+      const agentsPath = path.join(tempDir, DEFAULT_AGENTS_FILENAME);
+      const existing = "existing agents instructions\n";
+      await fs.writeFile(agentsPath, existing, "utf8");
+      const originalWriteFile = fs.writeFile.bind(fs);
+      const writeSpy = vi.spyOn(fs, "writeFile").mockImplementation((async (
+        filePath,
+        data,
+        options,
+      ) => {
+        const flag =
+          typeof options === "object" && options !== null && "flag" in options
+            ? options.flag
+            : undefined;
+        if (filePath === agentsPath && flag === "wx") {
+          throw Object.assign(new Error(`${code}: operation not permitted, open`), { code });
+        }
+        return await originalWriteFile(filePath, data, options as never);
+      }) as typeof fs.writeFile);
+
+      try {
+        await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });
+        expect(await fs.readFile(agentsPath, "utf8")).toBe(existing);
+      } finally {
+        writeSpy.mockRestore();
+      }
+    },
+  );
+
+  it("still fails exclusive bootstrap create when the target is missing", async () => {
+    const tempDir = await makeTempWorkspace("openclaw-workspace-");
+    const agentsPath = path.join(tempDir, DEFAULT_AGENTS_FILENAME);
+    const originalWriteFile = fs.writeFile.bind(fs);
+    const writeSpy = vi.spyOn(fs, "writeFile").mockImplementation((async (
+      filePath,
+      data,
+      options,
+    ) => {
+      const flag =
+        typeof options === "object" && options !== null && "flag" in options
+          ? options.flag
+          : undefined;
+      if (filePath === agentsPath && flag === "wx") {
+        throw Object.assign(new Error("EPERM: operation not permitted, open"), { code: "EPERM" });
+      }
+      return await originalWriteFile(filePath, data, options as never);
+    }) as typeof fs.writeFile);
+
+    try {
+      await expect(
+        ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true }),
+      ).rejects.toMatchObject({
+        code: "EPERM",
+      });
+      await expectPathMissing(agentsPath);
+    } finally {
+      writeSpy.mockRestore();
+    }
+  });
+
   it("does not overwrite a foreign root workspace-state.json file", async () => {
     const tempDir = await makeTempWorkspace("openclaw-workspace-");
     const foreignStatePath = path.join(tempDir, "workspace-state.json");
