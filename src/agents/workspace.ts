@@ -322,10 +322,15 @@ async function writeFileIfMissing(filePath: string, content: string): Promise<bo
     });
     return true;
   } catch (err) {
-    // Exclusive create can report EPERM/EACCES on Windows when the target
-    // already exists or is briefly held. Accept only after the path is
-    // present; a missing target still fails closed.
-    if (await pathExists(filePath)) {
+    // Exclusive create can report EEXIST, or EPERM/EACCES on Windows when
+    // the target already exists or is briefly held. Accept only those
+    // collision codes after the path is present; other errors (ENOSPC)
+    // stay visible even if a partial file appeared.
+    const code = (err as NodeJS.ErrnoException | undefined)?.code;
+    if (
+      (code === "EEXIST" || code === "EPERM" || code === "EACCES") &&
+      (await pathExists(filePath))
+    ) {
       return false;
     }
     throw err;

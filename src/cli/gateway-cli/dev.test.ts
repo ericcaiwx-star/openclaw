@@ -1,5 +1,6 @@
 // Covers canonical dev gateway bootstrap config generation.
-import { mkdtemp, rm } from "node:fs/promises";
+import nodeFs from "node:fs";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -81,5 +82,37 @@ describe("ensureDevGatewayConfig", () => {
     });
     expect(OpenClawSchema.safeParse(mocks.nextConfig).success).toBe(true);
     expect(mocks.writeOptions).toEqual({ allowedAgentRosterRemovals: ["main"] });
+  });
+
+  it("still fails exclusive workspace seeding when the target exists but the error is not a collision", async () => {
+    const workspaceDir = `${mocks.workspace}-dev`;
+    await mkdir(workspaceDir, { recursive: true });
+    const agentsPath = path.join(workspaceDir, "AGENTS.md");
+    const existing = "existing agents instructions\n";
+    await writeFile(agentsPath, existing, "utf8");
+    const originalWriteFile = nodeFs.promises.writeFile.bind(nodeFs.promises);
+    const writeSpy = vi.spyOn(nodeFs.promises, "writeFile").mockImplementation((async (
+      filePath,
+      data,
+      options,
+    ) => {
+      const flag =
+        typeof options === "object" && options !== null && "flag" in options
+          ? options.flag
+          : undefined;
+      if (filePath === agentsPath && flag === "wx") {
+        throw Object.assign(new Error("ENOSPC: no space left on device, open"), { code: "ENOSPC" });
+      }
+      return await originalWriteFile(filePath, data, options as never);
+    }) as typeof nodeFs.promises.writeFile);
+
+    try {
+      await expect(ensureDevGatewayConfig({})).rejects.toMatchObject({
+        code: "ENOSPC",
+      });
+      expect(await readFile(agentsPath, "utf8")).toBe(existing);
+    } finally {
+      writeSpy.mockRestore();
+    }
   });
 });
