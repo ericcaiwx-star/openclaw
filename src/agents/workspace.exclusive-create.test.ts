@@ -29,9 +29,10 @@ afterEach(async () => {
 });
 
 function exclusiveCreateFlag(options: unknown): string | undefined {
-  return typeof options === "object" && options !== null && "flag" in options
-    ? options.flag
-    : undefined;
+  if (typeof options !== "object" || options === null || !("flag" in options)) {
+    return undefined;
+  }
+  return typeof options.flag === "string" ? options.flag : undefined;
 }
 
 async function withExclusiveCreateError(
