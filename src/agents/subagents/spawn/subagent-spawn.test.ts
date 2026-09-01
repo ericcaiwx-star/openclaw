@@ -431,11 +431,8 @@ describe("spawnSubagentDirect seam flow", () => {
 
     expect(result.status).toBe("accepted");
     expect(result.sessionKey).toBe(result.childSessionKey);
-<<<<<<< HEAD
-    expect(result.expectsCompletionMessage).toBe(false);
-=======
     expect(result.sessionId).toBeTruthy();
->>>>>>> ecd17adf24b (feat(agents): return durable sessionId on hidden native spawn)
+    expect(result.expectsCompletionMessage).toBe(false);
     const registerInput = firstRegisteredSubagentRun();
     expect(registerInput).toMatchObject({
       runId: result.runId,
