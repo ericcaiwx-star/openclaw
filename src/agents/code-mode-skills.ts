@@ -62,8 +62,9 @@ function skillRelativeEscapeError(relativePath: string, cause: unknown): Error {
   });
 }
 
-// fs-safe 0.5.6 categorizeFsSafeError marks not-file and too-large as policy.
-// Companion reads keep this containment allowlist so those stay operational/size.
+// Locked @openclaw/fs-safe@0.7.0 categorizeFsSafeError still marks not-file
+// and too-large as policy. Companion reads keep this containment allowlist
+// so those stay size/operational instead of looking like root escapes.
 function isSkillRelativeContainmentError(code: FsSafeErrorCode): boolean {
   return (
     code === "outside-workspace" ||
@@ -129,7 +130,8 @@ async function readFilesystemSkillRelative(
   const skillRoot = path.dirname(path.resolve(skillFilePath));
   try {
     // Selected skill root only. Facade defaults reject symlink/hardlink and
-    // forwards maxBytes; the collection sandbox reader would follow a sibling link.
+    // forward maxBytes to locked fs-safe 0.7.0 (O_NOFOLLOW, nlink>1, eager
+    // too-large). The collection sandbox reader would follow a sibling link.
     const result = await readFileWithinRoot({
       rootDir: skillRoot,
       relativePath: relative,
