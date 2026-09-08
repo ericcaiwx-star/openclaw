@@ -118,6 +118,11 @@ Logging:
   `gateway-<profile>.err.log`). Existing LaunchAgents keep
   `StandardErrorPath` at `/dev/null` until `openclaw gateway restart` or
   `openclaw gateway install --force` updates the plist.
+- Supervisor stderr is raw process output, including shell errors before
+  OpenClaw's logging and redaction start. Inspect and redact it before sharing;
+  malformed custom environment content can expose sensitive fragments. The
+  installer does not tighten read permissions on an existing log file. Check
+  file permissions and ACLs before enabling stderr capture on a shared Mac.
 - If the host loops with repeated `EADDRINUSE` or fast restarts, check for
   duplicate `ai.openclaw.gateway` / `ai.openclaw.node` LaunchAgents and the
   launchd-marker workaround in
