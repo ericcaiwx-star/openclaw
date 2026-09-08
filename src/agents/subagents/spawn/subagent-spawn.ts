@@ -705,7 +705,7 @@ export async function spawnSubagentDirect(
     return {
       status: "accepted",
       childSessionKey,
-      sessionId: resolveAcceptedChildSessionId(),
+      ...(!params.collect ? { sessionId: resolveAcceptedChildSessionId() } : {}),
       // sessionKey remains collector-launch only; ordinary spawns expose durable
       // identity via sessionId + childSessionKey without redefining sessionKey.
       ...(collectorSessionKey ? { sessionKey: collectorSessionKey } : {}),
