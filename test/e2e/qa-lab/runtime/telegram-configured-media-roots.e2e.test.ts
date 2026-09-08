@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { withServer, withTempDir } from "openclaw/plugin-sdk/test-env";
 import { expect, test } from "vitest";
 import {
@@ -9,6 +10,7 @@ import {
   startQaMockOpenAiServer,
   writeJson,
 } from "../../../../extensions/qa-lab/api.js";
+import { createChannelIngressQueue } from "../../../../src/channels/message/ingress-queue.js";
 import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 
 const repoRoot = path.resolve(import.meta.dirname, "../../../..");
@@ -17,9 +19,57 @@ const CHAT_ID = -1002468135790;
 const ALLOWED_SENDER = 1357;
 const DENIED_SENDER = 2468;
 const COMMAND_DENIED_SENDER = 3690;
+const PLUGIN_ID = "telegram-raw-media-proof";
+const PLUGIN_COMMAND = "raw_media_proof";
+const FILE_CONTENT = "configured-root proof\n";
 
-async function verifyTelegramMediaRoots(setting: "configured" | "absent" | "empty") {
+async function writeRawMediaPlugin(root: string, mediaFile: string, auditFile: string) {
+  const pluginDir = path.join(root, "plugin");
+  await fs.mkdir(pluginDir);
+  await fs.writeFile(
+    path.join(pluginDir, "package.json"),
+    JSON.stringify({
+      name: PLUGIN_ID,
+      version: "0.0.0",
+      type: "module",
+      openclaw: { extensions: ["./index.js"] },
+    }),
+  );
+  await fs.writeFile(
+    path.join(pluginDir, "openclaw.plugin.json"),
+    JSON.stringify({
+      id: PLUGIN_ID,
+      name: "Raw media proof",
+      activation: { onStartup: true },
+      configSchema: { type: "object", additionalProperties: false, properties: {} },
+    }),
+  );
+  const sdkUrl = (name: string) =>
+    pathToFileURL(path.join(repoRoot, "dist/plugin-sdk", `${name}.js`)).href;
+  await fs.writeFile(
+    path.join(pluginDir, "index.js"),
+    [
+      `import fs from "node:fs/promises";`,
+      `import { definePluginEntry } from ${JSON.stringify(sdkUrl("plugin-entry"))};`,
+      `import { getAgentScopedMediaLocalRoots } from ${JSON.stringify(sdkUrl("media-local-roots"))};`,
+      `export default definePluginEntry({ id: ${JSON.stringify(PLUGIN_ID)}, name: "Raw media proof", register(api) {`,
+      `api.registerCommand({ name: ${JSON.stringify(PLUGIN_COMMAND)}, description: "Return raw local attachment", channels: ["telegram"], handler: async (ctx) => {`,
+      // Observe the child's real generic roots; do not pass them to delivery or grant trust.
+      `const mediaUrl = ${JSON.stringify(mediaFile)};`,
+      `await fs.appendFile(${JSON.stringify(auditFile)}, JSON.stringify({ senderId: ctx.senderId, mediaUrl, genericRoots: getAgentScopedMediaLocalRoots(ctx.config, ctx.agentId) }) + "\\n");`,
+      `return { mediaUrl };`,
+      `} }); } });`,
+    ].join("\n"),
+  );
+  return pluginDir;
+}
+
+async function verifyTelegramMediaRoots(
+  setting: "configured" | "absent" | "empty",
+  source: "model" | "plugin" = "model",
+) {
   const calls: Array<{ method: string; text?: string; fileBytes?: number }> = [];
+  const uploadedBodies: string[] = [];
   const polls = new Set<ServerResponse>();
   const updates: unknown[] = [];
   const chat = { id: CHAT_ID, type: "supergroup", title: "QA Media Roots" };
@@ -34,8 +84,21 @@ async function verifyTelegramMediaRoots(setting: "configured" | "absent" | "empt
         date: Math.floor(Date.now() / 1000),
         chat,
         from: { id: senderId, is_bot: false, first_name: "QA Sender" },
-        text: `${native ? "/new " : ""}Reply exactly: MEDIA:${file}`,
-        ...(native ? { entities: [{ type: "bot_command", offset: 0, length: 4 }] } : {}),
+        text:
+          source === "plugin"
+            ? `/${PLUGIN_COMMAND}`
+            : `${native ? "/new " : ""}Reply exactly: MEDIA:${file}`,
+        ...(native
+          ? {
+              entities: [
+                {
+                  type: "bot_command",
+                  offset: 0,
+                  length: source === "plugin" ? PLUGIN_COMMAND.length + 1 : 4,
+                },
+              ],
+            }
+          : {}),
       },
     };
     const poll = polls.values().next().value;
@@ -62,6 +125,7 @@ async function verifyTelegramMediaRoots(setting: "configured" | "absent" | "empt
       for (const value of form.values()) {
         if (typeof value !== "string") {
           fileBytes = (fileBytes ?? 0) + value.size;
+          uploadedBodies.push(await value.text());
         }
       }
     } else if (raw.length) {
@@ -97,8 +161,17 @@ async function verifyTelegramMediaRoots(setting: "configured" | "absent" | "empt
         const mediaRoot = path.join(canonicalRoot, "trusted");
         await fs.mkdir(workspace);
         await fs.mkdir(mediaRoot);
-        const mediaFile = path.join(setting === "configured" ? mediaRoot : workspace, "proof.txt");
-        await fs.writeFile(mediaFile, "configured-root proof\n");
+        const mediaFile = path.join(
+          source === "plugin" || setting === "configured" ? mediaRoot : workspace,
+          "proof.txt",
+        );
+        await fs.writeFile(mediaFile, FILE_CONTENT);
+        const auditFile = path.join(canonicalRoot, "plugin-invocations.jsonl");
+        await fs.writeFile(auditFile, "");
+        const pluginDir =
+          source === "plugin"
+            ? await writeRawMediaPlugin(canonicalRoot, mediaFile, auditFile)
+            : undefined;
         const mock = await startQaMockOpenAiServer();
         const gatewayOwner = createQaGatewayChild();
         const head = execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim();
@@ -106,8 +179,13 @@ async function verifyTelegramMediaRoots(setting: "configured" | "absent" | "empt
           repoRoot,
           ".artifacts/qa-e2e/configured-media-roots",
           head,
+          ...(source === "plugin" ? ["unstaged-native"] : []),
           setting,
         );
+        const writeArtifact = async (name: string, value: unknown) => {
+          await fs.mkdir(outputDir, { recursive: true });
+          await fs.writeFile(path.join(outputDir, name), JSON.stringify(value, null, 2));
+        };
         try {
           const gateway = await gatewayOwner.start({
             repoRoot,
@@ -155,6 +233,17 @@ async function verifyTelegramMediaRoots(setting: "configured" | "absent" | "empt
                 allowFrom: { telegram: [String(ALLOWED_SENDER), String(DENIED_SENDER)] },
               };
               cfg.bindings = [{ agentId: "qa", match: { channel: "telegram" } }];
+              if (pluginDir) {
+                cfg.plugins = {
+                  ...cfg.plugins,
+                  allow: [...new Set([...(cfg.plugins?.allow ?? []), PLUGIN_ID])],
+                  entries: { ...cfg.plugins?.entries, [PLUGIN_ID]: { enabled: true } },
+                  load: {
+                    ...cfg.plugins?.load,
+                    paths: [...(cfg.plugins?.load?.paths ?? []), pluginDir],
+                  },
+                };
+              }
               return cfg;
             },
           });
@@ -166,6 +255,116 @@ async function verifyTelegramMediaRoots(setting: "configured" | "absent" | "empt
           await expect.poll(() => polls.size, { timeout: 30_000 }).toBeGreaterThan(0);
           const readRequestCount = async () =>
             ((await (await fetch(`${mock.baseUrl}/debug/requests`)).json()) as unknown[]).length;
+          if (source === "plugin") {
+            const readInvocations = async () =>
+              (await fs.readFile(auditFile, "utf8"))
+                .trim()
+                .split("\n")
+                .filter(Boolean)
+                .map(
+                  (line) =>
+                    JSON.parse(line) as {
+                      senderId: string;
+                      mediaUrl: string;
+                      genericRoots: string[];
+                    },
+                );
+            const effects = [];
+            const ingress = createChannelIngressQueue({
+              channelId: "telegram",
+              accountId: "default",
+              stateDir: path.join(gateway.tempRoot, "state"),
+              access: "read-only",
+            });
+            // Default requireAuth is retained; this sender must not enter the plugin handler.
+            receive(COMMAND_DENIED_SENDER, mediaFile, true);
+            await expect
+              .poll(
+                () =>
+                  calls.some((call) => call.text === "You are not authorized to use this command."),
+                { timeout: 30_000 },
+              )
+              .toBe(true);
+            expect(await readInvocations()).toEqual([]);
+            expect(uploadedBodies).toEqual([]);
+            for (const senderId of setting === "configured"
+              ? [ALLOWED_SENDER, DENIED_SENDER]
+              : [ALLOWED_SENDER]) {
+              const start = calls.length;
+              const logMark = gateway.markLogs();
+              const denied = setting !== "configured" || senderId === DENIED_SENDER;
+              receive(senderId, mediaFile, true);
+              await expect
+                .poll(async () => (await readInvocations()).length, { timeout: 30_000 })
+                .toBeGreaterThanOrEqual(effects.length + 1);
+              const invocation = (await readInvocations()).at(-1)!;
+              expect(invocation.senderId).toBe(String(senderId));
+              expect(invocation.mediaUrl).toBe(mediaFile);
+              expect(invocation.genericRoots.length).toBeGreaterThan(0);
+              expect(
+                invocation.genericRoots.every((genericRoot) => {
+                  const relative = path.relative(genericRoot, mediaFile);
+                  return relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative);
+                }),
+              ).toBe(true);
+              let denial;
+              if (denied) {
+                // Native plugin load failures remain retryable in the existing ingress owner.
+                // Observe its committed error, not silence or a fabricated terminal message.
+                const readFailure = async () =>
+                  (await ingress.listPending({ limit: "all" })).find(
+                    (entry) =>
+                      entry.id === String(updateId).padStart(16, "0") &&
+                      entry.attempts > 0 &&
+                      entry.lastError?.includes("LocalMediaAccessError") &&
+                      entry.lastError.includes(
+                        "Local media path is not under an allowed directory",
+                      ) &&
+                      entry.lastError.includes(mediaFile),
+                  );
+                await expect.poll(readFailure, { timeout: 30_000 }).toBeDefined();
+                const entry = (await readFailure())!;
+                await expect
+                  .poll(() => gateway.readLogsSince(logMark), { timeout: 10_000 })
+                  .toContain("keeping for retry");
+                denial = {
+                  disposition: "pending-retry",
+                  eventId: entry.id,
+                  attempts: entry.attempts,
+                  error: entry.lastError,
+                };
+                expect(calls.slice(start).filter((call) => call.fileBytes)).toEqual([]);
+              } else {
+                await expect
+                  .poll(() => uploadedBodies, { timeout: 30_000 })
+                  .toEqual([FILE_CONTENT]);
+              }
+              effects.push({
+                senderId,
+                denied,
+                denial,
+                returnedMediaPath: invocation.mediaUrl,
+                uploads: calls.slice(start).filter((call) => call.fileBytes),
+                messages: calls.slice(start).filter((call) => call.method === "sendMessage"),
+              });
+            }
+            expect(await readRequestCount()).toBe(0);
+            const verdict = {
+              head,
+              lane: "mock-gateway",
+              source: "unstaged-native-plugin",
+              setting,
+              passed: true,
+              effects,
+              handlerInvocations: await readInvocations(),
+              uploadedBodies,
+              providerRequests: 0,
+              unauthorizedHandlerInvocations: 0,
+              liveTelegram: false,
+            };
+            await writeArtifact("verdict.json", verdict);
+            return;
+          }
           const effects = [];
           for (const native of [false, true]) {
             for (const senderId of [ALLOWED_SENDER, DENIED_SENDER]) {
@@ -253,26 +452,32 @@ async function verifyTelegramMediaRoots(setting: "configured" | "absent" | "empt
             },
             liveTelegram: false,
           };
-          await fs.mkdir(outputDir, { recursive: true });
-          await fs.writeFile(
-            path.join(outputDir, "verdict.json"),
-            JSON.stringify(verdict, null, 2),
-          );
-          console.log(`CONFIGURED_MEDIA_ROOTS ${JSON.stringify(verdict)}`);
+          await writeArtifact("verdict.json", verdict);
         } catch (error) {
-          await fs.mkdir(outputDir, { recursive: true });
-          await fs.writeFile(
-            path.join(outputDir, "failure-observations.json"),
-            JSON.stringify({ setting, calls }, null, 2),
-          );
+          await writeArtifact("failure-observations.json", {
+            setting,
+            source,
+            calls,
+            uploadedBodies,
+            pluginInvocations: await fs.readFile(auditFile, "utf8"),
+            providerRequests: (
+              (await (await fetch(`${mock.baseUrl}/debug/requests`)).json()) as unknown[]
+            ).length,
+          });
           throw error;
         } finally {
-          await stopQaGatewayFixture(gatewayOwner, {
-            preserveToDir: path.join(outputDir, "gateway"),
-          });
-          await mock.stop();
-          for (const poll of polls) {
-            poll.destroy();
+          try {
+            await stopQaGatewayFixture(gatewayOwner, {
+              preserveToDir: path.join(outputDir, "gateway"),
+            });
+          } finally {
+            try {
+              await mock.stop();
+            } finally {
+              for (const poll of polls) {
+                poll.destroy();
+              }
+            }
           }
         }
       }),
@@ -281,6 +486,12 @@ async function verifyTelegramMediaRoots(setting: "configured" | "absent" | "empt
 
 test.each(["configured", "absent", "empty"] as const)(
   "Telegram media roots: %s",
-  verifyTelegramMediaRoots,
+  (setting) => verifyTelegramMediaRoots(setting),
+  180_000,
+);
+
+test.each(["configured", "absent", "empty"] as const)(
+  "Telegram unstaged native media roots: %s",
+  (setting) => verifyTelegramMediaRoots(setting, "plugin"),
   180_000,
 );
