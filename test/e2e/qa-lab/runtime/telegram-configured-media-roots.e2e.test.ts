@@ -170,7 +170,9 @@ async function verifyTelegramMediaRoots(setting: "configured" | "absent" | "empt
           for (const native of [false, true]) {
             for (const senderId of [ALLOWED_SENDER, DENIED_SENDER]) {
               const start = calls.length;
-              const denied = setting === "configured" && senderId === DENIED_SENDER;
+              // Model MEDIA staging already enforces sender read policy before
+              // Telegram delivery, independently of configured delivery roots.
+              const denied = senderId === DENIED_SENDER;
               receive(senderId, mediaFile, native);
               if (denied) {
                 await expect
