@@ -16,6 +16,7 @@ const BOT_TOKEN = `424242:${"A".repeat(35)}`;
 const CHAT_ID = -1002468135790;
 const ALLOWED_SENDER = 1357;
 const DENIED_SENDER = 2468;
+const COMMAND_DENIED_SENDER = 3690;
 
 async function verifyTelegramMediaRoots(setting: "configured" | "absent" | "empty") {
   const calls: Array<{ method: string; text?: string; fileBytes?: number }> = [];
@@ -117,8 +118,6 @@ async function verifyTelegramMediaRoots(setting: "configured" | "absent" | "empt
               requiredPluginIds: ["telegram"],
               createGatewayConfig: () => ({
                 messages: { groupChat: { visibleReplies: "automatic" } },
-                // Disable text-command fallback so /new must use the native handler.
-                commands: { native: true, text: false, allowFrom: { telegram: ["*"] } },
                 channels: {
                   telegram: {
                     enabled: true,
@@ -148,29 +147,30 @@ async function verifyTelegramMediaRoots(setting: "configured" | "absent" | "empt
                 cfg.agents!.defaults!.mediaLocalRoots = setting === "empty" ? [] : [mediaRoot];
               }
               cfg.tools = { ...cfg.tools, profile: "full" };
+              // Transport config projects only channels/messages. Root command
+              // authorization belongs here; disable text fallback for native proof.
+              cfg.commands = {
+                native: true,
+                text: false,
+                allowFrom: { telegram: [String(ALLOWED_SENDER), String(DENIED_SENDER)] },
+              };
               cfg.bindings = [{ agentId: "qa", match: { channel: "telegram" } }];
               return cfg;
             },
           });
           expect(new URL(gateway.baseUrl).port).not.toBe("18789");
+          expect(gateway.cfg.commands).toMatchObject({
+            text: false,
+            allowFrom: { telegram: [String(ALLOWED_SENDER), String(DENIED_SENDER)] },
+          });
           await expect.poll(() => polls.size, { timeout: 30_000 }).toBeGreaterThan(0);
-          const readSessionId = async () => {
-            const result = (await gateway.call("sessions.list", { agentId: "qa", limit: 20 })) as {
-              sessions: Array<{ key: string; sessionId?: string }>;
-            };
-            return result.sessions.find(
-              (session) => session.key === `agent:qa:telegram:group:${CHAT_ID}`,
-            )?.sessionId;
-          };
+          const readRequestCount = async () =>
+            ((await (await fetch(`${mock.baseUrl}/debug/requests`)).json()) as unknown[]).length;
           const effects = [];
           for (const native of [false, true]) {
             for (const senderId of [ALLOWED_SENDER, DENIED_SENDER]) {
               const start = calls.length;
               const denied = setting === "configured" && senderId === DENIED_SENDER;
-              const sessionBefore = native ? await readSessionId() : undefined;
-              if (native) {
-                expect(sessionBefore).toEqual(expect.any(String));
-              }
               receive(senderId, mediaFile, native);
               if (denied) {
                 await expect
@@ -193,39 +193,62 @@ async function verifyTelegramMediaRoots(setting: "configured" | "absent" | "empt
                   })
                   .toEqual([{ method: "sendDocument", text: undefined, fileBytes: 22 }]);
               }
-              let sessionAfter: string | undefined;
-              if (native) {
-                await expect
-                  .poll(
-                    async () => {
-                      sessionAfter = await readSessionId();
-                      return typeof sessionAfter === "string" && sessionAfter !== sessionBefore;
-                    },
-                    { timeout: 10_000 },
-                  )
-                  .toBe(true);
-              }
               effects.push({
                 route: native ? "native-new" : "direct",
                 senderId,
                 denied,
-                ...(native ? { sessionBefore, sessionAfter } : {}),
                 uploads: calls.slice(start).filter((call) => call.fileBytes),
                 messages: calls.slice(start).filter((call) => call.method === "sendMessage"),
               });
             }
           }
-          const requests = (await (
-            await fetch(`${mock.baseUrl}/debug/requests`)
-          ).json()) as unknown[];
-          expect(requests.length).toBeGreaterThanOrEqual(4);
+          // Non-ACP durable /new retains sessionId (session.ts); ID rotation is
+          // not a native-command oracle. Instead prove the native-only auth gate:
+          // the same sender/prompt is admitted as text but rejected as /new.
+          const ordinaryStart = calls.length;
+          receive(COMMAND_DENIED_SENDER, mediaFile, false);
+          await expect
+            .poll(() => calls.slice(ordinaryStart).filter((call) => call.fileBytes), {
+              timeout: 45_000,
+            })
+            .toEqual([{ method: "sendDocument", text: undefined, fileBytes: 22 }]);
+          const ordinaryUploads = calls.slice(ordinaryStart).filter((call) => call.fileBytes);
+          const nativeStart = calls.length;
+          const requestsBeforeNativeDenial = await readRequestCount();
+          receive(COMMAND_DENIED_SENDER, mediaFile, true);
+          await expect
+            .poll(
+              () =>
+                calls
+                  .slice(nativeStart)
+                  .some(
+                    (call) =>
+                      call.method === "sendMessage" &&
+                      call.text === "You are not authorized to use this command.",
+                  ),
+              { timeout: 45_000 },
+            )
+            .toBe(true);
+          expect(calls.slice(nativeStart).filter((call) => call.fileBytes)).toEqual([]);
+          const providerRequests = await readRequestCount();
+          expect(providerRequests).toBe(requestsBeforeNativeDenial);
+          expect(providerRequests).toBeGreaterThanOrEqual(5);
           const verdict = {
             head,
             lane: "mock-gateway",
             passed: true,
             setting,
-            providerRequests: requests.length,
+            providerRequests,
             effects,
+            nativeAdmission: {
+              senderId: COMMAND_DENIED_SENDER,
+              ordinaryUploads,
+              nativeMessages: calls
+                .slice(nativeStart)
+                .filter((call) => call.method === "sendMessage"),
+              requestsBeforeNativeDenial,
+              requestsAfterNativeDenial: providerRequests,
+            },
             liveTelegram: false,
           };
           await fs.mkdir(outputDir, { recursive: true });
@@ -234,6 +257,13 @@ async function verifyTelegramMediaRoots(setting: "configured" | "absent" | "empt
             JSON.stringify(verdict, null, 2),
           );
           console.log(`CONFIGURED_MEDIA_ROOTS ${JSON.stringify(verdict)}`);
+        } catch (error) {
+          await fs.mkdir(outputDir, { recursive: true });
+          await fs.writeFile(
+            path.join(outputDir, "failure-observations.json"),
+            JSON.stringify({ setting, calls }, null, 2),
+          );
+          throw error;
         } finally {
           await stopQaGatewayFixture(gatewayOwner, {
             preserveToDir: path.join(outputDir, "gateway"),
