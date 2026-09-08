@@ -156,7 +156,7 @@ function findTagCloseIndex(text: string, start: number): number {
 function detectToolCallPayloadKind(
   text: string,
   start: number,
-  holdIncompleteGlmNamePrefixes = false,
+  streaming = false,
 ): ToolCallPayloadKind {
   const rest = text.slice(start);
   if (TOOL_CALL_JSON_PAYLOAD_START_RE.test(rest)) {
@@ -165,114 +165,70 @@ function detectToolCallPayloadKind(
   if (TOOL_CALL_XML_PAYLOAD_START_RE.test(rest)) {
     return "xml";
   }
-  if (
-    isClosedGlmArgPayload(rest) ||
-    isIncompleteGlmArgPayload(rest, holdIncompleteGlmNamePrefixes)
-  ) {
+  if (isGlmArgPayload(rest, streaming)) {
     return "xml";
   }
   return null;
-}
-
-function readGlmToolName(rest: string): string | null {
-  const match = GLM_TOOL_NAME_RE.exec(rest);
-  return match?.[0] ?? null;
-}
-
-function isClosedGlmArgPayload(rest: string): boolean {
-  const name = readGlmToolName(rest);
-  if (!name) {
-    return false;
-  }
-  // Bound to this payload: the first pair's own close, not a later prose/code tag.
-  return /^\s*<\s*arg_key\b[^>]*>[^\s<]*<\/\s*arg_key\b/i.test(rest.slice(name.length));
 }
 
 // Hold a <tool_call> tool-name / whitespace / partial <arg_key> prefix until
 // classified. Name-only and whitespace-only prefixes are stream-only: a later
 // replacement cannot unsay an emitted prefix, but a finished answer ending
 // `Use <tool_call>exec` is literal prose.
-function isIncompleteGlmArgPayload(rest: string, holdNameOnlyPrefixes = false): boolean {
-  const name = readGlmToolName(rest);
+function isGlmArgPayload(rest: string, streaming: boolean): boolean {
+  const name = GLM_TOOL_NAME_RE.exec(rest)?.[0];
   if (!name) {
     return false;
   }
-  const afterName = rest.slice(name.length);
-  if (afterName === "" || /^\s+$/.test(afterName)) {
-    return holdNameOnlyPrefixes;
+  const start = skipWhitespace(rest, name.length);
+  if (start === rest.length) {
+    return streaming;
   }
-  const open = afterName.match(/^\s*</);
+  const open = parseXmlTagAt(rest, start);
   if (!open) {
+    return /^<\s*$/.test(rest.slice(start));
+  }
+  if (open.isClose || open.isSelfClosing || !isGlmArgKeyTag(rest, open)) {
     return false;
   }
-  return isIncompleteGlmArgKeyAfterOpen(afterName.slice(open[0].length));
-}
-
-function isPartialGlmArgKeyClose(text: string): boolean {
-  if (!text.startsWith("<") || text.includes(">")) {
-    return false;
-  }
-  if (text === "<") {
+  if (open.isTruncated) {
     return true;
   }
-  if (text[1] !== "/") {
-    return false;
-  }
-  let idx = 2;
-  while (idx < text.length && /\s/.test(text[idx] ?? "")) {
-    idx += 1;
-  }
-  const remaining = text.slice(idx);
-  if (remaining === "") {
-    return true;
-  }
-  const lower = remaining.toLowerCase();
-  if (GLM_ARG_KEY.startsWith(lower)) {
-    return true;
-  }
-  return lower.startsWith(GLM_ARG_KEY) && /^\s*$/.test(remaining.slice(GLM_ARG_KEY.length));
-}
-
-function isIncompleteGlmArgKeyAfterOpen(afterOpen: string): boolean {
-  let cursor = 0;
-  while (cursor < afterOpen.length && /\s/.test(afterOpen.charAt(cursor))) {
+  // Only this first key's own close establishes a payload. Never borrow a
+  // matching tag from later prose or code examples.
+  const keyStart = skipWhitespace(rest, open.end);
+  let cursor = keyStart;
+  while (cursor < rest.length && !/[\s<]/.test(rest.charAt(cursor))) {
     cursor += 1;
   }
-  const body = afterOpen.slice(cursor);
-  if (body === "") {
-    return true;
+  // GLM trims formatting whitespace around keys. A leading-space prefix is
+  // ambiguous with literal `<arg_key> prose` until this first key's own close.
+  if (cursor > keyStart) {
+    cursor = skipWhitespace(rest, cursor);
   }
-  let matched = 0;
-  while (
-    matched < body.length &&
-    matched < GLM_ARG_KEY.length &&
-    body[matched]?.toLowerCase() === GLM_ARG_KEY[matched]
-  ) {
-    matched += 1;
+  if (cursor === rest.length) {
+    return keyStart === open.end || streaming;
   }
-  if (matched === 0) {
+  if (keyStart > open.end && cursor === keyStart) {
     return false;
   }
-  if (matched < GLM_ARG_KEY.length) {
-    return body.length === matched;
+  // A malformed provider close can omit `>` before the outer wrapper. Parse
+  // that bounded fragment too, without searching past this first key's close.
+  const nextTagStart = rest.indexOf("<", cursor + 1);
+  const close =
+    parseXmlTagAt(rest, cursor) ??
+    (nextTagStart === -1 ? null : parseXmlTagAt(rest.slice(0, nextTagStart), cursor));
+  if (!close) {
+    return /^<(?:\/\s*)?$/.test(rest.slice(cursor));
   }
-  const afterTag = body.slice(GLM_ARG_KEY.length);
-  if (/^[A-Za-z0-9_]/.test(afterTag)) {
-    return false;
-  }
-  const close = afterTag.indexOf(">");
-  if (close === -1) {
-    return true;
-  }
-  const afterGt = afterTag.slice(close + 1);
-  if (/^[^\s<]*<\/\s*arg_key\b/i.test(afterGt)) {
-    return false;
-  }
-  if (/^[^\s<]*$/.test(afterGt)) {
-    return true;
-  }
-  const split = /^([^\s<]*)(<[\s\S]*)$/.exec(afterGt);
-  return split !== null && isPartialGlmArgKeyClose(split[2] ?? "");
+  return close.isClose && isGlmArgKeyTag(rest, close);
+}
+
+function isGlmArgKeyTag(text: string, tag: ParsedToolCallTag): boolean {
+  return (
+    tag.tagName === GLM_ARG_KEY ||
+    (tag.isTruncated && GLM_ARG_KEY.startsWith(tag.tagName) && tag.contentStart === text.length)
+  );
 }
 
 function startsWithNestedJsonToolCallPayload(text: string, start: number): boolean {
@@ -481,8 +437,15 @@ export function stripToolCallXmlTags(
   options: {
     stripFunctionCallsXmlPayloads?: boolean;
     stripFunctionResponseAfterPluralToolCalls?: boolean;
-    holdIncompleteGlmNamePrefixes?: boolean;
   } = {},
+): string {
+  return stripToolCallXmlTagsInternal(input, options, false);
+}
+
+function stripToolCallXmlTagsInternal(
+  input: string,
+  options: NonNullable<Parameters<typeof stripToolCallXmlTags>[1]>,
+  streaming: boolean,
 ): string {
   const text = input;
   if (!text || !TOOL_CALL_QUICK_RE.test(text)) {
@@ -557,11 +520,7 @@ export function stripToolCallXmlTags(
           shouldStripPluralWrapperBeforeResponse) &&
           isPluralToolCallWrapper);
       const payloadKind = shouldDetectXmlPayload
-        ? detectToolCallPayloadKind(
-            text,
-            payloadStart,
-            options.holdIncompleteGlmNamePrefixes === true,
-          )
+        ? detectToolCallPayloadKind(text, payloadStart, streaming)
         : TOOL_CALL_JSON_PAYLOAD_START_RE.test(text.slice(payloadStart))
           ? "json"
           : null;
@@ -890,12 +849,15 @@ export function assistantVisibleTextFilters(
     {
       activationTokens: ["<"],
       transform: (text) =>
-        stripToolCallXmlTags(text, {
-          stripFunctionCallsXmlPayloads: profile === "tool-progress",
-          stripFunctionResponseAfterPluralToolCalls:
-            profile === "delivery" || profile === "final-answer-delivery",
-          holdIncompleteGlmNamePrefixes: streaming,
-        }),
+        stripToolCallXmlTagsInternal(
+          text,
+          {
+            stripFunctionCallsXmlPayloads: profile === "tool-progress",
+            stripFunctionResponseAfterPluralToolCalls:
+              profile === "delivery" || profile === "final-answer-delivery",
+          },
+          streaming,
+        ),
     },
     ...(profile === "tool-progress" ? [] : [assistantTraceTextFilter]),
     { transform: stripLegacyBracketToolCallBlocks, activationTokens: ["["] },

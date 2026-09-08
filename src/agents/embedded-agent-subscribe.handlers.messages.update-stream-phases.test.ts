@@ -181,6 +181,41 @@ describe("handleMessageUpdate text signatures", () => {
       ],
     },
     {
+      name: "held GLM first key split at formatting whitespace",
+      chunks: [
+        "Visible\n<tool_call>exec<arg_key>command",
+        " \n",
+        "</arg_key><arg_value>private</arg_value></tool_call>\nDone.",
+      ],
+      updates: [
+        { text: "Visible", delta: "Visible" },
+        { text: "Visible\n\nDone.", delta: "\n\nDone." },
+      ],
+    },
+    {
+      name: "held GLM first key split around formatting whitespace",
+      chunks: [
+        "Visible\n<tool_call>exec<arg_key>\n",
+        "command\n",
+        "</arg_key><arg_value>private</arg_value></tool_call>\nDone.",
+      ],
+      updates: [
+        { text: "Visible", delta: "Visible" },
+        { text: "Visible\n\nDone.", delta: "\n\nDone." },
+      ],
+    },
+    {
+      name: "releases leading-space GLM literal prose without borrowing a later close",
+      chunks: ["Use <tool_call>exec<arg_key> ", "literally. Example: `</arg_key>`."],
+      updates: [
+        { text: "Use", delta: "Use" },
+        {
+          text: "Use <tool_call>exec<arg_key> literally. Example: `</arg_key>`.",
+          delta: " <tool_call>exec<arg_key> literally. Example: `</arg_key>`.",
+        },
+      ],
+    },
+    {
       name: "releases a terminal literal GLM marker after later prose",
       chunks: ["Use <tool_call>exec", " now."],
       updates: [

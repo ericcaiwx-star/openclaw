@@ -5,6 +5,7 @@ import {
   sanitizeAssistantVisibleText,
   sanitizeAssistantVisibleTextWithProfile,
   stripAssistantInternalScaffolding,
+  stripToolCallXmlTags,
 } from "./assistant-visible-text.js";
 
 describe("stripAssistantInternalScaffolding GLM arg_key", () => {
@@ -67,6 +68,38 @@ describe("stripAssistantInternalScaffolding GLM arg_key", () => {
     expectVisibleText("Visible\n<tool_call>exec<arg_key>command</arg", "Visible\n");
     expectVisibleText("Visible\n<tool_call>exec<arg_key>command</", "Visible\n");
   });
+
+  it.each([
+    '<tool_call>exec<arg_key hint="a > b">command</arg_key><arg_value>private</arg_value></tool_call>',
+    "<tool_call>exec<ARG_KEY>command</ARG_KEY></tool_call>",
+    "<tool_call>exec<arg_key>command</arg_key</tool_call>",
+    "<tool_call>web-search<arg_key>query</arg_key><arg_value>private</arg_value></tool_call>",
+    "<tool_call>exec<arg_key>command\n</arg_key><arg_value>private</arg_value></tool_call>",
+    "<tool_call>exec<arg_key>\ncommand\n</arg_key><arg_value>private</arg_value></tool_call>",
+  ])("uses the XML scanner for the first GLM key: %s", (input) => {
+    expectVisibleText(input, "");
+  });
+
+  it.each([
+    "Use <tool_call>exec<arg_key_extra> literally.",
+    "Use <tool_call>exec<arg_key/> literally.",
+    "Use <tool_call>exec<arg_key>command</argument> literally.",
+    "Use <tool_call>exec<arg_key>command</arg_k</tool_call> literally.",
+    "Use <tool_call>exec<arg_key>command literally. Example: `</arg_key>`.",
+    "Use <tool_call>exec<arg_key>\ncommand literally. Example: `</arg_key>`.",
+    "Use <tool_call>exec<arg_key>\ncommand",
+    "Use <tool_call>exec<arg_key> \n</arg_key> literally.",
+  ])("preserves unrelated key syntax: %s", (input) => {
+    expectVisibleText(input, input);
+  });
+
+  it("keeps the public XML helper terminal-only", () => {
+    expect(stripToolCallXmlTags("Use <tool_call>exec ")).toBe("Use <tool_call>exec ");
+  });
+
+  it("holds formatting whitespace after the first GLM key", () => {
+    expectVisibleText("Visible\n<tool_call>exec<arg_key>command \n", "Visible\n");
+  });
 });
 
 describe("sanitizeAssistantVisibleText GLM arg_key", () => {
@@ -109,5 +142,17 @@ describe("sanitizeAssistantVisibleText GLM arg_key", () => {
     expect(sanitizeAssistantVisibleTextWithProfile("Visible\n<tool_call>x", "delivery", true)).toBe(
       "Visible",
     );
+  });
+
+  it("withholds leading key whitespace while streaming without deleting terminal literals", () => {
+    for (const suffix of ["\n", "\ncommand", "\ncommand\n", "\ncommand\n</arg_"]) {
+      expect(
+        sanitizeAssistantVisibleTextWithProfile(
+          `Visible\n<tool_call>exec<arg_key>${suffix}`,
+          "delivery",
+          true,
+        ),
+      ).toBe("Visible");
+    }
   });
 });
