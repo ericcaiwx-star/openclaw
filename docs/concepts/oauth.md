@@ -110,10 +110,11 @@ For static secret refs and runtime snapshot activation behavior, see [Secrets Ma
 
 When an agent has no local auth profile, OpenClaw reads the shared auth store;
 it does not clone shared credentials into the agent database.
-Portable `api_key` and `token` pastes stay in the
-targeted agent store; they do not write back into the default agent, they
-do not write global `auth.profiles`/`auth.order` metadata, and they do not
-copy that global order into a stored per-agent override. OAuth refresh
+Portable `api_key` and `token` pastes into a secondary agent stay local and
+do not write back into the default agent. Main-agent pastes use the shared
+credential store that other agents can inherit. Neither path writes global
+`auth.profiles`/`auth.order` metadata or copies global order into a stored
+per-agent override. OAuth refresh
 tokens are especially sensitive: normal copy flows skip them by default
 because some providers rotate or invalidate refresh tokens after use.
 Configure a separate OAuth login for an agent when it needs an independent

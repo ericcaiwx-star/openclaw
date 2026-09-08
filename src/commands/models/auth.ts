@@ -18,11 +18,15 @@ import { styleSelectParams } from "../../../packages/terminal-core/src/prompt-se
 import { stylePromptMessage } from "../../../packages/terminal-core/src/prompt-style.js";
 import { resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import { removeProviderAuthProfilesWithLock } from "../../agents/auth-profiles.js";
-import { resolveExplicitAuthOrderSelection } from "../../agents/auth-profiles/order.js";
+import {
+  resolveAuthProfileEligibility,
+  resolveAuthProfileOrder,
+} from "../../agents/auth-profiles/order.js";
 import {
   promoteAuthProfileInOrder,
   upsertAuthProfileWithLockOrThrow,
 } from "../../agents/auth-profiles/profiles.js";
+import { ensureAuthProfileStoreForLocalUpdate } from "../../agents/auth-profiles/store-runtime.js";
 import type { AuthProfileCredential } from "../../agents/auth-profiles/types.js";
 import { normalizeProviderId } from "../../agents/model-ref-shared.js";
 import { isCliProvider } from "../../agents/model-selection-cli.js";
@@ -609,6 +613,17 @@ async function persistPastedAuthProfile(params: {
 }) {
   const { agentId, agentDir, profileId, credential, config, runtime } = params;
   const { provider } = credential;
+  const { reasonCode } = resolveAuthProfileEligibility({
+    cfg: config,
+    store: { version: 1, profiles: { [profileId]: credential } },
+    provider,
+    profileId,
+  });
+  if (reasonCode === "provider_mismatch" || reasonCode === "mode_mismatch") {
+    throw new Error(
+      `Auth profile ${profileId} conflicts with its global auth.profiles declaration (${reasonCode}). Nothing was saved. Use --profile-id with a distinct profile ID to keep the existing credential and configuration.`,
+    );
+  }
   // The secret belongs to this agent; do not advertise it to peer auth routing.
   await upsertAuthProfileWithLockOrThrow({ agentDir, profileId, credential });
   // Creating a stored order from config would freeze this agent against later global edits.
@@ -626,17 +641,16 @@ async function persistPastedAuthProfile(params: {
       `The auth profile was saved, but its order could not be updated because the auth store is busy. Wait a moment, then run ${recovery}.`,
     );
   }
-  const { order } = resolveExplicitAuthOrderSelection({
-    storeOrder: promotion.value.order,
-    configuredOrder: config.auth?.order,
-    providerKey: provider,
-    providerAuthKey: resolveProviderIdForAuth(provider, { config }),
+  const order = resolveAuthProfileOrder({
+    cfg: config,
+    store: ensureAuthProfileStoreForLocalUpdate(agentDir),
+    provider,
   });
   await refreshRunningGatewayAuthState(agentId, "login", runtime);
   runtime.log(`Auth profile: ${profileId} (${provider}/${credential.type})`);
-  if (order && !order.includes(profileId)) {
+  if (!order.includes(profileId)) {
     runtime.log(
-      `Warning: Auth profile ${profileId} was saved but excluded by the explicit auth order for ${provider}. To select it for agent ${agentId}, run ${recovery}. This sets a per-agent order override; include any other profiles you want to keep.`,
+      `Warning: Auth profile ${profileId} was saved but excluded by the configured auth selection for ${provider}. To select it for agent ${agentId}, run ${recovery}. This sets a per-agent order override; include any other profiles you want to keep.`,
     );
   }
 }

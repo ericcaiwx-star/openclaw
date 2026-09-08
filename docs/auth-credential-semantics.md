@@ -125,7 +125,7 @@ Do not write `type: "aws-sdk"` into the credential store; stored credentials are
 
 When a selected stored profile is removed, credential-scoped model discovery reports `selected_auth_profile_unavailable` before consulting dynamic model metadata. Restore the credential or select another configured profile; registering the model does not repair missing authentication. Config-only AWS SDK profiles remain valid without a stored credential. Chat admission and agent commands retain an explicit same-provider selection when its credential disappears so authentication can report recovery. Stale automatic selections and selections for incompatible providers are still cleared.
 
-`models auth paste-api-key` and `paste-token` write only the targeted agent's SQLite store. They never add global `auth.profiles` / `auth.order` metadata, so a secondary-agent paste cannot declare a profile the default agent cannot resolve. They also do not persist a stored per-agent order copied from the current global `auth.order`; later global-order edits still govern that agent unless the operator opts in with `models auth order set`.
+`models auth paste-api-key` and `paste-token` follow the existing credential storage owner: secondary-agent writes stay local, while main-agent writes use the shared store that other agents can inherit. Neither command adds global `auth.profiles` / `auth.order` metadata or copies global order into a stored per-agent override. Later global-order edits still govern an agent unless the operator opts in with `models auth order set`. A paste incompatible with an existing same-ID global profile declaration is rejected before saving; use a distinct `--profile-id` to preserve the existing credential and configuration.
 
 ## Explicit auth order filtering
 

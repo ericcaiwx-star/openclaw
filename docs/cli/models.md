@@ -373,7 +373,9 @@ Notes:
 - Anthropic: `setup-token`/`paste-token` are supported OpenClaw auth paths for `anthropic`, but OpenClaw prefers reusing the Claude CLI (`claude -p`) on the host when it is available.
 - `auth order get/set/clear` manages a per-agent auth profile order override for one provider in the SQLite auth store, separate from the `auth.order.<provider>` config key. `set` takes one or more profile ids in priority order. The stored order takes precedence over config for profile selection and CLI runtime routing; `clear` falls back to config/round-robin ordering. `paste-api-key` and `paste-token` do not create this override.
 
-If an explicit auth order excludes a pasted profile, paste saves the credential and prints a warning with the exact `models auth order set --provider <id> --agent <agentId> <profileId>` command to select it. This creates a per-agent override; include the other profile ids you want to retain, in priority order. Until you change the order, automatic model requests keep using the existing selection.
+Pastes into secondary agents stay local; main-agent pastes use the shared credential store that other agents can inherit. A paste that conflicts with an existing same-ID `auth.profiles` provider or mode is rejected before saving. Use a distinct `--profile-id` to preserve the existing credential and configuration.
+
+If configured auth selection (`auth.profiles` or an explicit auth order) excludes a pasted profile, paste saves the credential and prints a warning with the exact `models auth order set --provider <id> --agent <agentId> <profileId>` command to select it. This creates a per-agent override; include the other profile ids you want to retain, in priority order. Until you change the order, automatic model requests keep using the existing selection.
 
 ## Related
 

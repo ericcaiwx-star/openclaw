@@ -83,8 +83,9 @@ openclaw models auth paste-token --provider openrouter
 openclaw models auth paste-api-key --provider openrouter
 ```
 
-`paste-api-key` and `paste-token` store a portable profile in the targeted
-agent's store only. Credentials stay agent-scoped: pasting into
+`paste-api-key` and `paste-token` follow the existing storage owner:
+main-agent writes use the shared credential store that other agents can inherit;
+secondary-agent writes stay local. Pasting into
 `--agent <non-default>` does not copy or overwrite the default agent's key,
 and it does not write global `auth.profiles`/`auth.order` metadata, so a
 secondary-agent paste cannot declare a profile the default agent cannot

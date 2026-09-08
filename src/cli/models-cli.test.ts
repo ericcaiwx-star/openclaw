@@ -644,11 +644,12 @@ describe("models cli", () => {
     },
   );
 
-  it("describes paste auth commands as agent-scoped SQLite storage", () => {
+  it("describes paste auth commands with shared main and local secondary storage", () => {
     const auth = requireCommand(requireCommand(createProgram(), "models"), "auth");
     for (const name of ["paste-token", "paste-api-key"] as const) {
       const description = requireCommand(auth, name).description();
-      expect(description.toLowerCase()).toContain("sqlite");
+      expect(description.toLowerCase()).toContain("main: shared store");
+      expect(description.toLowerCase()).toContain("other agents: local store");
       expect(description.toLowerCase()).not.toContain("update config");
       expect(description.toLowerCase()).not.toContain("auth-profiles.json");
     }

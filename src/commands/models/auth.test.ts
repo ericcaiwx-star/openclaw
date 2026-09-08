@@ -3,6 +3,7 @@
 import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { AuthProfileCredential, AuthProfileStore } from "../../agents/auth-profiles/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { ProviderPlugin } from "../../plugins/types.js";
 import type { RuntimeEnv } from "../../runtime.js";
@@ -68,6 +69,7 @@ const mocks = vi.hoisted(() => ({
   validateAnthropicSetupToken: vi.fn<() => string | undefined>(() => undefined),
   promoteAuthProfileInOrder: vi.fn(),
   tryImportProviderCredential: vi.fn(),
+  ensureAuthProfileStoreForLocalUpdate: vi.fn(),
   callGateway: vi.fn(),
   isImplicitLocalGatewayTarget: vi.fn(() => Promise.resolve(true)),
   resolvePluginSetupProviderCore: vi.fn(),
@@ -128,6 +130,12 @@ vi.mock("../../plugins/provider-auth-helpers.js", () => ({
     },
   }),
 }));
+
+vi.mock("../../agents/auth-profiles/store-runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../agents/auth-profiles/store-runtime.js")>()),
+  ensureAuthProfileStoreForLocalUpdate: mocks.ensureAuthProfileStoreForLocalUpdate,
+}));
+
 vi.mock("@clack/prompts", () => ({
   cancel: mocks.clackCancel,
   confirm: mocks.clackConfirm,
@@ -414,7 +422,21 @@ describe("modelsAuthLoginCommand", () => {
     mocks.validateAnthropicSetupToken.mockReset();
     mocks.validateAnthropicSetupToken.mockReturnValue(undefined);
     mocks.upsertAuthProfileWithLock.mockReset();
-    mocks.upsertAuthProfileWithLock.mockResolvedValue({ version: 1, profiles: {} });
+    const pastedStore: AuthProfileStore = { version: 1, profiles: {} };
+    mocks.upsertAuthProfileWithLock.mockImplementation(
+      async ({
+        profileId,
+        credential,
+      }: {
+        profileId: string;
+        credential: AuthProfileCredential;
+      }) => {
+        pastedStore.profiles[profileId] = credential;
+        return pastedStore;
+      },
+    );
+    mocks.ensureAuthProfileStoreForLocalUpdate.mockReset();
+    mocks.ensureAuthProfileStoreForLocalUpdate.mockReturnValue(pastedStore);
     mocks.persistProviderAuthProfilesAfterLogin.mockReset();
     mocks.persistProviderAuthProfilesAfterLogin.mockImplementation(
       async (params: PersistProviderAuthCall) => params.profiles ?? [],
@@ -1886,13 +1908,41 @@ describe("modelsAuthLoginCommand", () => {
 
     await modelsAuthPasteApiKeyCommand({ provider: "openai", agent: "coder" }, runtime);
 
-    const warning = expect.stringContaining("saved but excluded by the explicit auth order");
+    const warning = expect.stringContaining("saved but excluded by the configured auth selection");
     if (warns) {
       expect(runtime.log).toHaveBeenCalledWith(warning);
     } else {
       expect(runtime.log).not.toHaveBeenCalledWith(warning);
     }
   });
+
+  it.each([
+    { provider: "openai", mode: "api_key" as const, rejects: true },
+    { provider: "deepseek", mode: "api_key" as const, rejects: true },
+    { provider: "deepseek", mode: "aws-sdk" as const, rejects: true },
+    { provider: "deepseek", mode: "token" as const, rejects: false },
+    { provider: "deepseek", mode: "oauth" as const, rejects: false },
+  ])(
+    "checks declared $provider/$mode compatibility before pasting a token",
+    async ({ provider, mode, rejects }) => {
+      const runtime = createRuntime();
+      useCoderAgentConfig();
+      currentConfig.auth = { profiles: { "deepseek:manual": { provider, mode } } };
+      mocks.clackPassword.mockResolvedValue("new-pasted-token");
+      const result = modelsAuthPasteTokenCommand({ provider: "deepseek", agent: "coder" }, runtime);
+      if (rejects) {
+        await expect(result).rejects.toThrow("Nothing was saved. Use --profile-id");
+        expect(mocks.upsertAuthProfileWithLock).not.toHaveBeenCalled();
+        expect(mocks.promoteAuthProfileInOrder).not.toHaveBeenCalled();
+        expect(mocks.callGateway).not.toHaveBeenCalled();
+      } else {
+        await result;
+        expect(mocks.upsertAuthProfileWithLock).toHaveBeenCalledOnce();
+        expect(runtime.log).not.toHaveBeenCalledWith(expect.stringContaining("excluded"));
+      }
+      expect(mocks.updateConfig).not.toHaveBeenCalled();
+    },
+  );
 
   it("does not claim paste is ready when updating the stored order fails", async () => {
     const runtime = createRuntime();
