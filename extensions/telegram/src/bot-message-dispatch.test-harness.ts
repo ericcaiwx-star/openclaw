@@ -112,10 +112,10 @@ const resolveDefaultModelForAgentHoisted = vi.hoisted(() =>
   vi.fn(() => ({ provider: "openai", model: "gpt-test" })),
 );
 const resolveHumanDelayConfigHoisted = vi.hoisted(() => vi.fn());
-const resolveAgentScopedOutboundMediaAccessHoisted = vi.hoisted(() =>
-  vi.fn((params: { agentId?: string }) => ({
-    localRoots: [`/tmp/.openclaw/workspace-${params.agentId ?? "default"}`],
-  })),
+const resolveTelegramOutboundMediaRootsHoisted = vi.hoisted(() =>
+  vi.fn((params: { agentId?: string }) => [
+    `/tmp/.openclaw/workspace-${params.agentId ?? "default"}`,
+  ]),
 );
 const resolveChunkModeHoisted = vi.hoisted(() => vi.fn(() => undefined));
 const resolveMarkdownTableModeHoisted = vi.hoisted(() => vi.fn(() => "preserve"));
@@ -159,7 +159,7 @@ const modelSupportsVision = modelSupportsVisionHoisted;
 const resolveAgentDir = resolveAgentDirHoisted;
 const resolveDefaultModelForAgent = resolveDefaultModelForAgentHoisted;
 export const resolveHumanDelayConfig = resolveHumanDelayConfigHoisted;
-export const resolveAgentScopedOutboundMediaAccess = resolveAgentScopedOutboundMediaAccessHoisted;
+export const resolveTelegramOutboundMediaRoots = resolveTelegramOutboundMediaRootsHoisted;
 const resolveChunkMode = resolveChunkModeHoisted;
 export const resolveMarkdownTableMode = resolveMarkdownTableModeHoisted;
 export const getGlobalHookRunner = getGlobalHookRunnerHoisted;
@@ -294,7 +294,7 @@ vi.mock("./send.js", async () => ({
 vi.mock("./bot-message-dispatch.runtime.js", () => ({
   generateTopicLabel: generateTopicLabelHoisted,
   getSessionEntry: getSessionEntryHoisted,
-  resolveAgentScopedOutboundMediaAccess: resolveAgentScopedOutboundMediaAccessHoisted,
+  resolveTelegramOutboundMediaRoots: resolveTelegramOutboundMediaRootsHoisted,
   resolveAutoTopicLabelConfig: resolveAutoTopicLabelConfigRuntime,
   resolveChunkMode: resolveChunkModeHoisted,
   resolveMarkdownTableMode: resolveMarkdownTableModeHoisted,
@@ -409,7 +409,7 @@ function resetTelegramDispatchTestState() {
   loadSessionStore.mockReset();
   resolveStorePath.mockReset();
   generateTopicLabel.mockReset();
-  resolveAgentScopedOutboundMediaAccess.mockClear();
+  resolveTelegramOutboundMediaRoots.mockClear();
   resolveChunkMode.mockClear();
   resolveMarkdownTableMode.mockClear();
   getGlobalHookRunner.mockReset();

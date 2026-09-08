@@ -17,7 +17,7 @@ import {
   readLatestAssistantTextByIdentity,
   recordOutboundMessageForPromptContext,
   resolveHumanDelayConfig,
-  resolveAgentScopedOutboundMediaAccess,
+  resolveTelegramOutboundMediaRoots,
   setupDraftStreams,
   telegramDepsForTest,
 } from "./bot-message-dispatch.test-harness.js";
@@ -100,9 +100,8 @@ describeTelegramDispatch("dispatchTelegramMessage delivery-basics", () => {
       telegramDeps: telegramDepsForTest,
     });
 
-    expect(resolveAgentScopedOutboundMediaAccess).toHaveBeenCalledWith(
+    expect(resolveTelegramOutboundMediaRoots).toHaveBeenCalledWith(
       expect.objectContaining({
-        messageProvider: "telegram",
         sessionKey: "agent:main:telegram:group:ops",
         groupId: "-100123",
         requesterSenderId: "attacker",

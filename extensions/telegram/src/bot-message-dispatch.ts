@@ -30,7 +30,7 @@ import {
 } from "./bot-message-dispatch.agent.runtime.js";
 import {
   generateTopicLabel,
-  resolveAgentScopedOutboundMediaAccess,
+  resolveTelegramOutboundMediaRoots,
   resolveAutoTopicLabelConfig,
   resolveChunkMode,
   resolveMarkdownTableMode,
@@ -331,16 +331,14 @@ export const dispatchTelegramMessage = async (
     draftReplyToMessageId: quote.draftReplyToMessageId,
     isSuperseded: isDispatchSuperseded,
     loadFreshSessionEntry,
-    mediaLocalRoots:
-      resolveAgentScopedOutboundMediaAccess({
-        cfg,
-        agentId: dispatchContext.route.agentId,
-        sessionKey: dispatchContext.ctxPayload.SessionKey,
-        messageProvider: "telegram",
-        accountId: dispatchContext.route.accountId,
-        groupId: dispatchContext.isGroup ? String(dispatchContext.chatId) : undefined,
-        requesterSenderId: dispatchContext.ctxPayload.SenderId,
-      }).localRoots ?? [],
+    mediaLocalRoots: resolveTelegramOutboundMediaRoots({
+      cfg,
+      agentId: dispatchContext.route.agentId,
+      sessionKey: dispatchContext.ctxPayload.SessionKey,
+      accountId: dispatchContext.route.accountId,
+      groupId: dispatchContext.isGroup ? String(dispatchContext.chatId) : undefined,
+      requesterSenderId: dispatchContext.ctxPayload.SenderId,
+    }),
     replyQuoteByMessageId: quote.replyQuoteByMessageId,
     replyQuoteEntities: quote.replyQuoteEntities,
     replyQuoteMessageId: quote.replyQuoteMessageId,

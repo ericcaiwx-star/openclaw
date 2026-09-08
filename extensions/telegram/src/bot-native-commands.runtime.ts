@@ -1,6 +1,6 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 // Telegram plugin module implements bot native commands behavior.
-import { resolveAgentScopedOutboundMediaAccess } from "openclaw/plugin-sdk/media-local-roots";
+import { resolveTelegramOutboundMediaRoots } from "./outbound-media-roots.js";
 
 export { ensureConfiguredBindingRouteReady } from "openclaw/plugin-sdk/conversation-runtime";
 export {
@@ -11,26 +11,20 @@ export { resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
 export { getSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 
 /**
- * Owns the Telegram-side inputs to the shared outbound media policy: pins the
- * provider, derives the group id, and forwards requester identity. Configured
- * `agents.defaults.mediaLocalRoots` apply only when sender/group host-read
- * policy and the canonical host-root expansion gate allow — the generic root
- * helper never grants them ambiently.
+ * Derives native-command routing and requester inputs for Telegram's shared
+ * delivery-root owner. Configured roots opt in to its stricter policy gate.
  */
 export function resolveNativeCommandOutboundMediaRoots(params: {
   cfg: OpenClawConfig;
   route: { agentId: string; sessionKey: string; accountId: string };
   auth: { isGroup: boolean; chatId: number; senderId?: string };
 }): readonly string[] {
-  return (
-    resolveAgentScopedOutboundMediaAccess({
-      cfg: params.cfg,
-      agentId: params.route.agentId,
-      sessionKey: params.route.sessionKey,
-      messageProvider: "telegram",
-      accountId: params.route.accountId,
-      groupId: params.auth.isGroup ? String(params.auth.chatId) : undefined,
-      requesterSenderId: params.auth.senderId,
-    }).localRoots ?? []
-  );
+  return resolveTelegramOutboundMediaRoots({
+    cfg: params.cfg,
+    agentId: params.route.agentId,
+    sessionKey: params.route.sessionKey,
+    accountId: params.route.accountId,
+    groupId: params.auth.isGroup ? String(params.auth.chatId) : undefined,
+    requesterSenderId: params.auth.senderId,
+  });
 }

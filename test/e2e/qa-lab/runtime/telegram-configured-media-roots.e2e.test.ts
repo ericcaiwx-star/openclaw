@@ -17,7 +17,7 @@ const CHAT_ID = -1002468135790;
 const ALLOWED_SENDER = 1357;
 const DENIED_SENDER = 2468;
 
-test("delivers configured-root media and visibly refuses the sender denied read", async () => {
+async function verifyTelegramMediaRoots(setting: "configured" | "absent" | "empty") {
   const calls: Array<{ method: string; text?: string; fileBytes?: number }> = [];
   const polls = new Set<ServerResponse>();
   const updates: unknown[] = [];
@@ -25,7 +25,7 @@ test("delivers configured-root media and visibly refuses the sender denied read"
   let updateId = 0;
   const succeed = (res: ServerResponse, result: unknown = true) =>
     writeJson(res, 200, { ok: true, result });
-  const receive = (senderId: number, file: string) => {
+  const receive = (senderId: number, file: string, native: boolean) => {
     const update = {
       update_id: ++updateId,
       message: {
@@ -33,7 +33,8 @@ test("delivers configured-root media and visibly refuses the sender denied read"
         date: Math.floor(Date.now() / 1000),
         chat,
         from: { id: senderId, is_bot: false, first_name: "QA Sender" },
-        text: `Reply exactly: MEDIA:${file}`,
+        text: `${native ? "/new " : ""}Reply exactly: MEDIA:${file}`,
+        ...(native ? { entities: [{ type: "bot_command", offset: 0, length: 4 }] } : {}),
       },
     };
     const poll = polls.values().next().value;
@@ -95,12 +96,17 @@ test("delivers configured-root media and visibly refuses the sender denied read"
         const mediaRoot = path.join(canonicalRoot, "trusted");
         await fs.mkdir(workspace);
         await fs.mkdir(mediaRoot);
-        const mediaFile = path.join(mediaRoot, "proof.txt");
+        const mediaFile = path.join(setting === "configured" ? mediaRoot : workspace, "proof.txt");
         await fs.writeFile(mediaFile, "configured-root proof\n");
         const mock = await startQaMockOpenAiServer();
         const gatewayOwner = createQaGatewayChild();
         const head = execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim();
-        const outputDir = path.join(repoRoot, ".artifacts/qa-e2e/configured-media-roots", head);
+        const outputDir = path.join(
+          repoRoot,
+          ".artifacts/qa-e2e/configured-media-roots",
+          head,
+          setting,
+        );
         try {
           const gateway = await gatewayOwner.start({
             repoRoot,
@@ -111,6 +117,8 @@ test("delivers configured-root media and visibly refuses the sender denied read"
               requiredPluginIds: ["telegram"],
               createGatewayConfig: () => ({
                 messages: { groupChat: { visibleReplies: "automatic" } },
+                // Disable text-command fallback so /new must use the native handler.
+                commands: { native: true, text: false, allowFrom: { telegram: ["*"] } },
                 channels: {
                   telegram: {
                     enabled: true,
@@ -118,7 +126,7 @@ test("delivers configured-root media and visibly refuses the sender denied read"
                     apiRoot,
                     groupPolicy: "open",
                     streaming: { mode: "off" },
-                    commands: { native: false },
+                    commands: { native: true },
                     groups: {
                       [String(CHAT_ID)]: {
                         requireMention: false,
@@ -136,7 +144,9 @@ test("delivers configured-root media and visibly refuses the sender denied read"
             },
             mutateConfig: (cfg) => {
               cfg.agents!.defaults!.workspace = workspace;
-              cfg.agents!.defaults!.mediaLocalRoots = [mediaRoot];
+              if (setting !== "absent") {
+                cfg.agents!.defaults!.mediaLocalRoots = setting === "empty" ? [] : [mediaRoot];
+              }
               cfg.tools = { ...cfg.tools, profile: "full" };
               cfg.bindings = [{ agentId: "qa", match: { channel: "telegram" } }];
               return cfg;
@@ -144,36 +154,78 @@ test("delivers configured-root media and visibly refuses the sender denied read"
           });
           expect(new URL(gateway.baseUrl).port).not.toBe("18789");
           await expect.poll(() => polls.size, { timeout: 30_000 }).toBeGreaterThan(0);
-          receive(ALLOWED_SENDER, mediaFile);
-          await expect
-            .poll(() => calls.filter((call) => call.fileBytes), { timeout: 45_000 })
-            .toEqual([{ method: "sendDocument", text: undefined, fileBytes: 22 }]);
-          const allowedCalls = calls.length;
-          receive(DENIED_SENDER, mediaFile);
-          await expect
-            .poll(
-              () =>
-                calls
-                  .slice(allowedCalls)
-                  .some(
-                    (call) =>
-                      call.method === "sendMessage" && call.text?.includes("Delivery failed"),
-                  ),
-              { timeout: 45_000 },
-            )
-            .toBe(true);
-          expect(calls.slice(allowedCalls).filter((call) => call.fileBytes)).toEqual([]);
+          const readSessionId = async () => {
+            const result = (await gateway.call("sessions.list", { agentId: "qa", limit: 20 })) as {
+              sessions: Array<{ key: string; sessionId?: string }>;
+            };
+            return result.sessions.find(
+              (session) => session.key === `agent:qa:telegram:group:${CHAT_ID}`,
+            )?.sessionId;
+          };
+          const effects = [];
+          for (const native of [false, true]) {
+            for (const senderId of [ALLOWED_SENDER, DENIED_SENDER]) {
+              const start = calls.length;
+              const denied = setting === "configured" && senderId === DENIED_SENDER;
+              const sessionBefore = native ? await readSessionId() : undefined;
+              if (native) {
+                expect(sessionBefore).toEqual(expect.any(String));
+              }
+              receive(senderId, mediaFile, native);
+              if (denied) {
+                await expect
+                  .poll(
+                    () =>
+                      calls
+                        .slice(start)
+                        .some(
+                          (call) =>
+                            call.method === "sendMessage" && call.text?.includes("Delivery failed"),
+                        ),
+                    { timeout: 45_000 },
+                  )
+                  .toBe(true);
+                expect(calls.slice(start).filter((call) => call.fileBytes)).toEqual([]);
+              } else {
+                await expect
+                  .poll(() => calls.slice(start).filter((call) => call.fileBytes), {
+                    timeout: 45_000,
+                  })
+                  .toEqual([{ method: "sendDocument", text: undefined, fileBytes: 22 }]);
+              }
+              let sessionAfter: string | undefined;
+              if (native) {
+                await expect
+                  .poll(
+                    async () => {
+                      sessionAfter = await readSessionId();
+                      return typeof sessionAfter === "string" && sessionAfter !== sessionBefore;
+                    },
+                    { timeout: 10_000 },
+                  )
+                  .toBe(true);
+              }
+              effects.push({
+                route: native ? "native-new" : "direct",
+                senderId,
+                denied,
+                ...(native ? { sessionBefore, sessionAfter } : {}),
+                uploads: calls.slice(start).filter((call) => call.fileBytes),
+                messages: calls.slice(start).filter((call) => call.method === "sendMessage"),
+              });
+            }
+          }
           const requests = (await (
             await fetch(`${mock.baseUrl}/debug/requests`)
           ).json()) as unknown[];
-          expect(requests.length).toBeGreaterThanOrEqual(2);
+          expect(requests.length).toBeGreaterThanOrEqual(4);
           const verdict = {
             head,
             lane: "mock-gateway",
             passed: true,
+            setting,
             providerRequests: requests.length,
-            allowed: calls.filter((call) => call.fileBytes),
-            denied: calls.slice(allowedCalls).filter((call) => call.method === "sendMessage"),
+            effects,
             liveTelegram: false,
           };
           await fs.mkdir(outputDir, { recursive: true });
@@ -193,4 +245,10 @@ test("delivers configured-root media and visibly refuses the sender denied read"
         }
       }),
   );
-}, 180_000);
+}
+
+test.each(["configured", "absent", "empty"] as const)(
+  "Telegram media roots: %s",
+  verifyTelegramMediaRoots,
+  180_000,
+);
