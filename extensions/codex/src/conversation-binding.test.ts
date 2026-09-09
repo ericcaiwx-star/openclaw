@@ -29,15 +29,6 @@ const sharedClientMocks = vi.hoisted(() => ({
   clearSharedCodexAppServerClientIfCurrent: vi.fn((_client: unknown) => false),
 }));
 
-const selectMediaAttachments = (async ({ attachments }) => ({
-  selected: attachments.filter((attachment) => !attachment.alreadyTranscribed),
-  droppedAttachmentIndexes: [],
-})) satisfies NonNullable<
-  Parameters<
-    typeof import("./conversation-audio.js").prepareCodexConversationAudioPrompt
-  >[0]["selectMediaAttachments"]
->;
-
 const publicBindingMocks = vi.hoisted(() => ({
   resolveByConversation: vi.fn((_conversation: unknown): { bindingId: string } | null => ({
     bindingId: "binding-1",
@@ -262,6 +253,39 @@ function boundConversationClaim(sessionFile: string, sessionKey?: string) {
       pluginBinding,
     },
   };
+}
+
+function mockCompletingBoundTurnClient() {
+  let notificationHandler: ((notification: unknown) => void) | undefined;
+  const turnStartParams: Record<string, unknown>[] = [];
+  sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue({
+    request: vi.fn(async (method: string, requestParams: Record<string, unknown>) => {
+      if (method !== "turn/start") {
+        throw new Error(`unexpected method: ${method}`);
+      }
+      turnStartParams.push(requestParams);
+      setImmediate(() =>
+        notificationHandler?.({
+          method: "turn/completed",
+          params: {
+            threadId: "thread-1",
+            turn: {
+              id: "turn-1",
+              status: "completed",
+              items: [{ type: "agentMessage", id: "item-1", text: "done" }],
+            },
+          },
+        }),
+      );
+      return { turn: { id: "turn-1" } };
+    }),
+    addNotificationHandler: vi.fn((handler: (notification: unknown) => void) => {
+      notificationHandler = handler;
+      return () => undefined;
+    }),
+    addRequestHandler: vi.fn(() => () => undefined),
+  });
+  return turnStartParams;
 }
 
 async function createSameThreadClientMigrationFixture(
@@ -4381,35 +4405,7 @@ describe("codex conversation binding", () => {
       threadId: "thread-1",
       cwd: tempDir,
     });
-    let notificationHandler: ((notification: unknown) => void) | undefined;
-    const turnStartParams: Record<string, unknown>[] = [];
-    sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue({
-      request: vi.fn(async (method: string, requestParams: Record<string, unknown>) => {
-        if (method !== "turn/start") {
-          throw new Error(`unexpected method: ${method}`);
-        }
-        turnStartParams.push(requestParams);
-        setImmediate(() =>
-          notificationHandler?.({
-            method: "turn/completed",
-            params: {
-              threadId: "thread-1",
-              turn: {
-                id: "turn-1",
-                status: "completed",
-                items: [{ type: "agentMessage", id: "item-1", text: "done" }],
-              },
-            },
-          }),
-        );
-        return { turn: { id: "turn-1" } };
-      }),
-      addNotificationHandler: vi.fn((handler: (notification: unknown) => void) => {
-        notificationHandler = handler;
-        return () => undefined;
-      }),
-      addRequestHandler: vi.fn(() => () => undefined),
-    });
+    const turnStartParams = mockCompletingBoundTurnClient();
     const runMediaUnderstandingFile = vi.fn(async () => ({ text: "ship the fix" }));
     const { event, ctx } = boundConversationClaim(
       sessionFile,
@@ -4435,7 +4431,6 @@ describe("codex conversation binding", () => {
       {
         config: { tools: { media: { audio: { enabled: true } } } },
         runMediaUnderstandingFile,
-        selectMediaAttachments,
         timeoutMs: 50,
       },
     );
@@ -4444,7 +4439,6 @@ describe("codex conversation binding", () => {
     expect(runMediaUnderstandingFile).toHaveBeenCalledWith(
       expect.objectContaining({
         capability: "audio",
-        kind: "audio",
         filePath: "/tmp/voice.ogg",
         workspaceDir: tempDir,
         mime: "audio/ogg",
@@ -4464,18 +4458,21 @@ describe("codex conversation binding", () => {
     ]);
   });
 
-  it("returns an explicit bound-turn failure when configured STT rejects", async () => {
+  it("keeps an explicit audio fallback in the bound turn when configured STT rejects", async () => {
     const sessionFile = path.join(tempDir, "voice-stt-failure.jsonl");
     await writeTestConversationBinding(sessionFile, {
       threadId: "thread-1",
       cwd: tempDir,
     });
+    const turnStartParams = mockCompletingBoundTurnClient();
     const { event, ctx } = boundConversationClaim(sessionFile);
 
     await expect(
       handleCodexConversationInboundClaim(
         {
           ...event,
+          content: "",
+          bodyForAgent: "",
           media: [{ path: "/tmp/voice.ogg", contentType: "audio/ogg", kind: "audio" }],
         },
         ctx,
@@ -4484,22 +4481,27 @@ describe("codex conversation binding", () => {
           runMediaUnderstandingFile: async () => {
             throw new Error("transcriber unavailable");
           },
-          selectMediaAttachments,
+          timeoutMs: 50,
         },
       ),
-    ).resolves.toEqual({
-      handled: true,
-      reply: { text: "Codex app-server turn failed: transcriber unavailable" },
-    });
-    expect(sharedClientMocks.getSharedCodexAppServerClient).not.toHaveBeenCalled();
+    ).resolves.toEqual({ handled: true, reply: { text: "done" } });
+    expect(turnStartParams[0]?.input).toEqual([
+      {
+        type: "text",
+        text: "[Audio transcription failed; the original attachment is included when supported.]",
+        text_elements: [],
+      },
+      { type: "localAudio", path: "/tmp/voice.ogg" },
+    ]);
   });
 
-  it("does not start an empty turn when audio transcription has no text", async () => {
+  it("keeps an explicit audio fallback in the bound turn when STT produces no text", async () => {
     const sessionFile = path.join(tempDir, "voice-empty-stt.jsonl");
     await writeTestConversationBinding(sessionFile, {
       threadId: "thread-1",
       cwd: tempDir,
     });
+    const turnStartParams = mockCompletingBoundTurnClient();
     const { event, ctx } = boundConversationClaim(sessionFile);
 
     await expect(
@@ -4514,14 +4516,18 @@ describe("codex conversation binding", () => {
         {
           config: { tools: { media: { audio: { enabled: true } } } },
           runMediaUnderstandingFile: async () => ({ text: undefined }),
-          selectMediaAttachments,
+          timeoutMs: 50,
         },
       ),
-    ).resolves.toEqual({
-      handled: true,
-      reply: { text: "Codex could not find usable input for this message." },
-    });
-    expect(sharedClientMocks.getSharedCodexAppServerClient).not.toHaveBeenCalled();
+    ).resolves.toEqual({ handled: true, reply: { text: "done" } });
+    expect(turnStartParams[0]?.input).toEqual([
+      {
+        type: "text",
+        text: "[Audio transcription produced no text; the original attachment is included when supported.]",
+        text_elements: [],
+      },
+      { type: "localAudio", path: "/tmp/silence.ogg" },
+    ]);
   });
 
   it("keeps network-proxy bound app-server turns on their thread permissions profile", async () => {

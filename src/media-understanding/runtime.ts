@@ -1,7 +1,7 @@
 // Public file-oriented media-understanding runtime for image, audio, video, and
 // structured extraction calls outside normal channel message handling.
 import path from "node:path";
-import { kindFromMime, mimeTypeFromFilePath, normalizeMimeType } from "@openclaw/media-core/mime";
+import { kindFromMime, mimeTypeFromFilePath } from "@openclaw/media-core/mime";
 import { hasHttpUrlPrefix } from "@openclaw/net-policy/url-protocol";
 import { resolveAgentDir, resolveDefaultAgentDir } from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/types.js";
@@ -32,7 +32,6 @@ import type {
   RunMediaUnderstandingFileResult,
   TranscribeAudioFileParams,
 } from "./runtime-types.js";
-export { selectAttachments } from "./attachments.js";
 export type {
   DescribePreparedImageWithModelParams,
   DescribeImageFileParams,
@@ -67,7 +66,6 @@ function buildFileContext(params: {
   filePath: string;
   mediaUrl?: string;
   mime?: string;
-  kind?: MediaUnderstandingCapability;
   capability?: MediaUnderstandingCapability;
   scopeContext?: {
     sessionKey?: string;
@@ -95,30 +93,14 @@ function buildFileContext(params: {
       ? `${params.capability}/*`
       : extensionMime) ??
     (remoteRef && params.capability ? `${params.capability}/*` : undefined);
-  const normalizedMediaType = normalizeMimeType(mediaType);
-  const mediaTypeIsGeneric =
-    !normalizedMediaType ||
-    normalizedMediaType === "application/octet-stream" ||
-    normalizedMediaType === "binary/octet-stream";
-  const explicitKind =
-    params.kind ??
-    (params.capability && !extensionKind && mediaTypeIsGeneric ? params.capability : undefined);
   if (remoteRef) {
     return {
-      media: [
-        { url: remoteRef, contentType: mediaType, ...(explicitKind ? { kind: explicitKind } : {}) },
-      ],
+      media: [{ url: remoteRef, contentType: mediaType }],
       ...scopeFields,
     };
   }
   return {
-    media: [
-      {
-        path: params.filePath,
-        contentType: mediaType,
-        ...(explicitKind ? { kind: explicitKind } : {}),
-      },
-    ],
+    media: [{ path: params.filePath, contentType: mediaType }],
     ...scopeFields,
   };
 }

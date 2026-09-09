@@ -172,20 +172,6 @@ describe("normalizeAttachments", () => {
     },
   );
 
-  it("selects an extensionless generic-MIME attachment by its authoritative audio kind", () => {
-    const attachments = normalizeAttachments({
-      media: [
-        {
-          path: "/tmp/staged-voice",
-          contentType: "application/octet-stream",
-          kind: "audio",
-        },
-      ],
-    });
-
-    expect(selectAttachments({ capability: "audio", attachments }).selected).toEqual(attachments);
-  });
-
   it.each([
     {
       name: "filename-only SVG",

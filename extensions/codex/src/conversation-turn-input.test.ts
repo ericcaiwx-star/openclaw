@@ -39,6 +39,99 @@ describe("codex conversation turn input", () => {
     ]);
   });
 
+  it("forwards only audio attachments selected for transcription fallback", () => {
+    expect(
+      buildCodexConversationTurnInput({
+        prompt: "[Audio transcription failed; the original attachment is included.]",
+        event: {
+          content: "",
+          channel: "telegram",
+          isGroup: true,
+          media: [
+            { path: "/tmp/first.ogg", contentType: "audio/ogg", kind: "audio" },
+            { path: "/tmp/second.ogg", contentType: "audio/ogg", kind: "audio" },
+          ],
+        },
+        audioInputAttachmentIndexes: [1],
+      }),
+    ).toEqual([
+      {
+        type: "text",
+        text: "[Audio transcription failed; the original attachment is included.]",
+        text_elements: [],
+      },
+      { type: "localAudio", path: "/tmp/second.ogg" },
+    ]);
+  });
+
+  it("forwards fallback audio in configured selection order", () => {
+    expect(
+      buildCodexConversationTurnInput({
+        prompt: "[Audio 1/2] last\n\n[Audio 2/2] first",
+        event: {
+          content: "",
+          channel: "telegram",
+          isGroup: true,
+          media: [
+            { path: "/tmp/first.ogg", contentType: "audio/ogg", kind: "audio" },
+            { path: "/tmp/last.ogg", contentType: "audio/ogg", kind: "audio" },
+          ],
+        },
+        audioInputAttachmentIndexes: [1, 0],
+      }),
+    ).toEqual([
+      { type: "text", text: "[Audio 1/2] last\n\n[Audio 2/2] first", text_elements: [] },
+      { type: "localAudio", path: "/tmp/last.ogg" },
+      { type: "localAudio", path: "/tmp/first.ogg" },
+    ]);
+  });
+
+  it("forwards selected data audio to the Codex protocol", () => {
+    expect(
+      buildCodexConversationTurnInput({
+        prompt: "[Audio transcription is unavailable.]",
+        event: {
+          content: "",
+          channel: "telegram",
+          isGroup: false,
+          media: [{ url: "data:audio/ogg;base64,T2dnUw==", kind: "audio" }],
+        },
+        audioInputAttachmentIndexes: [0],
+      }),
+    ).toEqual([
+      {
+        type: "text",
+        text: "[Audio transcription is unavailable.]",
+        text_elements: [],
+      },
+      { type: "audio", url: "data:audio/ogg;base64,T2dnUw==" },
+    ]);
+  });
+
+  it("uses data audio when the staged local format is unsupported by Codex", () => {
+    expect(
+      buildCodexConversationTurnInput({
+        prompt: "[Audio transcription failed.]",
+        event: {
+          content: "",
+          channel: "telegram",
+          isGroup: false,
+          media: [
+            {
+              path: "/tmp/voice.opus",
+              url: "data:audio/ogg;base64,T2dnUw==",
+              kind: "audio",
+            },
+          ],
+        },
+        audioInputAttachmentIndexes: [0],
+      }),
+    ).toEqual([
+      { type: "text", text: "[Audio transcription failed.]", text_elements: [] },
+      { type: "audio", url: "data:audio/ogg;base64,T2dnUw==" },
+    ]);
+  });
+
   it("does not classify authoritative video WebM as audio", () => {
     expect(
       hasCodexConversationTurnMedia({

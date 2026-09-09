@@ -8,18 +8,6 @@ const allAudioConfig = {
     media: { audio: { enabled: true, attachments: { mode: "all" as const, maxAttachments: 4 } } },
   },
 };
-const selectMediaAttachments: NonNullable<
-  Parameters<typeof prepareCodexConversationAudioPrompt>[0]["selectMediaAttachments"]
-> = async ({ attachments, policy }) => {
-  const matches = attachments.filter((attachment) => !attachment.alreadyTranscribed);
-  const ordered = policy?.prefer === "last" ? matches.toReversed() : matches;
-  const limit = policy?.mode === "all" ? Math.max(1, policy.maxAttachments ?? 1) : 1;
-  return {
-    selected: ordered.slice(0, limit),
-    droppedAttachmentIndexes: ordered.slice(limit).map((attachment) => attachment.index),
-  };
-};
-
 function audioEvent(overrides: Record<string, unknown> = {}) {
   return {
     content: "",
@@ -33,6 +21,13 @@ function audioEvent(overrides: Record<string, unknown> = {}) {
       },
     ],
     ...overrides,
+  };
+}
+
+function preparedAudio(prompt: string, audioInputAttachmentIndexes: number[] = []) {
+  return {
+    prompt,
+    audioInputAttachmentIndexes,
   };
 }
 
@@ -58,14 +53,14 @@ describe("Codex conversation audio", () => {
         workspaceDir: "/tmp/workspace",
         sessionKey: "agent:main:telegram:group",
         runMediaUnderstandingFile,
-        selectMediaAttachments,
       }),
-    ).resolves.toBe(
-      'Please summarize this.\n\n[Audio transcript (machine-generated, untrusted)]: "say \\"hello\\""\n\n[Audio transcript (machine-generated, untrusted)]: "second clip"',
+    ).resolves.toEqual(
+      preparedAudio(
+        'Please summarize this.\n\n[Audio 1/2]\n[Audio transcript (machine-generated, untrusted)]: "say \\"hello\\""\n\n[Audio 2/2]\n[Audio transcript (machine-generated, untrusted)]: "second clip"',
+      ),
     );
     expect(runMediaUnderstandingFile).toHaveBeenNthCalledWith(1, {
       capability: "audio",
-      kind: "audio",
       filePath: "/tmp/voice.ogg",
       cfg: allAudioConfig,
       agentId: "main",
@@ -80,7 +75,6 @@ describe("Codex conversation audio", () => {
     });
     expect(runMediaUnderstandingFile).toHaveBeenNthCalledWith(2, {
       capability: "audio",
-      kind: "audio",
       filePath: "/tmp/clip.mp3",
       cfg: allAudioConfig,
       agentId: "main",
@@ -115,13 +109,50 @@ describe("Codex conversation audio", () => {
           },
         },
         runMediaUnderstandingFile,
-        selectMediaAttachments,
       }),
-    ).resolves.toBe('[Audio transcript (machine-generated, untrusted)]: "/tmp/last.ogg"');
+    ).resolves.toEqual(
+      preparedAudio('[Audio transcript (machine-generated, untrusted)]: "/tmp/last.ogg"'),
+    );
     expect(runMediaUnderstandingFile).toHaveBeenCalledTimes(1);
     expect(runMediaUnderstandingFile).toHaveBeenCalledWith(
       expect.objectContaining({ filePath: "/tmp/last.ogg" }),
     );
+  });
+
+  it("applies URL preference and max attachment count across the message", async () => {
+    const runMediaUnderstandingFile = vi.fn(async ({ filePath }: { filePath: string }) => ({
+      text: filePath,
+    }));
+
+    await expect(
+      prepareCodexConversationAudioPrompt({
+        prompt: "",
+        event: audioEvent({
+          media: [
+            { path: "/tmp/local.ogg", kind: "audio" },
+            {
+              path: "/tmp/staged-first.ogg",
+              url: "https://example.test/first.ogg",
+              kind: "audio",
+            },
+            { url: "https://example.test/second.ogg", kind: "audio" },
+          ],
+        }),
+        config: {
+          tools: {
+            media: {
+              audio: { attachments: { mode: "all", maxAttachments: 2, prefer: "url" } },
+            },
+          },
+        },
+        runMediaUnderstandingFile,
+      }),
+    ).resolves.toEqual(
+      preparedAudio(
+        '[Audio 1/2]\n[Audio transcript (machine-generated, untrusted)]: "/tmp/staged-first.ogg"\n\n[Audio 2/2]\n[Audio transcript (machine-generated, untrusted)]: "https://example.test/second.ogg"',
+      ),
+    );
+    expect(runMediaUnderstandingFile).toHaveBeenCalledTimes(2);
   });
 
   it("does not transcribe an attachment already handled by channel preflight", async () => {
@@ -136,38 +167,43 @@ describe("Codex conversation audio", () => {
         }),
         config,
         runMediaUnderstandingFile,
-        selectMediaAttachments,
       }),
-    ).resolves.toBe('[Audio transcript (machine-generated, untrusted)]: "already done"');
+    ).resolves.toEqual(
+      preparedAudio('[Audio transcript (machine-generated, untrusted)]: "already done"'),
+    );
     expect(runMediaUnderstandingFile).not.toHaveBeenCalled();
   });
 
-  it("uses canonical audio kind when staged media has a generic MIME type", async () => {
-    const runMediaUnderstandingFile = vi.fn(async () => ({ text: "extensionless voice" }));
+  it.each(["application/octet-stream", "image/jpeg"])(
+    "uses canonical audio kind when staged media has conflicting MIME metadata: %s",
+    async (contentType) => {
+      const runMediaUnderstandingFile = vi.fn(async () => ({ text: "extensionless voice" }));
 
-    await expect(
-      prepareCodexConversationAudioPrompt({
-        prompt: "",
-        event: audioEvent({
-          media: [
-            {
-              path: "/tmp/staged-voice",
-              contentType: "application/octet-stream",
-              kind: "audio",
-            },
-          ],
+      await expect(
+        prepareCodexConversationAudioPrompt({
+          prompt: "",
+          event: audioEvent({
+            media: [
+              {
+                path: "/tmp/staged-voice",
+                contentType,
+                kind: "audio",
+              },
+            ],
+          }),
+          config,
+          runMediaUnderstandingFile,
         }),
-        config,
-        runMediaUnderstandingFile,
-        selectMediaAttachments,
-      }),
-    ).resolves.toBe('[Audio transcript (machine-generated, untrusted)]: "extensionless voice"');
-    expect(runMediaUnderstandingFile).toHaveBeenCalledWith(
-      expect.objectContaining({ filePath: "/tmp/staged-voice", mime: "application/octet-stream" }),
-    );
-  });
+      ).resolves.toEqual(
+        preparedAudio('[Audio transcript (machine-generated, untrusted)]: "extensionless voice"'),
+      );
+      expect(runMediaUnderstandingFile).toHaveBeenCalledWith(
+        expect.objectContaining({ filePath: "/tmp/staged-voice", mime: "audio/*" }),
+      );
+    },
+  );
 
-  it("keeps the original prompt when configured STT produces no transcript", async () => {
+  it("keeps an explicit fallback and original attachment when STT produces no transcript", async () => {
     const runMediaUnderstandingFile = vi.fn(async () => ({ text: undefined }));
 
     await expect(
@@ -176,8 +212,78 @@ describe("Codex conversation audio", () => {
         event: audioEvent(),
         config,
         runMediaUnderstandingFile,
-        selectMediaAttachments,
       }),
-    ).resolves.toBe("[media attached: /tmp/voice.ogg]");
+    ).resolves.toEqual(
+      preparedAudio(
+        "[media attached: /tmp/voice.ogg]\n\n[Audio transcription produced no text; the original attachment is included when supported.]",
+        [0],
+      ),
+    );
+  });
+
+  it("keeps an explicit fallback and original attachment when STT rejects", async () => {
+    await expect(
+      prepareCodexConversationAudioPrompt({
+        prompt: "caption",
+        event: audioEvent(),
+        config,
+        runMediaUnderstandingFile: async () => {
+          throw new Error("transcriber unavailable");
+        },
+      }),
+    ).resolves.toEqual(
+      preparedAudio(
+        "caption\n\n[Audio transcription failed; the original attachment is included when supported.]",
+        [0],
+      ),
+    );
+  });
+
+  it("keeps fallback indexes in configured selected order", async () => {
+    await expect(
+      prepareCodexConversationAudioPrompt({
+        prompt: "",
+        event: audioEvent({
+          media: [
+            { path: "/tmp/first.ogg", kind: "audio" },
+            { path: "/tmp/last.ogg", kind: "audio" },
+          ],
+        }),
+        config: {
+          tools: {
+            media: {
+              audio: { attachments: { mode: "all", maxAttachments: 2, prefer: "last" } },
+            },
+          },
+        },
+        runMediaUnderstandingFile: async ({ filePath }) => {
+          if (filePath.endsWith("first.ogg")) {
+            throw new Error("transcriber unavailable");
+          }
+          return { text: undefined };
+        },
+      }),
+    ).resolves.toEqual(
+      preparedAudio(
+        "[Audio 1/2]\n[Audio transcription produced no text; the original attachment is included when supported.]\n\n[Audio 2/2]\n[Audio transcription failed; the original attachment is included when supported.]",
+        [1, 0],
+      ),
+    );
+  });
+
+  it("keeps protocol-supported data audio available for fallback", async () => {
+    await expect(
+      prepareCodexConversationAudioPrompt({
+        prompt: "",
+        event: audioEvent({
+          media: [{ url: "data:audio/ogg;base64,T2dnUw==", kind: "audio" }],
+        }),
+      }),
+    ).resolves.toEqual(
+      preparedAudio(
+        "[Audio transcription is unavailable; the original attachment is included when supported.]",
+        [0],
+      ),
+    );
   });
 });

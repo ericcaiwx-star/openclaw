@@ -340,7 +340,6 @@ describe("plugin runtime command execution", () => {
       assert: (runtime: ReturnType<typeof createPluginRuntime>) => {
         expectFunctionKeys(runtime.mediaUnderstanding as Record<string, unknown>, [
           "resolveAudioInputBudget",
-          "selectAttachments",
           "runFile",
           "describeImageFile",
           "describeImageFileWithModel",

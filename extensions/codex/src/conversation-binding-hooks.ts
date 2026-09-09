@@ -36,9 +36,6 @@ type CodexConversationRunOptions = {
   runMediaUnderstandingFile?: Parameters<
     typeof prepareCodexConversationAudioPrompt
   >[0]["runMediaUnderstandingFile"];
-  selectMediaAttachments?: Parameters<
-    typeof prepareCodexConversationAudioPrompt
-  >[0]["selectMediaAttachments"];
 };
 
 const getNodeConversationState = defineCodexBuildState(
@@ -156,7 +153,7 @@ export async function handleCodexConversationInboundClaim(
           },
         };
       }
-      const preparedPrompt = await prepareCodexConversationAudioPrompt({
+      const preparedAudio = await prepareCodexConversationAudioPrompt({
         prompt,
         event,
         config: options.config,
@@ -165,16 +162,22 @@ export async function handleCodexConversationInboundClaim(
         workspaceDir: data.workspaceDir,
         sessionKey,
         runMediaUnderstandingFile: options.runMediaUnderstandingFile,
-        selectMediaAttachments: options.selectMediaAttachments,
       });
-      if (!hasUsableCodexConversationTurnInput({ prompt: preparedPrompt, event })) {
+      if (
+        !hasUsableCodexConversationTurnInput({
+          prompt: preparedAudio.prompt,
+          event,
+          audioInputAttachmentIndexes: preparedAudio.audioInputAttachmentIndexes,
+        })
+      ) {
         return { reply: { text: "Codex could not find usable input for this message." } };
       }
       return await runBoundTurnWithMissingThreadRecovery({
         bindingStore: options.bindingStore,
         data,
-        prompt: preparedPrompt,
+        prompt: preparedAudio.prompt,
         event,
+        audioInputAttachmentIndexes: preparedAudio.audioInputAttachmentIndexes,
         config: options.config,
         sessionKey,
         // Source ownership, not the destination channel, controls ephemeral execution.
