@@ -13,10 +13,12 @@ import { withCodexConversationThreadActivity } from "./app-server/thread-ownersh
 import { defineCodexBuildState } from "./build-state.js";
 import { canMutateCodexHost, CODEX_NATIVE_EXECUTION_AUTH_ERROR } from "./command-authorization.js";
 import { formatCodexDisplayText } from "./command-formatters.js";
+import { prepareCodexConversationAudioPrompt } from "./conversation-audio.js";
 import {
   readCodexConversationBindingData,
   readCodexConversationBindingDataRecord,
 } from "./conversation-binding-data.js";
+import { hasCodexConversationTurnMedia } from "./conversation-turn-input.js";
 import { isIncognitoSessionKey } from "./incognito-session.js";
 import type { resumeCodexCliSessionOnNode } from "./node-cli-sessions.js";
 
@@ -28,6 +30,9 @@ type CodexConversationRunOptions = {
   resumeCodexCliSessionOnNode?: (
     params: Omit<Parameters<typeof resumeCodexCliSessionOnNode>[0], "runtime">,
   ) => ReturnType<typeof resumeCodexCliSessionOnNode>;
+  runMediaUnderstandingFile?: Parameters<
+    typeof prepareCodexConversationAudioPrompt
+  >[0]["runMediaUnderstandingFile"];
 };
 
 const getNodeConversationState = defineCodexBuildState(
@@ -49,7 +54,10 @@ export async function handleCodexConversationInboundClaim(
     return { handled: true };
   }
   const prompt = event.bodyForAgent?.trim() || event.content?.trim() || "";
-  if (!prompt) {
+  if (
+    !prompt &&
+    (data.kind === "codex-cli-node-session" || !hasCodexConversationTurnMedia(event))
+  ) {
     return { handled: true };
   }
   if (!canMutateCodexHost(event)) {
@@ -142,10 +150,20 @@ export async function handleCodexConversationInboundClaim(
           },
         };
       }
+      const preparedPrompt = await prepareCodexConversationAudioPrompt({
+        prompt,
+        event,
+        config: options.config,
+        agentId: data.source?.agentId ?? data.agentId,
+        agentDir: data.agentDir,
+        workspaceDir: data.workspaceDir,
+        sessionKey,
+        runMediaUnderstandingFile: options.runMediaUnderstandingFile,
+      });
       return await runBoundTurnWithMissingThreadRecovery({
         bindingStore: options.bindingStore,
         data,
-        prompt,
+        prompt: preparedPrompt,
         event,
         config: options.config,
         sessionKey,

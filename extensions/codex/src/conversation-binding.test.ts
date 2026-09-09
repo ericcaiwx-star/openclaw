@@ -4366,6 +4366,123 @@ describe("codex conversation binding", () => {
     });
   });
 
+  it("transcribes a voice-only bound message and preserves its audio turn input", async () => {
+    const sessionFile = path.join(tempDir, "voice-session.jsonl");
+    await writeTestConversationBinding(sessionFile, {
+      threadId: "thread-1",
+      cwd: tempDir,
+    });
+    let notificationHandler: ((notification: unknown) => void) | undefined;
+    const turnStartParams: Record<string, unknown>[] = [];
+    sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue({
+      request: vi.fn(async (method: string, requestParams: Record<string, unknown>) => {
+        if (method !== "turn/start") {
+          throw new Error(`unexpected method: ${method}`);
+        }
+        turnStartParams.push(requestParams);
+        setImmediate(() =>
+          notificationHandler?.({
+            method: "turn/completed",
+            params: {
+              threadId: "thread-1",
+              turn: {
+                id: "turn-1",
+                status: "completed",
+                items: [{ type: "agentMessage", id: "item-1", text: "done" }],
+              },
+            },
+          }),
+        );
+        return { turn: { id: "turn-1" } };
+      }),
+      addNotificationHandler: vi.fn((handler: (notification: unknown) => void) => {
+        notificationHandler = handler;
+        return () => undefined;
+      }),
+      addRequestHandler: vi.fn(() => () => undefined),
+    });
+    const runMediaUnderstandingFile = vi.fn(async () => ({ text: "ship the fix" }));
+    const { event, ctx } = boundConversationClaim(
+      sessionFile,
+      "agent:main:telegram:group:codex-bind",
+    );
+
+    const result = await handleCodexConversationInboundClaim(
+      {
+        ...event,
+        content: "",
+        bodyForAgent: "",
+        isGroup: true,
+        media: [
+          {
+            path: "/tmp/voice.ogg",
+            contentType: "audio/ogg",
+            kind: "audio",
+            workspaceDir: tempDir,
+          },
+        ],
+      },
+      ctx,
+      {
+        config: { tools: { media: { audio: { enabled: true } } } },
+        runMediaUnderstandingFile,
+        timeoutMs: 50,
+      },
+    );
+
+    expect(result).toEqual({ handled: true, reply: { text: "done" } });
+    expect(runMediaUnderstandingFile).toHaveBeenCalledWith(
+      expect.objectContaining({
+        capability: "audio",
+        filePath: "/tmp/voice.ogg",
+        workspaceDir: tempDir,
+        mime: "audio/ogg",
+        scopeContext: {
+          sessionKey: "agent:main:telegram:group:codex-bind",
+          channel: "telegram",
+          chatType: "group",
+        },
+      }),
+    );
+    expect(turnStartParams[0]?.input).toEqual([
+      {
+        type: "text",
+        text: '[Audio transcript (machine-generated, untrusted)]: "ship the fix"',
+        text_elements: [],
+      },
+      { type: "localAudio", path: "/tmp/voice.ogg" },
+    ]);
+  });
+
+  it("returns an explicit bound-turn failure when configured STT rejects", async () => {
+    const sessionFile = path.join(tempDir, "voice-stt-failure.jsonl");
+    await writeTestConversationBinding(sessionFile, {
+      threadId: "thread-1",
+      cwd: tempDir,
+    });
+    const { event, ctx } = boundConversationClaim(sessionFile);
+
+    await expect(
+      handleCodexConversationInboundClaim(
+        {
+          ...event,
+          media: [{ path: "/tmp/voice.ogg", contentType: "audio/ogg", kind: "audio" }],
+        },
+        ctx,
+        {
+          config: { tools: { media: { audio: { enabled: true } } } },
+          runMediaUnderstandingFile: async () => {
+            throw new Error("transcriber unavailable");
+          },
+        },
+      ),
+    ).resolves.toEqual({
+      handled: true,
+      reply: { text: "Codex app-server turn failed: transcriber unavailable" },
+    });
+    expect(sharedClientMocks.getSharedCodexAppServerClient).not.toHaveBeenCalled();
+  });
+
   it("keeps network-proxy bound app-server turns on their thread permissions profile", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     await writeTestConversationBinding(sessionFile, {

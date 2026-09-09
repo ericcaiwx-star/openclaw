@@ -9,9 +9,33 @@ type InboundMedia = {
   path?: string;
   url?: string;
   mimeType?: string;
+  kind?: string;
+  transcribed?: boolean;
+  workspaceDir?: string;
 };
 
 const IMAGE_EXTENSIONS = new Set([".avif", ".gif", ".jpeg", ".jpg", ".png", ".webp"]);
+const AUDIO_EXTENSIONS = new Set([
+  ".aac",
+  ".alac",
+  ".flac",
+  ".m4a",
+  ".mp3",
+  ".oga",
+  ".ogg",
+  ".opus",
+  ".wav",
+  ".webm",
+  ".wma",
+]);
+const CODEX_LOCAL_AUDIO_EXTENSIONS = new Set([".m4a", ".mp3", ".ogg", ".wav", ".webm"]);
+
+export type CodexConversationAudioMedia = {
+  filePath: string;
+  mediaUrl?: string;
+  mime?: string;
+  workspaceDir?: string;
+};
 
 export function buildCodexConversationTurnInput(params: {
   prompt: string;
@@ -20,12 +44,54 @@ export function buildCodexConversationTurnInput(params: {
   return [
     { type: "text", text: params.prompt, text_elements: [] },
     ...extractInboundMedia(params.event)
-      .map(toCodexImageInput)
+      .map(toCodexMediaInput)
       .filter((item): item is CodexUserInput => item !== undefined),
   ];
 }
 
+export function hasCodexConversationTurnMedia(event: PluginHookInboundClaimEvent): boolean {
+  return extractInboundMedia(event).some((media) => isImageMedia(media) || isAudioMedia(media));
+}
+
+export function listCodexConversationAudioForTranscription(
+  event: PluginHookInboundClaimEvent,
+): CodexConversationAudioMedia[] {
+  const media = extractInboundMedia(event);
+  const audioCount = media.filter(isAudioMedia).length;
+  const transcriptCoversSingleAudio = audioCount === 1 && Boolean(event.transcript?.trim());
+  return media.flatMap((entry) => {
+    if (!isAudioMedia(entry) || entry.transcribed === true || transcriptCoversSingleAudio) {
+      return [];
+    }
+    const localPath = entry.path ?? readLocalMediaPath(entry.url);
+    const normalizedLocalPath = localPath ? normalizeFileUrl(localPath) : undefined;
+    const remoteMediaUrl = entry.url && /^https?:\/\//iu.test(entry.url) ? entry.url : undefined;
+    const filePath = normalizedLocalPath ?? remoteMediaUrl;
+    if (!filePath) {
+      return [];
+    }
+    return [
+      {
+        filePath,
+        ...(!normalizedLocalPath && remoteMediaUrl ? { mediaUrl: remoteMediaUrl } : {}),
+        ...(entry.mimeType ? { mime: entry.mimeType } : {}),
+        ...(entry.workspaceDir ? { workspaceDir: entry.workspaceDir } : {}),
+      },
+    ];
+  });
+}
+
 function extractInboundMedia(event: PluginHookInboundClaimEvent): InboundMedia[] {
+  if (event.media && event.media.length > 0) {
+    return event.media.map((media) => ({
+      path: media.path,
+      url: media.url,
+      mimeType: media.contentType,
+      kind: media.kind,
+      transcribed: media.transcribed,
+      workspaceDir: media.workspaceDir,
+    }));
+  }
   const metadata = event.metadata ?? {};
   // OpenClaw channels expose either local staged files or remote URLs. Keep
   // them separate so Codex can receive the cheaper localImage input when a file
@@ -51,20 +117,32 @@ function extractInboundMedia(event: PluginHookInboundClaimEvent): InboundMedia[]
   return media;
 }
 
-function toCodexImageInput(media: InboundMedia): CodexUserInput | undefined {
-  if (!isImageMedia(media)) {
-    return undefined;
-  }
+function toCodexMediaInput(media: InboundMedia): CodexUserInput | undefined {
   const localPath = media.path ?? readLocalMediaPath(media.url);
   if (localPath) {
     const normalized = normalizeFileUrl(localPath);
-    return normalized ? { type: "localImage", path: normalized } : undefined;
+    if (!normalized) {
+      return undefined;
+    }
+    if (isImageMedia(media)) {
+      return { type: "localImage", path: normalized };
+    }
+    if (isAudioMedia(media) && isCodexLocalAudioPath(normalized)) {
+      return { type: "localAudio", path: normalized };
+    }
+    return undefined;
   }
-  return media.url ? { type: "image", url: media.url } : undefined;
+  if (isImageMedia(media)) {
+    return media.url ? { type: "image", url: media.url } : undefined;
+  }
+  if (isAudioMedia(media) && media.url?.toLowerCase().startsWith("data:audio/")) {
+    return { type: "audio", url: media.url };
+  }
+  return undefined;
 }
 
 function isImageMedia(media: InboundMedia): boolean {
-  if (media.mimeType?.toLowerCase().startsWith("image/")) {
+  if (media.kind?.toLowerCase() === "image" || media.mimeType?.toLowerCase().startsWith("image/")) {
     return true;
   }
   const candidate = media.path ?? media.url;
@@ -72,6 +150,26 @@ function isImageMedia(media: InboundMedia): boolean {
     return false;
   }
   return IMAGE_EXTENSIONS.has(path.extname(candidate.split(/[?#]/, 1)[0] ?? "").toLowerCase());
+}
+
+function isAudioMedia(media: InboundMedia): boolean {
+  const mimeType = media.mimeType?.toLowerCase();
+  if (
+    media.kind?.toLowerCase() === "audio" ||
+    mimeType === "audio" ||
+    mimeType?.startsWith("audio/")
+  ) {
+    return true;
+  }
+  const candidate = media.path ?? media.url;
+  if (!candidate) {
+    return false;
+  }
+  return AUDIO_EXTENSIONS.has(path.extname(candidate.split(/[?#]/, 1)[0] ?? "").toLowerCase());
+}
+
+function isCodexLocalAudioPath(value: string): boolean {
+  return CODEX_LOCAL_AUDIO_EXTENSIONS.has(path.extname(value).toLowerCase());
 }
 
 function normalizeFileUrl(value: string): string | undefined {

@@ -9,6 +9,54 @@ const localFileCases = ["file", "FILE", "FiLe"].flatMap((scheme) =>
 );
 
 describe("codex conversation turn input", () => {
+  it("forwards canonical inbound audio attachments to Codex app-server", () => {
+    expect(
+      buildCodexConversationTurnInput({
+        prompt: "Please answer the attached voice note.",
+        event: {
+          content: "Please answer the attached voice note.",
+          channel: "telegram",
+          isGroup: true,
+          media: [
+            {
+              path: "/tmp/voice.ogg",
+              url: "/tmp/voice.ogg",
+              contentType: "audio/ogg",
+              kind: "audio",
+            },
+          ],
+        },
+      }),
+    ).toEqual([
+      {
+        type: "text",
+        text: "Please answer the attached voice note.",
+        text_elements: [],
+      },
+      { type: "localAudio", path: "/tmp/voice.ogg" },
+    ]);
+  });
+
+  it("does not forward local audio formats unsupported by Codex app-server", () => {
+    expect(
+      buildCodexConversationTurnInput({
+        prompt: '[Audio transcript (machine-generated, untrusted)]: "decoded"',
+        event: {
+          content: "",
+          channel: "telegram",
+          isGroup: false,
+          media: [{ path: "/tmp/voice.flac", contentType: "audio/flac", kind: "audio" }],
+        },
+      }),
+    ).toEqual([
+      {
+        type: "text",
+        text: '[Audio transcript (machine-generated, untrusted)]: "decoded"',
+        text_elements: [],
+      },
+    ]);
+  });
+
   it("forwards inbound image attachments to Codex app-server", () => {
     expect(
       buildCodexConversationTurnInput({
