@@ -3,6 +3,22 @@ import { describe, expect, it, vi } from "vitest";
 import { prepareCodexConversationAudioPrompt } from "./conversation-audio.js";
 
 const config = { tools: { media: { audio: { enabled: true } } } };
+const allAudioConfig = {
+  tools: {
+    media: { audio: { enabled: true, attachments: { mode: "all" as const, maxAttachments: 4 } } },
+  },
+};
+const selectMediaAttachments: NonNullable<
+  Parameters<typeof prepareCodexConversationAudioPrompt>[0]["selectMediaAttachments"]
+> = async ({ attachments, policy }) => {
+  const matches = attachments.filter((attachment) => !attachment.alreadyTranscribed);
+  const ordered = policy?.prefer === "last" ? matches.toReversed() : matches;
+  const limit = policy?.mode === "all" ? Math.max(1, policy.maxAttachments ?? 1) : 1;
+  return {
+    selected: ordered.slice(0, limit),
+    droppedAttachmentIndexes: ordered.slice(limit).map((attachment) => attachment.index),
+  };
+};
 
 function audioEvent(overrides: Record<string, unknown> = {}) {
   return {
@@ -36,20 +52,22 @@ describe("Codex conversation audio", () => {
             { path: "/tmp/clip.mp3", contentType: "audio/mpeg", kind: "audio" },
           ],
         }),
-        config,
+        config: allAudioConfig,
         agentId: "main",
         agentDir: "/tmp/agent",
         workspaceDir: "/tmp/workspace",
         sessionKey: "agent:main:telegram:group",
         runMediaUnderstandingFile,
+        selectMediaAttachments,
       }),
     ).resolves.toBe(
       'Please summarize this.\n\n[Audio transcript (machine-generated, untrusted)]: "say \\"hello\\""\n\n[Audio transcript (machine-generated, untrusted)]: "second clip"',
     );
     expect(runMediaUnderstandingFile).toHaveBeenNthCalledWith(1, {
       capability: "audio",
+      kind: "audio",
       filePath: "/tmp/voice.ogg",
-      cfg: config,
+      cfg: allAudioConfig,
       agentId: "main",
       agentDir: "/tmp/agent",
       workspaceDir: "/tmp/workspace",
@@ -62,8 +80,9 @@ describe("Codex conversation audio", () => {
     });
     expect(runMediaUnderstandingFile).toHaveBeenNthCalledWith(2, {
       capability: "audio",
+      kind: "audio",
       filePath: "/tmp/clip.mp3",
-      cfg: config,
+      cfg: allAudioConfig,
       agentId: "main",
       agentDir: "/tmp/agent",
       workspaceDir: "/tmp/workspace",
@@ -74,6 +93,35 @@ describe("Codex conversation audio", () => {
         chatType: "group",
       },
     });
+  });
+
+  it("applies configured attachment ordering before invoking the file runtime", async () => {
+    const runMediaUnderstandingFile = vi.fn(async ({ filePath }: { filePath: string }) => ({
+      text: filePath,
+    }));
+
+    await expect(
+      prepareCodexConversationAudioPrompt({
+        prompt: "",
+        event: audioEvent({
+          media: [
+            { path: "/tmp/first.ogg", kind: "audio" },
+            { path: "/tmp/last.ogg", kind: "audio" },
+          ],
+        }),
+        config: {
+          tools: {
+            media: { audio: { attachments: { mode: "first", prefer: "last" } } },
+          },
+        },
+        runMediaUnderstandingFile,
+        selectMediaAttachments,
+      }),
+    ).resolves.toBe('[Audio transcript (machine-generated, untrusted)]: "/tmp/last.ogg"');
+    expect(runMediaUnderstandingFile).toHaveBeenCalledTimes(1);
+    expect(runMediaUnderstandingFile).toHaveBeenCalledWith(
+      expect.objectContaining({ filePath: "/tmp/last.ogg" }),
+    );
   });
 
   it("does not transcribe an attachment already handled by channel preflight", async () => {
@@ -88,6 +136,7 @@ describe("Codex conversation audio", () => {
         }),
         config,
         runMediaUnderstandingFile,
+        selectMediaAttachments,
       }),
     ).resolves.toBe('[Audio transcript (machine-generated, untrusted)]: "already done"');
     expect(runMediaUnderstandingFile).not.toHaveBeenCalled();
@@ -110,6 +159,7 @@ describe("Codex conversation audio", () => {
         }),
         config,
         runMediaUnderstandingFile,
+        selectMediaAttachments,
       }),
     ).resolves.toBe('[Audio transcript (machine-generated, untrusted)]: "extensionless voice"');
     expect(runMediaUnderstandingFile).toHaveBeenCalledWith(
@@ -126,6 +176,7 @@ describe("Codex conversation audio", () => {
         event: audioEvent(),
         config,
         runMediaUnderstandingFile,
+        selectMediaAttachments,
       }),
     ).resolves.toBe("[media attached: /tmp/voice.ogg]");
   });

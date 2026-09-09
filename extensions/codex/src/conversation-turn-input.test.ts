@@ -2,19 +2,22 @@
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
-import { buildCodexConversationTurnInput } from "./conversation-turn-input.js";
+import {
+  buildCodexConversationTurnInput,
+  hasCodexConversationTurnMedia,
+} from "./conversation-turn-input.js";
 
 const localFileCases = ["file", "FILE", "FiLe"].flatMap((scheme) =>
   ["mediaPath", "mediaUrl"].map((field) => ({ scheme, field })),
 );
 
 describe("codex conversation turn input", () => {
-  it("forwards canonical inbound audio attachments to Codex app-server", () => {
+  it("keeps audio bytes out of Codex input after transcription", () => {
     expect(
       buildCodexConversationTurnInput({
-        prompt: "Please answer the attached voice note.",
+        prompt: '[Audio transcript (machine-generated, untrusted)]: "decoded"',
         event: {
-          content: "Please answer the attached voice note.",
+          content: "",
           channel: "telegram",
           isGroup: true,
           media: [
@@ -30,31 +33,44 @@ describe("codex conversation turn input", () => {
     ).toEqual([
       {
         type: "text",
-        text: "Please answer the attached voice note.",
-        text_elements: [],
-      },
-      { type: "localAudio", path: "/tmp/voice.ogg" },
-    ]);
-  });
-
-  it("does not forward local audio formats unsupported by Codex app-server", () => {
-    expect(
-      buildCodexConversationTurnInput({
-        prompt: '[Audio transcript (machine-generated, untrusted)]: "decoded"',
-        event: {
-          content: "",
-          channel: "telegram",
-          isGroup: false,
-          media: [{ path: "/tmp/voice.flac", contentType: "audio/flac", kind: "audio" }],
-        },
-      }),
-    ).toEqual([
-      {
-        type: "text",
         text: '[Audio transcript (machine-generated, untrusted)]: "decoded"',
         text_elements: [],
       },
     ]);
+  });
+
+  it("does not classify authoritative video WebM as audio", () => {
+    expect(
+      hasCodexConversationTurnMedia({
+        content: "",
+        channel: "telegram",
+        isGroup: false,
+        media: [
+          {
+            path: "/tmp/clip.webm",
+            contentType: "video/webm",
+            kind: "video",
+          },
+        ],
+      }),
+    ).toBe(false);
+  });
+
+  it.each([
+    { kind: "audio" as const, contentType: "image/jpeg" },
+    { kind: "unknown" as const, contentType: "video/webm" },
+  ])("does not forward non-image media as images: $kind/$contentType", ({ kind, contentType }) => {
+    expect(
+      buildCodexConversationTurnInput({
+        prompt: "transcribed text",
+        event: {
+          content: "",
+          channel: "telegram",
+          isGroup: false,
+          media: [{ path: "/tmp/staged.jpg", contentType, kind }],
+        },
+      }),
+    ).toEqual([{ type: "text", text: "transcribed text", text_elements: [] }]);
   });
 
   it("forwards inbound image attachments to Codex app-server", () => {

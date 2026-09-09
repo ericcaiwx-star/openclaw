@@ -12,6 +12,8 @@ import type {
 
 export type RunMediaUnderstandingFileParams = {
   capability: "image" | "audio" | "video";
+  /** Authoritative media kind when the caller has already classified the attachment. */
+  kind?: "image" | "audio" | "video";
   filePath: string;
   mediaUrl?: string;
   cfg: OpenClawConfig;

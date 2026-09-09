@@ -446,6 +446,13 @@ export type PluginRuntimeCore = {
   };
   mediaUnderstanding: {
     resolveAudioInputBudget: MediaUnderstandingRuntime["resolveAudioInputBudget"];
+    selectAttachments: (
+      params: Parameters<
+        typeof import("../../media-understanding/attachments.js").selectAttachments
+      >[0],
+    ) => Promise<
+      ReturnType<typeof import("../../media-understanding/attachments.js").selectAttachments>
+    >;
     runFile: MediaUnderstandingRuntime["runMediaUnderstandingFile"];
     describeImageFile: MediaUnderstandingRuntime["describeImageFile"];
     describeImageFileWithModel: MediaUnderstandingRuntime["describeImageFileWithModel"];
