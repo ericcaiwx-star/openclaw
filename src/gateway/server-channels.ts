@@ -1508,7 +1508,9 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
     const channelAccounts: ChannelRuntimeSnapshot["channelAccounts"] = {};
     for (const plugin of listLoadedChannelPluginsForRegistry(registry)) {
       const store = getStore(plugin.id);
-      const accountIds = plugin.config.listAccountIds(cfg);
+      const configuredAccountIds = plugin.config.listAccountIds(cfg);
+      const configuredAccountIdSet = new Set(configuredAccountIds);
+      const accountIds = [...new Set([...configuredAccountIds, ...store.lifetimes.keys()])];
       const defaultAccountId = resolveChannelDefaultAccountId({
         plugin,
         cfg,
@@ -1517,6 +1519,12 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
       const accounts: Record<string, ChannelAccountSnapshot> = {};
       for (const id of accountIds) {
         const current = store.runtimes.get(id) ?? cloneDefaultRuntime(plugin.id, id);
+        if (!configuredAccountIdSet.has(id)) {
+          // The manager owns admitted lifetimes even when a plugin's static
+          // account inventory temporarily lags credential recovery or config publication.
+          accounts[id] = { ...current, accountId: id };
+          continue;
+        }
         const unavailable = resolveUnavailableChannelAccountSnapshot(cfg, {
           registry,
           channelId: plugin.id,

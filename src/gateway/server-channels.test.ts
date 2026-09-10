@@ -3991,6 +3991,43 @@ describe("server-channels auto restart", () => {
     expect(manager.getRuntimeSnapshot().channelAccounts.discord?.default).toMatchObject(recorded);
   });
 
+  it("keeps an explicitly admitted account visible when plugin enumeration omits it", async () => {
+    const describeAccount = vi.fn(() => ({
+      accountId: "recovered",
+      enabled: true,
+      configured: false,
+    }));
+    const startAccount = vi.fn(
+      async ({ abortSignal }: ChannelGatewayContext<TestAccount>) =>
+        await new Promise<void>((resolve) => {
+          abortSignal.addEventListener("abort", () => resolve(), { once: true });
+        }),
+    );
+    const plugin = createTestPlugin({
+      listAccountIds: () => [],
+      resolveAccount: () => ({ enabled: true, configured: true }),
+      describeAccount,
+      startAccount,
+    });
+    installTestRegistry(plugin);
+    const manager = createManager();
+
+    await expect(manager.startChannel("discord", "recovered")).resolves.toEqual(
+      new Map([["recovered", { status: "handed-off" }]]),
+    );
+    expect(describeAccount).toHaveBeenCalledOnce();
+    describeAccount.mockClear();
+
+    expect(manager.getRuntimeSnapshot().channelAccounts.discord?.recovered).toMatchObject({
+      accountId: "recovered",
+      enabled: true,
+      configured: true,
+      running: true,
+      lifecycle: "starting",
+    });
+    expect(describeAccount).not.toHaveBeenCalled();
+  });
+
   it("starts enabled accounts without requiring diagnostic inspection", async () => {
     const startAccount = vi.fn(async () => {});
     const plugin = createTestPlugin({ startAccount });
