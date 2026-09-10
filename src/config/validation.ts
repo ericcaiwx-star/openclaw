@@ -3,7 +3,6 @@ import { collectConfiguredModelRefs } from "@openclaw/model-catalog-core/configu
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { listAgentEntriesWithSource } from "../agents/agent-scope.js";
-import type { ChannelDmAllowFromMode } from "../channels/plugins/dm-access.js";
 import { planManifestModelCatalogSuppressions } from "../model-catalog/index.js";
 import { listChannelIdsForOwnershipMigration } from "../plugins/channel-presence-policy.js";
 import { normalizePluginsConfig, normalizePluginId } from "../plugins/config-state.js";
@@ -20,6 +19,7 @@ import { GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA } from "./bundled-channel-con
 import {
   collectChannelDmPolicyMetadata,
   collectChannelSchemaMetadataWithOwnership,
+  type ChannelDmPolicyMetadata,
 } from "./channel-config-metadata.js";
 import { resolveChannelSchemaSelection } from "./channel-schema-selection.js";
 import { resolveConfigWidePluginManifestRegistry } from "./io.plugin-metadata.js";
@@ -74,7 +74,7 @@ type RegistryInfo = {
   knownIds?: Set<string>;
   overriddenPluginIds?: Set<string>;
   normalizedPlugins?: ReturnType<typeof normalizePluginsConfig>;
-  channelDmAllowFromModes?: Map<string, ChannelDmAllowFromMode>;
+  channelDmPolicyMetadata?: Map<string, ChannelDmPolicyMetadata>;
   channelSchemas?: Map<
     string,
     { schema?: Record<string, unknown>; pluginId?: string; origin: PluginOrigin }
@@ -380,14 +380,12 @@ function validateConfigObjectWithPluginsBase(
     return info.channelSchemas;
   };
 
-  const ensureChannelDmAllowFromModes = (): ReadonlyMap<string, ChannelDmAllowFromMode> => {
+  const ensureChannelDmPolicyMetadata = (): ReadonlyMap<string, ChannelDmPolicyMetadata> => {
     const info = ensureLoadedRegistryInfo();
-    info.channelDmAllowFromModes ??= new Map(
-      collectChannelDmPolicyMetadata(info.registry).flatMap((entry) =>
-        entry.dmAllowFromMode ? [[entry.id, entry.dmAllowFromMode] as const] : [],
-      ),
+    info.channelDmPolicyMetadata ??= new Map(
+      collectChannelDmPolicyMetadata(info.registry).map((entry) => [entry.id, entry]),
     );
-    return info.channelDmAllowFromModes;
+    return info.channelDmPolicyMetadata;
   };
 
   // Generic DM-policy/allowFrom dependency check on the raw user config (pre-defaults)
@@ -395,7 +393,7 @@ function validateConfigObjectWithPluginsBase(
   warnings.push(
     ...(hasChannelDmPolicyDependencyWarningCandidates(parsedConfig)
       ? collectChannelDmPolicyDependencyWarnings(parsedConfig, {
-          dmAllowFromModes: ensureChannelDmAllowFromModes(),
+          dmPolicyMetadata: ensureChannelDmPolicyMetadata(),
         })
       : collectChannelDmPolicyDependencyWarnings(parsedConfig)),
   );

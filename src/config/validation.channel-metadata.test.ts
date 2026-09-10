@@ -204,7 +204,10 @@ function createCompatPluginConfigSchemaRegistry(): PluginManifestRegistry {
 
 function createDmPolicyRegistry(params: {
   channelId: string;
-  dmAllowFromMode?: "topOnly" | "topOrNested" | "nestedOnly";
+  doctorCapabilities?: {
+    dmAllowFromMode?: "topOnly" | "topOrNested" | "nestedOnly";
+    openDmRequiresAllowFromWildcard?: boolean;
+  };
 }): PluginManifestRegistry {
   return {
     diagnostics: [],
@@ -214,9 +217,7 @@ function createDmPolicyRegistry(params: {
         channels: [params.channelId],
         packageChannel: {
           id: params.channelId,
-          ...(params.dmAllowFromMode
-            ? { doctorCapabilities: { dmAllowFromMode: params.dmAllowFromMode } }
-            : {}),
+          doctorCapabilities: params.doctorCapabilities,
         },
       }),
     ],
@@ -494,6 +495,35 @@ describe("validateConfigObjectWithPlugins channel metadata (applyDefaults: true)
 });
 
 describe("validateConfigObjectWithPlugins DM policy warnings", () => {
+  it("respects channel metadata that open DMs do not require a wildcard", () => {
+    const result = validateConfigObjectWithPlugins(
+      {
+        channels: {
+          qqbot: {
+            dmPolicy: "open",
+            allowFrom: ["openclaw:approval-disabled"],
+            accounts: {
+              ops: {
+                dmPolicy: "open",
+                allowFrom: ["openclaw:approval-disabled"],
+              },
+            },
+          },
+        },
+      },
+      {
+        pluginMetadataSnapshot: {
+          manifestRegistry: createDmPolicyRegistry({
+            channelId: "qqbot",
+            doctorCapabilities: { openDmRequiresAllowFromWildcard: false },
+          }),
+        },
+      },
+    );
+
+    expect(result).toMatchObject({ ok: true, warnings: [] });
+  });
+
   it("uses manifest metadata to skip nested-only DM config shapes", () => {
     const result = validateConfigObjectWithPlugins(
       {
@@ -509,7 +539,7 @@ describe("validateConfigObjectWithPlugins DM policy warnings", () => {
         pluginMetadataSnapshot: {
           manifestRegistry: createDmPolicyRegistry({
             channelId: "matrix",
-            dmAllowFromMode: "nestedOnly",
+            doctorCapabilities: { dmAllowFromMode: "nestedOnly" },
           }),
         },
       },

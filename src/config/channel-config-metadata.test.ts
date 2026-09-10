@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import { createPluginManifestRecordFixture } from "../plugins/plugin-metadata.test-support.js";
-import { collectChannelSchemaMetadataWithOwnership } from "./channel-config-metadata.js";
+import {
+  collectChannelDmPolicyMetadata,
+  collectChannelSchemaMetadataWithOwnership,
+} from "./channel-config-metadata.js";
 
 function createChannelSchemaRegistry(
   channelId: string,
@@ -137,4 +140,37 @@ describe("collectChannelSchemaMetadataWithOwnership", () => {
       ),
     ).toThrow();
   });
+});
+
+describe("collectChannelDmPolicyMetadata", () => {
+  it.each([
+    { pluginId: "openclaw-qqbot", declared: undefined, expected: false },
+    { pluginId: "openclaw-qqbot", declared: true, expected: true },
+    { pluginId: "lookalike-qqbot", declared: undefined, expected: undefined },
+  ])(
+    "resolves official compatibility metadata for $pluginId",
+    ({ pluginId, declared, expected }) => {
+      const registry = {
+        diagnostics: [],
+        plugins: [
+          createPluginManifestRecordFixture({
+            id: pluginId,
+            channels: ["qqbot"],
+            packageName: "@tencent-connect/openclaw-qqbot",
+            packageChannel: {
+              id: "qqbot",
+              ...(declared === undefined
+                ? {}
+                : { doctorCapabilities: { openDmRequiresAllowFromWildcard: declared } }),
+            },
+          }),
+        ],
+      };
+
+      expect(
+        collectChannelDmPolicyMetadata(registry).find(({ id }) => id === "qqbot")
+          ?.openDmRequiresAllowFromWildcard,
+      ).toBe(expected);
+    },
+  );
 });

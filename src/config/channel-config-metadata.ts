@@ -8,6 +8,11 @@ import {
 } from "@openclaw/net-policy/redact-sensitive-url";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
+import {
+  getOfficialExternalPluginCatalogEntryForPackage,
+  getOfficialExternalPluginCatalogManifest,
+  resolveOfficialExternalPluginId,
+} from "../plugins/official-external-plugin-catalog.js";
 import type { PluginOrigin } from "../plugins/plugin-origin.types.js";
 import { widenOfficialExternalChannelSecretSchema } from "./official-external-channel-secret-schema.js";
 import type { ChannelUiMetadata, PluginUiMetadata } from "./schema.js";
@@ -24,9 +29,10 @@ type ChannelMetadataRecord = ChannelSchemaMetadataWithOwnership & {
 
 type ChannelDmAllowFromMode = "topOnly" | "topOrNested" | "nestedOnly";
 
-type ChannelDmPolicyMetadata = {
+export type ChannelDmPolicyMetadata = {
   id: string;
   dmAllowFromMode?: ChannelDmAllowFromMode;
+  openDmRequiresAllowFromWildcard?: boolean;
 };
 
 type ChannelDmPolicyMetadataRecord = ChannelDmPolicyMetadata & {
@@ -321,6 +327,7 @@ export function collectChannelDmPolicyMetadata(
     channelId: string | undefined,
     originRank: number,
     dmAllowFromMode?: ChannelDmAllowFromMode,
+    openDmRequiresAllowFromWildcard?: boolean,
   ): void => {
     const id = channelId?.trim();
     if (!id) {
@@ -333,6 +340,9 @@ export function collectChannelDmPolicyMetadata(
     byChannelId.set(id, {
       id,
       ...(dmAllowFromMode ? { dmAllowFromMode } : {}),
+      ...(typeof openDmRequiresAllowFromWildcard === "boolean"
+        ? { openDmRequiresAllowFromWildcard }
+        : {}),
       originRank,
     });
   };
@@ -340,13 +350,37 @@ export function collectChannelDmPolicyMetadata(
   for (const record of registry.plugins) {
     const originRank = PLUGIN_ORIGIN_RANK[record.origin] ?? Number.MAX_SAFE_INTEGER;
     const packageChannelId = record.packageChannel?.id?.trim();
-    const dmAllowFromMode = record.packageChannel?.doctorCapabilities?.dmAllowFromMode;
+    const officialEntry = getOfficialExternalPluginCatalogEntryForPackage(record.packageName);
+    const officialChannel =
+      officialEntry && resolveOfficialExternalPluginId(officialEntry) === record.id
+        ? getOfficialExternalPluginCatalogManifest(officialEntry)?.channel
+        : undefined;
+    const officialCapabilities =
+      packageChannelId && officialChannel?.id?.trim() === packageChannelId
+        ? officialChannel.doctorCapabilities
+        : undefined;
+    const doctorCapabilities = {
+      ...officialCapabilities,
+      ...record.packageChannel?.doctorCapabilities,
+    };
+    const dmAllowFromMode = doctorCapabilities?.dmAllowFromMode;
+    const openDmRequiresAllowFromWildcard = doctorCapabilities?.openDmRequiresAllowFromWildcard;
     for (const channelId of record.channels) {
-      put(channelId, originRank, channelId === packageChannelId ? dmAllowFromMode : undefined);
+      put(
+        channelId,
+        originRank,
+        channelId === packageChannelId ? dmAllowFromMode : undefined,
+        channelId === packageChannelId ? openDmRequiresAllowFromWildcard : undefined,
+      );
     }
-    put(packageChannelId, originRank, dmAllowFromMode);
+    put(packageChannelId, originRank, dmAllowFromMode, openDmRequiresAllowFromWildcard);
     for (const channelId of Object.keys(record.channelConfigs ?? {})) {
-      put(channelId, originRank, channelId === packageChannelId ? dmAllowFromMode : undefined);
+      put(
+        channelId,
+        originRank,
+        channelId === packageChannelId ? dmAllowFromMode : undefined,
+        channelId === packageChannelId ? openDmRequiresAllowFromWildcard : undefined,
+      );
     }
   }
 
