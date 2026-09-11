@@ -191,6 +191,37 @@ describe("atomic subagent completion admission store", () => {
     },
   );
 
+  it("durably settles a killed child that never captured completion text", async () => {
+    useDefaultDatabase();
+    const input = failedRecords("cancelled", { status: "error", error: "killed" });
+    input.subagent.completion = { required: true };
+    input.subagent.suppressAnnounceReason = "killed";
+    input.subagent.killReconciliation = {
+      killedAt: input.subagent.execution.endedAt ?? Date.now(),
+      taskCancellationAccepted: true,
+    };
+    persistOwner(input);
+    const driver = requesterWakeDriver([input]);
+    try {
+      await driver.run();
+      expect(driver.warn).not.toHaveBeenCalledWith(
+        "failed to persist requester settle wake rejection",
+        expect.any(Object),
+      );
+      expect(input.subagent.requesterSettleWake).toBeUndefined();
+      expect(input.subagent.delivery).toMatchObject({
+        status: "failed",
+        lastError: "requester unavailable",
+      });
+      expect(getTaskById(input.task.taskId)).toMatchObject({
+        status: "cancelled",
+        deliveryStatus: "failed",
+      });
+    } finally {
+      driver.controller.clearScheduledResumeTimers();
+    }
+  });
+
   it.each(["successful generation", "successful task run", "cancelled delivered"] as const)(
     "rejects a stale %s requester-settle owner without changing durable records",
     async (change) => {

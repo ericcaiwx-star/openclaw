@@ -25,26 +25,28 @@ import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 const log = createSubsystemLogger("agents/subagent-registry-completion");
 
-/** Returns the complete task projection only after completion capture has settled. */
+/** Returns the complete task projection after completion capture, or immediately for a killed run. */
 export function resolveFinalizedSubagentTaskState(
   entry: SubagentRunRecord,
 ): DetachedTaskTerminalState | undefined {
   const endedAt = entry.execution.endedAt;
   const outcome = entry.execution.outcome;
   const completion = entry.completion;
+  const killedTerminal =
+    entry.endedReason === SUBAGENT_ENDED_REASON_KILLED &&
+    entry.suppressAnnounceReason !== "steer-restart";
   if (
     typeof endedAt !== "number" ||
     !outcome ||
     entry.pauseReason === "sessions_yield" ||
-    (completion?.resultText === undefined && typeof completion?.capturedAt !== "number")
+    (!killedTerminal &&
+      completion?.resultText === undefined &&
+      typeof completion?.capturedAt !== "number")
   ) {
     return undefined;
   }
   const progressSummary = resolveSubagentCompletionResultText(entry);
-  if (
-    entry.endedReason === SUBAGENT_ENDED_REASON_KILLED &&
-    entry.suppressAnnounceReason !== "steer-restart"
-  ) {
+  if (killedTerminal) {
     return {
       status: "cancelled",
       endedAt,
