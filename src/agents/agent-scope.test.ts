@@ -591,6 +591,45 @@ describe("resolveAgentConfig", () => {
     ).toEqual(["openai/gpt-5.4"]);
   });
 
+  it("keeps an explicit agentId when compacting a literal global session", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        ownership: "explicit",
+        defaults: {},
+        entries: {
+          main: {
+            model: {
+              fallbacks: ["openai/gpt-5.4"],
+            },
+          },
+          work: {},
+        },
+      },
+    };
+
+    expect(() =>
+      resolveRunModelFallbacksOverride({
+        cfg,
+        sessionKey: "global",
+      }),
+    ).toThrow(/no explicit owner/);
+    expect(
+      resolveRunModelFallbacksOverride({
+        cfg,
+        sessionKey: "global",
+        agentId: "main",
+      }),
+    ).toEqual(["openai/gpt-5.4"]);
+
+    const compactSrc = fs.readFileSync(
+      path.join(import.meta.dirname, "embedded-agent-runner/compact.ts"),
+      "utf8",
+    );
+    expect(compactSrc).toMatch(
+      /resolveRunModelFallbacksOverride\(\{\s*cfg: params\.config,\s*sessionKey: params\.sessionKey,\s*agentId: params\.agentId,/s,
+    );
+  });
+
   it("resolves throttled primary probes for auto fallback selections", () => {
     const probeState = new Map<string, number>();
     const entry: SessionEntry = {
