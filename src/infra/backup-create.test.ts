@@ -723,9 +723,9 @@ describe("backup SQLite AppleDouble classification", () => {
           openSpy.mockRestore();
           failureSpy?.mockRestore();
         }
-        expect(() => fsSync.fstatSync(expectDefined(descriptor))).toThrow(
-          expect.objectContaining({ code: "EBADF" }),
-        );
+        expect(() =>
+          fsSync.fstatSync(expectDefined(descriptor, "metadata probe descriptor")),
+        ).toThrow(expect.objectContaining({ code: "EBADF" }));
       });
     },
   );
