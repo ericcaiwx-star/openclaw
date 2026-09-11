@@ -67,6 +67,12 @@ describe("Gateway health channel discovery", () => {
       setActivePluginRegistry(
         createTestRegistry([{ pluginId: "admitted-owner", plugin, source: "fixture" }]),
       );
+      const baseUrl = new URL("https://chat.example.test/?token=runtime-token");
+      baseUrl.username = "runtime-user";
+      baseUrl.password = "runtime-password";
+      const audienceUrl = new URL("https://audience.example.test/?token=audience-token");
+      audienceUrl.username = "audience-user";
+      audienceUrl.password = "audience-password";
       const recovered: ChannelAccountSnapshot = {
         accountId: "recovered",
         enabled: true,
@@ -77,9 +83,8 @@ describe("Gateway health channel discovery", () => {
         lastStartAt: 1200,
         tokenSource: "config",
         tokenStatus: "available",
-        baseUrl: "https://runtime-user:runtime-password@chat.example.test/?token=runtime-token",
-        audience:
-          "https://audience-user:audience-password@audience.example.test/?token=audience-token",
+        baseUrl: baseUrl.href,
+        audience: audienceUrl.href,
         channelSecret: "private-channel-secret",
         channelAccessToken: "private-channel-token",
         webhookUrl: "https://private-webhook.example.test/secret",

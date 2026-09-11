@@ -280,6 +280,9 @@ describe("channelsHandlers channels.status", () => {
       mocks.buildChannelAccountSnapshotFromAccount.mockImplementation(
         status.buildChannelAccountSnapshotFromAccount,
       );
+      const baseUrl = new URL("https://chat.example.test/?token=runtime-token");
+      baseUrl.username = "runtime-user";
+      baseUrl.password = "runtime-password";
       const recovered: ChannelAccountSnapshot = {
         accountId: "recovered",
         enabled: true,
@@ -291,7 +294,7 @@ describe("channelsHandlers channels.status", () => {
         stateReason: "admitted before configuration changed",
         lastStartAt: 1200,
         lastError: null,
-        baseUrl: "https://runtime-user:runtime-password@chat.example.test/?token=runtime-token",
+        baseUrl: baseUrl.href,
         channelSecret: "private-channel-secret",
         channelAccessToken: "private-channel-token",
         webhookUrl: "https://private-webhook.example.test/secret",
