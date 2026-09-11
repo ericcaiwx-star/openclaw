@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { openRootFileSync } from "./boundary-file-read.js";
 
 /** SQLite main database plus every journal-mode sidecar that can contain database pages. */
 const SQLITE_DATABASE_FILE_SUFFIXES = ["", "-wal", "-shm", "-journal"] as const;
@@ -16,21 +17,23 @@ export function isAppleDoubleMetadataFile(pathname: string): boolean {
   if (!basename.startsWith("._") || !basename.endsWith(".sqlite")) {
     return false;
   }
+  const opened = openRootFileSync({
+    absolutePath: pathname,
+    rootPath: path.dirname(pathname),
+    boundaryLabel: "SQLite metadata directory",
+    rejectHardlinks: false,
+  });
+  if (!opened.ok) {
+    return false;
+  }
   try {
-    const stat = fs.lstatSync(pathname);
-    if (!stat.isFile()) {
-      return false;
-    }
-    const descriptor = fs.openSync(pathname, "r");
-    try {
-      const header = Buffer.alloc(APPLE_DOUBLE_MAGIC.length);
-      const bytesRead = fs.readSync(descriptor, header, 0, header.length, 0);
-      return bytesRead === header.length && header.equals(APPLE_DOUBLE_MAGIC);
-    } finally {
-      fs.closeSync(descriptor);
-    }
+    const header = Buffer.alloc(APPLE_DOUBLE_MAGIC.length);
+    const bytesRead = fs.readSync(opened.fd, header, 0, header.length, 0);
+    return bytesRead === header.length && header.equals(APPLE_DOUBLE_MAGIC);
   } catch {
     return false;
+  } finally {
+    fs.closeSync(opened.fd);
   }
 }
 

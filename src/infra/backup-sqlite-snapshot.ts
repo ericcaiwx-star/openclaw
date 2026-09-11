@@ -111,9 +111,6 @@ export function classifyBackupSqliteSource(
   inventory: BackupResourceInventory,
 ): "excluded" | "sqlite" | undefined {
   const resolvedSourcePath = path.resolve(sourcePath);
-  if (isAppleDoubleMetadataFile(resolvedSourcePath)) {
-    return "excluded";
-  }
   const transient = isTransientSqliteBackupPath(resolvedSourcePath);
   const databasePath = resolveSqliteBackupDatabasePath(resolvedSourcePath);
   if (!transient && !databasePath) {
@@ -127,10 +124,10 @@ export function classifyBackupSqliteSource(
   if (!withinOwnedRoot || inventory.isPackageContent(resolvedSourcePath)) {
     return undefined;
   }
-  if (transient) {
+  if (transient || !inventory.isIncluded(resolvedSourcePath)) {
     return "excluded";
   }
-  return inventory.isIncluded(resolvedSourcePath) ? "sqlite" : "excluded";
+  return isAppleDoubleMetadataFile(resolvedSourcePath) ? "excluded" : "sqlite";
 }
 
 async function discoverBackupSqliteSources(params: {
