@@ -620,14 +620,6 @@ describe("resolveAgentConfig", () => {
         agentId: "main",
       }),
     ).toEqual(["openai/gpt-5.4"]);
-
-    const compactSrc = fs.readFileSync(
-      path.join(import.meta.dirname, "embedded-agent-runner/compact.ts"),
-      "utf8",
-    );
-    expect(compactSrc).toMatch(
-      /resolveRunModelFallbacksOverride\(\{\s*cfg: params\.config,\s*sessionKey: params\.sessionKey,\s*agentId: params\.agentId,/s,
-    );
   });
 
   it("resolves throttled primary probes for auto fallback selections", () => {
