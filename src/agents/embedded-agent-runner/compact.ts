@@ -184,6 +184,7 @@ function resolveCompactionFallbacksOverride(
     resolveRunModelFallbacksOverride({
       cfg: params.config,
       sessionKey: params.sessionKey,
+      agentId: params.agentId,
     })
   );
 }
