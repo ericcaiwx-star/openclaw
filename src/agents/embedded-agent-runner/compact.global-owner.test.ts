@@ -28,6 +28,8 @@ function compactParams(
   return {
     sessionId: "compaction-global-owner",
     sessionKey: "global",
+    sessionFile: "global",
+    workspaceDir: "/tmp/openclaw-compaction-global-owner",
     config,
     ...(agentId ? { agentId } : {}),
   };
