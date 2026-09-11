@@ -15,7 +15,6 @@ import { normalizeOptionalAgentRuntimeId } from "../agent-runtime-id.js";
 import {
   resolveAgentDir,
   resolveAgentWorkspaceDir,
-  resolveRunModelFallbacksOverride,
   resolveSessionAgentIds,
 } from "../agent-scope.js";
 import { resolveCliBackendConfig } from "../cli-backends.js";
@@ -33,6 +32,7 @@ import {
   resolveAgentRunSessionTarget,
 } from "../run-session-target.js";
 import { resolveSystemPromptRepoRoot } from "../system-prompt-params.js";
+import { resolveCompactionFallbacksOverride } from "./compact-fallbacks.js";
 import { runForegroundCompactionWork } from "./compact.foreground-work.js";
 import type {
   CompactEmbeddedAgentSessionParams,
@@ -171,22 +171,6 @@ export async function compactNativeCliSession(params: {
     compacted: true,
     reason: `CLI backend "${runtime}" compacted its native session.`,
   };
-}
-
-function resolveCompactionFallbacksOverride(
-  params: CompactEmbeddedAgentSessionParams,
-): string[] | undefined {
-  if (params.modelSelectionLocked) {
-    return [];
-  }
-  return (
-    params.modelFallbacksOverride ??
-    resolveRunModelFallbacksOverride({
-      cfg: params.config,
-      sessionKey: params.sessionKey,
-      agentId: params.agentId,
-    })
-  );
 }
 
 function classifyCompactionFallbackResult(
