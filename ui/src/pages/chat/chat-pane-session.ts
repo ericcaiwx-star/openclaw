@@ -458,7 +458,11 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
     return [...uniqueMessages, ...current];
   }
 
-  protected async loadCatalogSession(key: CatalogSessionKey, older: boolean): Promise<boolean> {
+  protected async loadCatalogSession(
+    key: CatalogSessionKey,
+    older: boolean,
+    preserveHistory = false,
+  ): Promise<boolean> {
     const state = this.state;
     const client = state?.client;
     if (!state || !client || !state.connected) {
@@ -474,7 +478,7 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
       generation === this.catalogLoadGeneration &&
       this.sessionKey === requestedSessionKey &&
       resolveChatAgentId(state) === agentId;
-    if (!older) {
+    if (!older && !preserveHistory) {
       this.catalogLoading = true;
       this.catalogCursor = undefined;
       this.olderCursorsSeen.clear();
@@ -514,7 +518,15 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
         .toReversed()
         .map((item) => this.catalogItemMessage(item))
         .filter((message) => message !== null);
-      const nextMessages = older ? this.prependUniqueCatalogMessages(messages) : messages;
+      const existingIds = new Set(this.catalogMessages.map(catalogMessageId));
+      const nextMessages = older
+        ? this.prependUniqueCatalogMessages(messages)
+        : preserveHistory
+          ? [
+              ...this.catalogMessages,
+              ...messages.filter((message) => !existingIds.has(catalogMessageId(message))),
+            ]
+          : messages;
       const addedMessages = nextMessages.length > this.catalogMessages.length;
       // Exhaust when the cursor cannot make new forward progress: absent, unchanged,
       // or already visited this session (a provider cycling c1 -> c2 -> c1). Any of
@@ -527,10 +539,12 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
           page.nextCursor === requestedOlderCursor ||
           this.olderCursorsSeen.has(page.nextCursor));
       this.catalogMessages = nextMessages;
-      this.catalogCursor = olderExhausted ? undefined : page.nextCursor;
+      if (!preserveHistory) {
+        this.catalogCursor = olderExhausted ? undefined : page.nextCursor;
+      }
       const currentState = this.state ?? state;
       currentState.lastError = null;
-      scheduleChatScroll(currentState, !older);
+      scheduleChatScroll(currentState, !older && !preserveHistory);
       return !older || addedMessages || !olderExhausted;
     } catch (error) {
       if (isCurrent()) {
@@ -540,7 +554,7 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
     } finally {
       if (isCurrent()) {
         const currentState = this.state ?? state;
-        if (!older) {
+        if (!older && !preserveHistory) {
           this.catalogLoading = false;
           currentState.chatLoading = false;
         }
