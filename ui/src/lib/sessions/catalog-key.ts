@@ -27,8 +27,9 @@ export type CatalogSessionContinuedDetail = CatalogSessionKey & {
 export const CATALOG_SESSION_RELEASED_EVENT = "openclaw-session-catalog-released";
 export const CATALOG_SESSION_RELEASE_RECONCILE_MS = 5_000;
 
-export type CatalogSessionReleasedDetail = CatalogSessionKey & {
+export type CatalogSessionReleasedDetail = Omit<CatalogSessionKey, "threadId"> & {
   agentId: string;
+  threadId?: string;
 };
 
 export function announceCatalogSessionContinued(detail: CatalogSessionContinuedDetail): void {
@@ -47,6 +48,8 @@ export function catalogSessionReleasedDetailFromEvent(
   event: Event,
 ): CatalogSessionReleasedDetail | null {
   const value: unknown = event instanceof CustomEvent ? event.detail : undefined;
+  const threadId =
+    value && typeof value === "object" && "threadId" in value ? value.threadId : null;
   if (
     value === null ||
     typeof value !== "object" ||
@@ -56,8 +59,7 @@ export function catalogSessionReleasedDetailFromEvent(
     typeof value.catalogId !== "string" ||
     !("hostId" in value) ||
     typeof value.hostId !== "string" ||
-    !("threadId" in value) ||
-    typeof value.threadId !== "string"
+    (threadId !== null && typeof threadId !== "string")
   ) {
     return null;
   }
@@ -65,7 +67,7 @@ export function catalogSessionReleasedDetailFromEvent(
     agentId: value.agentId,
     catalogId: value.catalogId,
     hostId: value.hostId,
-    threadId: value.threadId,
+    ...(typeof threadId === "string" ? { threadId } : {}),
   };
 }
 
