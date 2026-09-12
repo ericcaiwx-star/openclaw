@@ -24,22 +24,25 @@ import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db
 import { withEnvAsync } from "../../test-utils/env.js";
 
 const mocks = vi.hoisted(() => ({
-  loadValidConfigOrThrow: vi.fn(),
+  loadValidConfigSnapshotOrThrow: vi.fn(),
   updateConfig: vi.fn(),
   callGateway: vi.fn(),
+  isImplicitLocalGatewayTarget: vi.fn(() => Promise.resolve(true)),
 }));
 
 vi.mock("./shared.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./shared.js")>();
   return {
     ...actual,
-    loadValidConfigOrThrow: mocks.loadValidConfigOrThrow,
+    loadValidConfigSnapshotOrThrow: mocks.loadValidConfigSnapshotOrThrow,
     updateConfig: mocks.updateConfig,
   };
 });
 
-vi.mock("../../gateway/call.js", () => ({
+vi.mock("../../gateway/call.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../gateway/call.js")>()),
   callGateway: mocks.callGateway,
+  isImplicitLocalGatewayTarget: mocks.isImplicitLocalGatewayTarget,
 }));
 
 const { modelsAuthPasteApiKeyCommand, modelsAuthPasteTokenCommand } = await import("./auth.js");
@@ -139,7 +142,7 @@ describe("paste auth order ownership", () => {
           },
         },
       };
-      mocks.loadValidConfigOrThrow.mockImplementation(async () => config);
+      mocks.loadValidConfigSnapshotOrThrow.mockResolvedValue({ runtimeConfig: config });
       restoreStdin = withPipedStdin(`${secret}\n`);
 
       try {
@@ -191,8 +194,8 @@ describe("paste auth order ownership", () => {
     const stateDir = await fs.promises.realpath(
       fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-paste-shared-")),
     );
-    mocks.loadValidConfigOrThrow.mockResolvedValue({
-      agents: { list: [{ id: "main" }, { id: "coder" }] },
+    mocks.loadValidConfigSnapshotOrThrow.mockResolvedValue({
+      runtimeConfig: { agents: { list: [{ id: "main" }, { id: "coder" }] } },
     });
     restoreStdin = withPipedStdin("shared-main-fixture\n");
     try {
@@ -232,7 +235,7 @@ describe("paste auth order ownership", () => {
         agents: { list: [{ id: "main" }, { id: "coder" }] },
         auth: { profiles: { [profileId]: { provider: "deepseek", mode: credential.type } } },
       };
-      mocks.loadValidConfigOrThrow.mockResolvedValue(config);
+      mocks.loadValidConfigSnapshotOrThrow.mockResolvedValue({ runtimeConfig: config });
       const run =
         command === "paste-api-key" ? modelsAuthPasteApiKeyCommand : modelsAuthPasteTokenCommand;
       restoreStdin = withPipedStdin("new-pasted-credential\n");

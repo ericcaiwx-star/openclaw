@@ -49,7 +49,6 @@ import {
   createProviderAuthConfigPatch,
   writeProviderAuthConfig,
 } from "../../plugins/provider-auth-config.js";
-import { applyAuthProfileConfig } from "../../plugins/provider-auth-helpers.js";
 import { runProviderPluginAuthMethodUnpersisted } from "../../plugins/provider-auth-method.js";
 import { persistProviderAuthProfilesAfterLogin } from "../../plugins/provider-auth-persistence.js";
 import type { ProviderAuthContext } from "../../plugins/provider-authentication.types.js";
@@ -90,11 +89,7 @@ import {
   type PreparedProviderModelAccess,
 } from "./auth-model-policy.js";
 import { refreshRunningGatewayAuthState, type ModelAuthRefreshOutcome } from "./auth-refresh.js";
-import {
-  loadValidConfigSnapshotOrThrow,
-  resolveModelsTargetAgent,
-  updateConfig,
-} from "./shared.js";
+import { loadValidConfigSnapshotOrThrow, resolveModelsTargetAgent } from "./shared.js";
 
 function resolveManualTokenExpiryMs(expiresIn: string | undefined): number | undefined {
   const normalizedExpiresIn = normalizeStringifiedOptionalString(expiresIn);
@@ -624,8 +619,35 @@ async function persistPastedAuthProfile(params: {
       `Auth profile ${profileId} conflicts with its global auth.profiles declaration (${reasonCode}). Nothing was saved. Use --profile-id with a distinct profile ID to keep the existing credential and configuration.`,
     );
   }
+  const apiKeyWriteOptions =
+    credential.type === "api_key"
+      ? {
+          preserveApiKeyMetadata: true,
+          validateCurrentCredential: (existing: AuthProfileCredential | undefined) => {
+            if (existing?.type === "api_key" && existing.keyRef) {
+              throw new Error(
+                "This API-key profile uses an external secret reference. Remove that saved sign-in before storing an inline key.",
+              );
+            }
+            if (
+              existing &&
+              (existing.type !== "api_key" ||
+                normalizeProviderId(existing.provider) !== normalizeProviderId(provider))
+            ) {
+              throw new Error(
+                "The API-key profile belongs to another sign-in. Manage that saved sign-in first.",
+              );
+            }
+          },
+        }
+      : {};
   // The secret belongs to this agent; do not advertise it to peer auth routing.
-  await upsertAuthProfileWithLockOrThrow({ agentDir, profileId, credential });
+  await upsertAuthProfileWithLockOrThrow({
+    agentDir,
+    profileId,
+    credential,
+    ...apiKeyWriteOptions,
+  });
   // Creating a stored order from config would freeze this agent against later global edits.
   const promotion = await promoteAuthProfileInOrder({
     agentDir,

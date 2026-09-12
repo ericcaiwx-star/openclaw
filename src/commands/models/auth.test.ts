@@ -1854,6 +1854,34 @@ describe("modelsAuthLoginCommand", () => {
     );
   });
 
+  it("retains API-key replacement guards for agent-scoped paste", async () => {
+    const runtime = createRuntime();
+    mocks.clackPassword.mockResolvedValue("sk-openai-chatgpt-api-key-value");
+
+    await modelsAuthPasteApiKeyCommand({ provider: "openai" }, runtime);
+
+    const write = readMockCallArg(mocks.upsertAuthProfileWithLock) as {
+      validateCurrentCredential?: (credential: AuthProfileCredential | undefined) => void;
+    };
+    const validateCurrentCredential = write.validateCurrentCredential;
+    if (!validateCurrentCredential) {
+      throw new Error("Expected API-key paste to preserve the current-credential validator");
+    }
+    expect(() =>
+      validateCurrentCredential({
+        type: "api_key",
+        provider: "openai",
+        keyRef: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+      }),
+    ).toThrow("uses an external secret reference");
+    expect(() =>
+      validateCurrentCredential({ type: "token", provider: "openai", token: "existing-token" }),
+    ).toThrow("belongs to another sign-in");
+    expect(() =>
+      validateCurrentCredential({ type: "api_key", provider: "openai", key: "existing-key" }),
+    ).not.toThrow();
+  });
+
   it.each([
     {
       label: "paste-token",
