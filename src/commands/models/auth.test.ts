@@ -80,6 +80,13 @@ const mocks = vi.hoisted(() => ({
   })),
   writeSecretStoreEntry: vi.fn(),
   deleteSecretStoreEntry: vi.fn(),
+  applyModelProviderApiKeyConnectionBinding: vi.fn(),
+  resolveModelProviderApiKeySavePlan: vi.fn(),
+}));
+
+vi.mock("./auth-api-key.js", () => ({
+  applyModelProviderApiKeyConnectionBinding: mocks.applyModelProviderApiKeyConnectionBinding,
+  resolveModelProviderApiKeySavePlan: mocks.resolveModelProviderApiKeySavePlan,
 }));
 
 vi.mock("../../secrets/store/secret-store.js", () => ({
@@ -435,6 +442,40 @@ describe("modelsAuthLoginCommand", () => {
         return pastedStore;
       },
     );
+    mocks.resolveModelProviderApiKeySavePlan.mockReset();
+    mocks.resolveModelProviderApiKeySavePlan.mockImplementation(
+      async ({
+        provider,
+        profileId,
+        agentDir,
+      }: {
+        provider: string;
+        profileId?: string;
+        agentDir: string;
+      }) => ({
+        provider,
+        profileId: profileId ?? `${provider}:manual`,
+        agentDir,
+        validateCurrentCredential: (existing: AuthProfileCredential | undefined) => {
+          if (existing?.type === "api_key" && existing.keyRef) {
+            throw new Error(
+              "This API-key profile uses an external secret reference. Remove that saved sign-in before storing an inline key.",
+            );
+          }
+          if (
+            existing &&
+            (existing.type !== "api_key" ||
+              existing.provider.toLowerCase() !== provider.toLowerCase())
+          ) {
+            throw new Error(
+              "The API-key profile belongs to another sign-in. Manage that saved sign-in first.",
+            );
+          }
+        },
+      }),
+    );
+    mocks.applyModelProviderApiKeyConnectionBinding.mockReset();
+    mocks.applyModelProviderApiKeyConnectionBinding.mockResolvedValue(undefined);
     mocks.ensureAuthProfileStoreForLocalUpdate.mockReset();
     mocks.ensureAuthProfileStoreForLocalUpdate.mockReturnValue(pastedStore);
     mocks.persistProviderAuthProfilesAfterLogin.mockReset();

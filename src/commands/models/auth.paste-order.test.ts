@@ -12,6 +12,7 @@ import {
   resolveAuthProfileOrder,
   resolveExplicitAuthOrderSelection,
 } from "../../agents/auth-profiles/order.js";
+import { loadPersistedAuthProfileStore } from "../../agents/auth-profiles/persisted.js";
 import {
   setAuthProfileOrder,
   upsertAuthProfileWithLockOrThrow,
@@ -211,6 +212,189 @@ describe("paste auth order ownership", () => {
           key: "shared-main-fixture",
         });
         expect(runtime.log).not.toHaveBeenCalledWith(expect.stringContaining("excluded"));
+        expect(mocks.updateConfig).not.toHaveBeenCalled();
+      });
+    } finally {
+      fs.rmSync(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("rotates the configured API-key profile at its existing shared owner", async () => {
+    const stateDir = await fs.promises.realpath(
+      fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-paste-bound-key-")),
+    );
+    const coderAgentDir = path.join(stateDir, "agents", "coder", "agent");
+    const profileId = "sample:work";
+    const config: OpenClawConfig = {
+      agents: { list: [{ id: "main" }, { id: "coder" }] },
+      auth: { profiles: { [profileId]: { provider: "sample", mode: "api_key" } } },
+      models: {
+        providers: {
+          sample: {
+            baseUrl: "https://example.invalid/v1",
+            models: [],
+            apiKey: profileId,
+          },
+        },
+      },
+    };
+    mocks.loadValidConfigSnapshotOrThrow.mockResolvedValue({ runtimeConfig: config });
+    restoreStdin = withPipedStdin("replacement-bound-key\n");
+    try {
+      await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir, HOME: stateDir }, async () => {
+        await upsertAuthProfileWithLockOrThrow({
+          profileId,
+          credential: { type: "api_key", provider: "sample", key: "old-bound-key" },
+        });
+
+        const runtime = createRuntime();
+        await modelsAuthPasteApiKeyCommand({ provider: "sample", agent: "coder" }, runtime);
+
+        expect(loadPersistedAuthProfileStore()?.profiles[profileId]).toMatchObject({
+          type: "api_key",
+          provider: "sample",
+          key: "replacement-bound-key",
+        });
+        expect(
+          loadPersistedAuthProfileStore(coderAgentDir)?.profiles["sample:manual"],
+        ).toBeUndefined();
+        expect(runtime.log).toHaveBeenCalledWith("Auth profile: sample:work (sample/api_key)");
+        expect(mocks.updateConfig).not.toHaveBeenCalled();
+      });
+    } finally {
+      fs.rmSync(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("rebinds a configured inline API key without adding global auth metadata", async () => {
+    const stateDir = await fs.promises.realpath(
+      fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-paste-inline-binding-")),
+    );
+    const coderAgentDir = path.join(stateDir, "agents", "coder", "agent");
+    const config: OpenClawConfig = {
+      agents: { list: [{ id: "main" }, { id: "coder" }] },
+      models: {
+        providers: {
+          sample: {
+            baseUrl: "https://example.invalid/v1",
+            models: [],
+            apiKey: "old-inline-key",
+          },
+        },
+      },
+    };
+    let writtenConfig: OpenClawConfig | undefined;
+    mocks.loadValidConfigSnapshotOrThrow.mockResolvedValue({ runtimeConfig: config });
+    mocks.updateConfig.mockImplementation(
+      async (mutator: (cfg: OpenClawConfig) => OpenClawConfig) => {
+        writtenConfig = mutator(config);
+        return writtenConfig;
+      },
+    );
+    restoreStdin = withPipedStdin("replacement-inline-key\n");
+    try {
+      await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir, HOME: stateDir }, async () => {
+        await modelsAuthPasteApiKeyCommand({ provider: "sample", agent: "coder" }, createRuntime());
+
+        expect(writtenConfig?.models?.providers?.sample?.apiKey).toBe("sample:manual");
+        expect(writtenConfig?.auth).toBeUndefined();
+        expect(loadPersistedAuthProfileStore()?.profiles["sample:manual"]).toMatchObject({
+          type: "api_key",
+          provider: "sample",
+          key: "replacement-inline-key",
+        });
+        expect(
+          loadPersistedAuthProfileStore(coderAgentDir)?.profiles["sample:manual"],
+        ).toBeUndefined();
+        expect(mocks.updateConfig).toHaveBeenCalledOnce();
+      });
+    } finally {
+      fs.rmSync(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects a concurrent configured inline-key rebind", async () => {
+    const stateDir = await fs.promises.realpath(
+      fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-paste-inline-race-")),
+    );
+    const config: OpenClawConfig = {
+      agents: { list: [{ id: "main" }, { id: "coder" }] },
+      models: {
+        providers: {
+          sample: {
+            baseUrl: "https://example.invalid/v1",
+            models: [],
+            apiKey: "old-inline-key",
+          },
+        },
+      },
+    };
+    mocks.loadValidConfigSnapshotOrThrow.mockResolvedValue({ runtimeConfig: config });
+    mocks.updateConfig.mockImplementation(
+      async (mutator: (cfg: OpenClawConfig) => OpenClawConfig) =>
+        mutator({
+          ...config,
+          models: {
+            providers: {
+              sample: {
+                baseUrl: "https://example.invalid/v1",
+                models: [],
+                apiKey: "concurrent-key",
+              },
+            },
+          },
+        }),
+    );
+    restoreStdin = withPipedStdin("replacement-inline-key\n");
+    try {
+      await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir, HOME: stateDir }, async () => {
+        await expect(
+          modelsAuthPasteApiKeyCommand({ provider: "sample", agent: "coder" }, createRuntime()),
+        ).rejects.toThrow("provider connection changed");
+
+        expect(loadPersistedAuthProfileStore()?.profiles["sample:manual"]).toMatchObject({
+          key: "replacement-inline-key",
+        });
+        expect(mocks.callGateway).not.toHaveBeenCalled();
+      });
+    } finally {
+      fs.rmSync(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects an inline shadow of an inherited reference-backed API-key profile", async () => {
+    const stateDir = await fs.promises.realpath(
+      fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-paste-inherited-ref-")),
+    );
+    const coderAgentDir = path.join(stateDir, "agents", "coder", "agent");
+    const profileId = "sample:external";
+    const external = {
+      type: "api_key" as const,
+      provider: "sample",
+      keyRef: { source: "env" as const, provider: "default", id: "SAMPLE_API_KEY" },
+    };
+    mocks.loadValidConfigSnapshotOrThrow.mockResolvedValue({
+      runtimeConfig: { agents: { list: [{ id: "main" }, { id: "coder" }] } },
+    });
+    restoreStdin = withPipedStdin("replacement-inline-key\n");
+    try {
+      await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir, HOME: stateDir }, async () => {
+        await upsertAuthProfileWithLockOrThrow({ profileId, credential: external });
+
+        await expect(
+          modelsAuthPasteApiKeyCommand(
+            {
+              provider: "sample",
+              agent: "coder",
+              profileId,
+            },
+            createRuntime(),
+          ),
+        ).rejects.toThrow("uses an external secret reference");
+
+        expect(loadPersistedAuthProfileStore()?.profiles[profileId]).toEqual(external);
+        expect(loadPersistedAuthProfileStore(coderAgentDir)?.profiles[profileId]).toBeUndefined();
+        expect(mocks.callGateway).not.toHaveBeenCalled();
         expect(mocks.updateConfig).not.toHaveBeenCalled();
       });
     } finally {

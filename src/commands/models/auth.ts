@@ -74,6 +74,10 @@ import type { WizardPrompter } from "../../wizard/prompts.js";
 import { validateAnthropicSetupToken } from "../auth-token.js";
 import { repairCodexRuntimePluginInstallForModelSelection } from "../codex-runtime-plugin-install.js";
 import { repairCopilotRuntimePluginInstallForModelSelection } from "../copilot-runtime-plugin-install.js";
+import {
+  applyModelProviderApiKeyConnectionBinding,
+  resolveModelProviderApiKeySavePlan,
+} from "./auth-api-key.js";
 import { tryImportProviderCredential } from "./auth-credential-import.js";
 import {
   looksLikeOpenAIApiKey,
@@ -598,15 +602,12 @@ async function promotePersistedAuthProfile(params: {
   }
 }
 
-async function persistPastedAuthProfile(params: {
+function assertPastedAuthProfileDeclaration(params: {
   config: OpenClawConfig;
-  agentId: string;
-  agentDir: string;
   profileId: string;
   credential: AuthProfileCredential;
-  runtime: RuntimeEnv;
 }) {
-  const { agentId, agentDir, profileId, credential, config, runtime } = params;
+  const { profileId, credential, config } = params;
   const { provider } = credential;
   const { reasonCode } = resolveAuthProfileEligibility({
     cfg: config,
@@ -619,35 +620,18 @@ async function persistPastedAuthProfile(params: {
       `Auth profile ${profileId} conflicts with its global auth.profiles declaration (${reasonCode}). Nothing was saved. Use --profile-id with a distinct profile ID to keep the existing credential and configuration.`,
     );
   }
-  const apiKeyWriteOptions =
-    credential.type === "api_key"
-      ? {
-          preserveApiKeyMetadata: true,
-          validateCurrentCredential: (existing: AuthProfileCredential | undefined) => {
-            if (existing?.type === "api_key" && existing.keyRef) {
-              throw new Error(
-                "This API-key profile uses an external secret reference. Remove that saved sign-in before storing an inline key.",
-              );
-            }
-            if (
-              existing &&
-              (existing.type !== "api_key" ||
-                normalizeProviderId(existing.provider) !== normalizeProviderId(provider))
-            ) {
-              throw new Error(
-                "The API-key profile belongs to another sign-in. Manage that saved sign-in first.",
-              );
-            }
-          },
-        }
-      : {};
-  // The secret belongs to this agent; do not advertise it to peer auth routing.
-  await upsertAuthProfileWithLockOrThrow({
-    agentDir,
-    profileId,
-    credential,
-    ...apiKeyWriteOptions,
-  });
+}
+
+async function completePastedAuthProfile(params: {
+  config: OpenClawConfig;
+  agentId: string;
+  agentDir: string;
+  profileId: string;
+  provider: string;
+  credentialType: AuthProfileCredential["type"];
+  runtime: RuntimeEnv;
+}) {
+  const { agentId, agentDir, profileId, provider, credentialType, config, runtime } = params;
   // Creating a stored order from config would freeze this agent against later global edits.
   const promotion = await promoteAuthProfileInOrder({
     agentDir,
@@ -669,12 +653,35 @@ async function persistPastedAuthProfile(params: {
     provider,
   });
   await refreshRunningGatewayAuthState(agentId, "login", runtime);
-  runtime.log(`Auth profile: ${profileId} (${provider}/${credential.type})`);
+  runtime.log(`Auth profile: ${profileId} (${provider}/${credentialType})`);
   if (!order.includes(profileId)) {
     runtime.log(
       `Warning: Auth profile ${profileId} was saved but excluded by the configured auth selection for ${provider}. To select it for agent ${agentId}, run ${recovery}. This sets a per-agent order override; include any other profiles you want to keep.`,
     );
   }
+}
+
+async function persistPastedAuthProfile(params: {
+  config: OpenClawConfig;
+  agentId: string;
+  agentDir: string;
+  profileId: string;
+  credential: AuthProfileCredential;
+  runtime: RuntimeEnv;
+}) {
+  const { agentId, agentDir, profileId, credential, config, runtime } = params;
+  assertPastedAuthProfileDeclaration({ config, profileId, credential });
+  // The secret belongs to this agent; do not advertise it to peer auth routing.
+  await upsertAuthProfileWithLockOrThrow({ agentDir, profileId, credential });
+  await completePastedAuthProfile({
+    config,
+    agentId,
+    agentDir,
+    profileId,
+    provider: credential.provider,
+    credentialType: credential.type,
+    runtime,
+  });
 }
 
 async function runProviderAuthMethod(params: {
@@ -944,18 +951,34 @@ export async function modelsAuthPasteApiKeyCommand(
     },
   });
 
-  const profileId =
-    normalizeOptionalString(opts.profileId) || resolveDefaultTokenProfileId(provider);
-  await persistPastedAuthProfile({
+  const requestedProfileId = normalizeOptionalString(opts.profileId);
+  const credential: AuthProfileCredential = {
+    type: "api_key",
+    provider,
+    key,
+  };
+  const plan = await resolveModelProviderApiKeySavePlan({
+    config,
+    provider,
+    profileId: requestedProfileId,
+    agentDir,
+  });
+  assertPastedAuthProfileDeclaration({ config, profileId: plan.profileId, credential });
+  await upsertAuthProfileWithLockOrThrow({
+    agentDir: plan.agentDir,
+    profileId: plan.profileId,
+    credential,
+    preserveApiKeyMetadata: true,
+    validateCurrentCredential: plan.validateCurrentCredential,
+  });
+  await applyModelProviderApiKeyConnectionBinding(plan);
+  await completePastedAuthProfile({
     config,
     agentId,
-    profileId,
-    credential: {
-      type: "api_key",
-      provider,
-      key,
-    },
     agentDir,
+    profileId: plan.profileId,
+    provider,
+    credentialType: credential.type,
     runtime,
   });
 }
