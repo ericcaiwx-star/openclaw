@@ -4398,19 +4398,24 @@ describe("doctor legacy state migrations", () => {
     },
   );
 
-  it("reports an unused profile target without blocking a configured legacy workspace", async () => {
+  it("keeps two agents' explicitly configured profile workspaces without blocking", async () => {
     const root = makeDoctorStateDir();
     const paths = getProfileWorkspaceMigrationPaths(root);
     fs.mkdirSync(paths.legacyDir, { recursive: true });
     fs.mkdirSync(paths.targetDir, { recursive: true });
-    fs.writeFileSync(path.join(paths.legacyDir, "legacy.txt"), "configured", "utf8");
-    fs.writeFileSync(path.join(paths.targetDir, "current.txt"), "unused", "utf8");
+    fs.writeFileSync(path.join(paths.legacyDir, "legacy.txt"), "legacy-agent", "utf8");
+    fs.writeFileSync(path.join(paths.targetDir, "current.txt"), "current-agent", "utf8");
 
     const { result } = await runProfileWorkspaceDoctorMigration(root, "work", {
-      agents: { defaults: { workspace: paths.legacyDir } },
+      agents: {
+        entries: {
+          legacy: { workspace: paths.legacyDir },
+          current: { workspace: paths.targetDir },
+        },
+      },
     });
 
-    const notice = `Profile workspace: keeping configured workspace at ${paths.legacyDir}; ${paths.targetDir} is unused.`;
+    const notice = `Profile workspace: keeping configured workspace at ${paths.legacyDir}; existing workspace at ${paths.targetDir} was left unchanged.`;
     expect(result.notices).toEqual([notice]);
     expect(result.warnings).toEqual([]);
     expect(result.stepReceipts.find((receipt) => receipt.id === "profile-workspace")).toMatchObject(
@@ -4421,8 +4426,10 @@ describe("doctor legacy state migrations", () => {
         notices: [notice],
       },
     );
-    expect(fs.readFileSync(path.join(paths.legacyDir, "legacy.txt"), "utf8")).toBe("configured");
-    expect(fs.readFileSync(path.join(paths.targetDir, "current.txt"), "utf8")).toBe("unused");
+    expect(fs.readFileSync(path.join(paths.legacyDir, "legacy.txt"), "utf8")).toBe("legacy-agent");
+    expect(fs.readFileSync(path.join(paths.targetDir, "current.txt"), "utf8")).toBe(
+      "current-agent",
+    );
   });
 
   it("does nothing when the active profile has no legacy workspace", async () => {

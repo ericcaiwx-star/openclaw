@@ -139,7 +139,7 @@ export function migrateLegacyProfileWorkspace(params: {
             changes: [],
             warnings: [],
             notices: [
-              `Profile workspace: keeping configured workspace at ${legacyDir}; ${targetDir} is unused.`,
+              `Profile workspace: keeping configured workspace at ${legacyDir}; existing workspace at ${targetDir} was left unchanged.`,
             ],
           }
         : { changes: [], warnings: [] };
