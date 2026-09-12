@@ -98,6 +98,25 @@ describe("shared API-key editing and removal", () => {
     ).resolves.toMatchObject({ apiKey: "synthetic-new-key" });
   });
 
+  it("binds a configured provider without a key through the Gateway save path", async () => {
+    writeConfig({ models: { providers: { sample: connection } } });
+
+    expect(await save()).toBe("sample:manual");
+
+    expect(loadPersistedAuthProfileStore()?.profiles["sample:manual"]).toMatchObject({
+      type: "api_key",
+      provider: "sample",
+      key: "synthetic-new-key",
+    });
+    expect(
+      loadPersistedAuthProfileStore(agentDir("writer"))?.profiles["sample:manual"],
+    ).toBeUndefined();
+    expect((await readConfig()).models?.providers?.sample).toEqual({
+      ...connection,
+      apiKey: "sample:manual",
+    });
+  });
+
   it("uses stored key order and preserves the unselected sibling", async () => {
     for (const [profileId, key] of [
       ["sample:work", "old-work"],

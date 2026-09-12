@@ -51,6 +51,7 @@ export async function resolveModelProviderApiKeySavePlan(params: {
   provider: string;
   profileId?: string;
   agentDir: string;
+  bindUnconfiguredProvider?: boolean;
 }) {
   const provider = normalizeManualAuthProvider(params.provider);
   const validateCurrentCredential = (existing: AuthProfileCredential | undefined) => {
@@ -68,12 +69,17 @@ export async function resolveModelProviderApiKeySavePlan(params: {
       );
     }
   };
-  const connectionId = params.profileId
+  const configuredConnectionId = params.profileId
     ? undefined
     : resolveConfiguredApiKeyConnectionId(params.config, provider);
-  const connectionBinding = connectionId
-    ? resolveConfiguredApiKeyBinding(params.config, connectionId)
+  const configuredConnectionBinding = configuredConnectionId
+    ? resolveConfiguredApiKeyBinding(params.config, configuredConnectionId)
     : undefined;
+  const connectionId =
+    configuredConnectionBinding === undefined && !params.bindUnconfiguredProvider
+      ? undefined
+      : configuredConnectionId;
+  const connectionBinding = connectionId ? configuredConnectionBinding : undefined;
   const store = ensureAuthProfileStoreWithoutExternalProfiles(params.agentDir);
   const replacementId = !connectionId
     ? resolveAuthProfileOrder({ cfg: params.config, store, provider }).find((id) => {
@@ -147,10 +153,10 @@ export async function applyModelProviderApiKeyConnectionBinding(
   plan: Awaited<ReturnType<typeof resolveModelProviderApiKeySavePlan>>,
 ): Promise<void> {
   const connectionId = plan.connectionId;
-  if (!connectionId || isDeepStrictEqual(plan.connectionBinding, plan.profileId)) {
+  if (!connectionId) {
     return;
   }
-  await updateConfig((current) => {
+  const assertConnectionUnchanged = (current: OpenClawConfig) => {
     const id = resolveConfiguredApiKeyConnectionId(current, plan.provider);
     if (
       id !== connectionId ||
@@ -162,30 +168,39 @@ export async function applyModelProviderApiKeyConnectionBinding(
       );
     }
     plan.validateSharedBinding();
-    const connection = current.models?.providers?.[connectionId];
-    if (!connection) {
-      throw new Error(
-        "The provider connection changed during the key update. Reopen the connection and save the key again",
-      );
+  };
+  try {
+    if (isDeepStrictEqual(plan.connectionBinding, plan.profileId)) {
+      assertConnectionUnchanged((await loadValidConfigSnapshotOrThrow()).runtimeConfig);
+      return;
     }
-    return {
-      ...current,
-      models: {
-        ...current.models,
-        providers: {
-          ...current.models?.providers,
-          [connectionId]: { ...connection, apiKey: plan.profileId },
+    await updateConfig((current) => {
+      assertConnectionUnchanged(current);
+      const connection = current.models?.providers?.[connectionId];
+      if (!connection) {
+        throw new Error(
+          "The provider connection changed during the key update. Reopen the connection and save the key again",
+        );
+      }
+      return {
+        ...current,
+        models: {
+          ...current.models,
+          providers: {
+            ...current.models?.providers,
+            [connectionId]: { ...connection, apiKey: plan.profileId },
+          },
         },
-      },
-    };
-  }).catch((error: unknown) => {
+      };
+    });
+  } catch (error: unknown) {
     throw new Error(
       "API key saved, but provider settings could not be applied: " +
         (error instanceof Error ? error.message : String(error)) +
         ". Reopen Models and save the key again.",
       { cause: error },
     );
-  });
+  }
 }
 
 /** Saves a manual key without changing model selection or connection settings. */
@@ -213,6 +228,7 @@ export async function saveModelProviderApiKey(params: {
     provider,
     profileId: params.profileId,
     agentDir: params.agentDir,
+    bindUnconfiguredProvider: true,
   });
   await upsertAuthProfileWithLockOrThrow({
     profileId: plan.profileId,
