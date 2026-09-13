@@ -6,6 +6,7 @@ import { getGatewayContextResolver } from "../../../plugins/runtime/gateway-requ
 import { runWithGatewayIndependentRootWorkAdmission } from "../../../process/gateway-work-admission.js";
 import { emitSessionLifecycleEvent } from "../../../sessions/session-lifecycle-events.js";
 import { createLazyImportLoader } from "../../../shared/lazy-promise.js";
+import { normalizeDeleteCleanupTarget } from "./subagent-delivery-state.js";
 import { SUBAGENT_ENDED_REASON_ERROR } from "./subagent-lifecycle-events.js";
 import { shouldSuppressSubagentRecoverySessionEffects } from "./subagent-recovery-state.js";
 import type { createSubagentRegistryCompletionRuntime } from "./subagent-registry-completion-runtime.js";
@@ -32,8 +33,12 @@ import type {
   ContextEngineSubagentEndedParams,
   SubagentRunRecord,
 } from "./subagent-registry.types.js";
-import { hasSubagentRunEnded, isStaleUnendedSubagentRun } from "./subagent-run-liveness.js";
-import { deleteSubagentSessionForCleanup } from "./subagent-session-cleanup.js";
+import {
+  hasDispatchedDeleteCleanup,
+  hasSubagentRunEnded,
+  isStaleUnendedSubagentRun,
+} from "./subagent-run-liveness.js";
+import { deleteSubagentSessionForCleanupOrThrow } from "./subagent-session-cleanup.js";
 import {
   loadSubagentSessionEntry,
   resolveCompletionFromSessionEntry,
@@ -185,22 +190,14 @@ export function createSubagentRegistrySweeper(params: {
     entry: SubagentRunRecord,
     identity: FrozenSessionIdentity,
   ): Promise<"deleted" | "changed"> {
-    let failure: unknown;
-    const outcome = await deleteSubagentSessionForCleanup({
+    return deleteSubagentSessionForCleanupOrThrow({
       callGateway: params.callGateway,
       gatewayBinding: { resolveGatewayContext: getGatewayContextResolver(entry) },
       isCurrent: () => runs.get(entry.runId) === entry,
       childSessionKey: entry.childSessionKey,
       expectedSessionId: identity.sessionId,
       expectedLifecycleRevision: identity.lifecycleRevision,
-      onError: (error) => {
-        failure = error;
-      },
     });
-    if (outcome === "failed") {
-      throw failure;
-    }
-    return outcome;
   }
 
   const sweptContext = (entry: SubagentRunRecord) => ({
@@ -532,11 +529,22 @@ export function createSubagentRegistrySweeper(params: {
         params.clearPendingLifecycleError(runId);
         const suppressSessionEffects = shouldSuppressSubagentRecoverySessionEffects(entry);
         let sessionOwnershipChanged = false;
-        if (!suppressSessionEffects) {
+        // A completed dispatch already removed the original child. An unfinished
+        // dispatch retries only its persisted identity; resolving the live
+        // same-key row here could delete a successor. Legacy stamp-only rows
+        // therefore remain a no-delete fence.
+        const dispatchedCleanupTarget =
+          hasDispatchedDeleteCleanup(entry) && entry.cleanupCompletedAt === undefined
+            ? normalizeDeleteCleanupTarget(entry.deleteCleanupTarget)
+            : undefined;
+        const shouldDeleteSession =
+          !suppressSessionEffects &&
+          (!hasDispatchedDeleteCleanup(entry) || dispatchedCleanupTarget !== undefined);
+        if (shouldDeleteSession) {
           if (!cleanupIdentities.has(entry)) {
             continue;
           }
-          const sessionIdentity = cleanupIdentities.get(entry);
+          const sessionIdentity = dispatchedCleanupTarget ?? cleanupIdentities.get(entry);
           if (!sessionIdentity) {
             sessionOwnershipChanged = true;
           } else {
@@ -558,7 +566,9 @@ export function createSubagentRegistrySweeper(params: {
         runs.delete(runId);
         mutatedRunIds.add(runId);
         await safeRemoveAttachmentsDir(entry);
-        if (!suppressSessionEffects && !sessionOwnershipChanged) {
+        // Completed deletes already notified the engine at settlement. Expiry
+        // must not replay that key-based effect against a same-key successor.
+        if (shouldDeleteSession && !sessionOwnershipChanged) {
           runCleanupTail(runId, "context-engine cleanup", () =>
             params.notifyContextEngineSubagentEnded(sweptContext(entry)),
           );

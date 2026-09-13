@@ -246,6 +246,7 @@ export function resolveSessionChildOwners(params: {
         activeDescendants: subagentRuns
           ? subagentRuns.countActiveDescendantRuns(key)
           : countActiveDescendantRuns(key),
+        childSessionExists: true,
         now,
       })
     : shouldKeepStoreOnlyChildLink(entry, now);

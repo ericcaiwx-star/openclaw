@@ -44,7 +44,10 @@ import {
   resolveRequesterForChildSession,
   shouldIgnorePostCompletionAnnounceForSession,
 } from "../registry/subagent-registry-read.js";
-import { deleteSubagentSessionForCleanup } from "../registry/subagent-session-cleanup.js";
+import {
+  deleteSubagentSessionForCleanup,
+  type SubagentSessionCleanupOutcome,
+} from "../registry/subagent-session-cleanup.js";
 import { getSubagentDepthFromSessionStore } from "../spawn/subagent-depth.js";
 import type { SpawnSubagentMode } from "../spawn/subagent-spawn.types.js";
 import {
@@ -192,6 +195,8 @@ type SubagentAnnounceFlowParams = {
   announceType?: SubagentAnnounceType;
   expectsCompletionMessage?: boolean;
   spawnMode?: SpawnSubagentMode;
+  /** Frozen delete identity from the cleanup owner; do not reload a successor. */
+  expectedDeleteTarget?: { sessionId: string; lifecycleRevision: string };
   wakeOnDescendantSettle?: boolean;
   /** Deliver only frozen terminal facts; never inspect or mutate the child session. */
   suppressChildSessionEffects?: boolean;
@@ -204,6 +209,7 @@ type SubagentAnnounceFlowParams = {
   bestEffortDeliver?: boolean;
   onDeliveryResult?: (delivery: SubagentAnnounceDeliveryResult) => void;
   onBeforeDeleteChildSession?: () => boolean;
+  onChildSessionDeleteOutcome?: (outcome: SubagentSessionCleanupOutcome) => void;
   resolveGatewayContext?: import("../../../gateway/server-methods/types.js").GatewayContextResolver;
 };
 
@@ -652,14 +658,16 @@ async function runSubagentAnnounceFlowBound(
       childSessionEffectsAllowed() &&
       (params.onBeforeDeleteChildSession?.() ?? true)
     ) {
-      await deleteSubagentSessionForCleanup({
+      const sessionCleanup = await deleteSubagentSessionForCleanup({
         callGateway: subagentAnnounceDeps.callGateway,
         isCurrent: childSessionEffectsAllowed,
         childSessionKey: params.childSessionKey,
         spawnMode: params.spawnMode,
-        expectedSessionId: childSessionId,
-        expectedLifecycleRevision: childSessionLifecycleRevision,
+        expectedSessionId: params.expectedDeleteTarget?.sessionId ?? childSessionId,
+        expectedLifecycleRevision:
+          params.expectedDeleteTarget?.lifecycleRevision ?? childSessionLifecycleRevision,
       });
+      params.onChildSessionDeleteOutcome?.(sessionCleanup);
     }
   }
   return announceOutcome;

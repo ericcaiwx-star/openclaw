@@ -727,16 +727,17 @@ describe("subagent registry persistence", () => {
         "held settlement still owns root work",
       ).toBeGreaterThan(0);
       if (cleanup === "delete") {
-        expect(
-          delivered?.requesterSettleWake?.retireAfterSettle,
-          "delete waits for real settlement",
-        ).toBe(true);
+        // Archive retention owns retirement; settlement must not drop the row.
+        expect(delivered?.requesterSettleWake?.retireAfterSettle).toBeUndefined();
+        expect(delivered?.archiveAtMs).toBeGreaterThan(Date.now());
       }
       await settlement.release();
       expect(settlement.run).toHaveBeenCalledOnce();
       const afterSecond = readPersistedRegistry();
       if (cleanup === "delete") {
-        expect(afterSecond.runs[runId], "settled delete retires its durable row").toBeUndefined();
+        expect(afterSecond.runs[runId]).toMatchObject({
+          delivery: { status: "delivered" },
+        });
       } else {
         expect(afterSecond.runs[runId]?.cleanupCompletedAt).toBeGreaterThanOrEqual(beforeRetry);
       }
@@ -909,7 +910,7 @@ describe("subagent registry persistence", () => {
     });
   });
 
-  it("removes attachments after canonical orphan completion", async () => {
+  it("removes attachments while retaining canonical orphan completion until archive", async () => {
     tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-subagent-"));
     setTestEnvValue("OPENCLAW_STATE_DIR", tempStateDir);
     const attachmentsRootDir = path.join(tempStateDir, "attachments");
@@ -942,7 +943,13 @@ describe("subagent registry persistence", () => {
 
     await expect(fs.access(attachmentsDir)).rejects.toHaveProperty("code", "ENOENT");
     const after = readPersistedRegistry();
-    expect(after.runs?.["run-orphan-attachments"]).toBeUndefined();
+    expect(after.runs?.["run-orphan-attachments"]).toMatchObject({
+      cleanup: "delete",
+      cleanupHandled: true,
+      execution: { status: "terminal" },
+    });
+    expect(after.runs?.["run-orphan-attachments"]?.cleanupCompletedAt).toEqual(expect.any(Number));
+    expect(after.runs?.["run-orphan-attachments"]?.archiveAtMs).toEqual(expect.any(Number));
   });
 
   it("prefers active runs and can resolve them from persisted registry snapshots", async () => {
