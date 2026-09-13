@@ -2322,14 +2322,16 @@ describe("subagent registry lifecycle hardening", () => {
     );
   });
 
-  it("persists a no-delete fence when already-delivered cleanup lacks an identity", async () => {
+  it("does not bind already-delivered cleanup to a same-key successor", async () => {
     const entry = createRunEntry({
       cleanup: "delete",
       delivery: { status: "delivered", announcedAt: 3_500, deliveredAt: 3_500 },
       endedAt: 4_000,
     });
     sessionReconciliationMocks.loadSubagentSessionEntry.mockReset().mockReturnValue({
-      sessionId: "child-session-id",
+      sessionId: "successor-session-id",
+      lifecycleRevision: "successor-lifecycle-revision",
+      updatedAt: 4_100,
     });
     const controller = createLifecycleController({ entry });
 
@@ -4379,11 +4381,21 @@ describe("subagent registry lifecycle hardening", () => {
     expect(persist).toHaveBeenCalled();
   });
 
-  it("persists the delete identity before retrying an already-delivered cleanup", async () => {
+  it("retries already-delivered cleanup only against its persisted delete identity", async () => {
     const entry = createRunEntry({
       cleanup: "delete",
       delivery: { status: "delivered", announcedAt: 3_500, deliveredAt: 3_500 },
       endedAt: 4_000,
+      deleteCleanupDispatchedAt: 3_600,
+      deleteCleanupTarget: {
+        sessionId: "original-session-id",
+        lifecycleRevision: "original-lifecycle-revision",
+      },
+    });
+    sessionReconciliationMocks.loadSubagentSessionEntry.mockReset().mockReturnValue({
+      sessionId: "successor-session-id",
+      lifecycleRevision: "successor-lifecycle-revision",
+      updatedAt: 4_100,
     });
     const gatewayContext = { marker: "delivered-retry-owner" };
     bindGatewayContextResolver(entry, () => gatewayContext as never);
@@ -4411,12 +4423,107 @@ describe("subagent registry lifecycle hardening", () => {
     expect(dispatchSnapshot).toMatchObject({
       deleteCleanupDispatchedAt: expect.any(Number),
       deleteCleanupTarget: {
-        sessionId: "child-session-id",
-        lifecycleRevision: "child-lifecycle-revision",
+        sessionId: "original-session-id",
+        lifecycleRevision: "original-lifecycle-revision",
       },
     });
     expect(dispatchSnapshot?.cleanupCompletedAt).toBeUndefined();
-    expect(gatewayMocks.callGateway).toHaveBeenCalledOnce();
+    expect(gatewayMocks.callGateway).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "sessions.delete",
+        params: expect.objectContaining({
+          expectedSessionId: "original-session-id",
+          expectedLifecycleRevision: "original-lifecycle-revision",
+        }),
+      }),
+    );
+  });
+
+  it("persists successful delivery with the exact delete identity", async () => {
+    const entry = createRunEntry({ cleanup: "delete", expectsCompletionMessage: true });
+    const persistedSnapshots: SubagentRunRecord[] = [];
+    const runSubagentAnnounceFlow: LifecycleControllerParams["runSubagentAnnounceFlow"] = vi.fn(
+      async (announceParams) => {
+        announceParams.onDeliveryResult?.({
+          delivered: true,
+          path: "direct",
+          deliveredAt: 3_500,
+        });
+        return "delivered" as const;
+      },
+    );
+    const controller = createLifecycleController({
+      entry,
+      persistOrThrow: vi.fn(() => persistedSnapshots.push(structuredClone(entry))),
+      runSubagentAnnounceFlow,
+    });
+
+    await expect(
+      completeRun(controller, entry, {
+        triggerCleanup: true,
+        terminalReply: { disposition: "visible", text: "final completion reply" },
+      }),
+    ).resolves.toBeUndefined();
+    await waitForLifecycleState(() => expect(entry.cleanupCompletedAt).toBeTypeOf("number"));
+
+    expect(persistedSnapshots).toContainEqual(
+      expect.objectContaining({
+        delivery: expect.objectContaining({ status: "delivered", deliveredAt: 3_500 }),
+        deleteCleanupDispatchedAt: expect.any(Number),
+        deleteCleanupTarget: {
+          sessionId: "child-session-id",
+          lifecycleRevision: "child-lifecycle-revision",
+        },
+      }),
+    );
+  });
+
+  it("retries the frozen delivery identity before delete after a transient store failure", async () => {
+    const entry = createRunEntry({ cleanup: "delete", expectsCompletionMessage: true });
+    let failNextPersist = false;
+    const persistOrThrow = vi.fn(() => {
+      if (failNextPersist) {
+        failNextPersist = false;
+        throw new Error("registry store boom");
+      }
+    });
+    const runSubagentAnnounceFlow: LifecycleControllerParams["runSubagentAnnounceFlow"] = vi.fn(
+      async (announceParams) => {
+        failNextPersist = true;
+        expect(() =>
+          announceParams.onDeliveryResult?.({
+            delivered: true,
+            path: "direct",
+            deliveredAt: 3_500,
+          }),
+        ).toThrow("registry store boom");
+        expect(entry.deleteCleanupTarget).toEqual({
+          sessionId: "child-session-id",
+          lifecycleRevision: "child-lifecycle-revision",
+        });
+        expect(announceParams.onBeforeDeleteChildSession?.()).toBe(true);
+        return "delivered" as const;
+      },
+    );
+    const controller = createLifecycleController({
+      entry,
+      persistOrThrow,
+      runSubagentAnnounceFlow,
+    });
+
+    await expect(
+      completeRun(controller, entry, {
+        triggerCleanup: true,
+        terminalReply: { disposition: "visible", text: "final completion reply" },
+      }),
+    ).resolves.toBeUndefined();
+    await waitForLifecycleState(() => expect(entry.cleanupCompletedAt).toBeTypeOf("number"));
+
+    expect(persistOrThrow.mock.calls.length).toBeGreaterThanOrEqual(2);
+    expect(entry.deleteCleanupTarget).toEqual({
+      sessionId: "child-session-id",
+      lifecycleRevision: "child-lifecycle-revision",
+    });
   });
 
   it("emits ended hook while retrying cleanup after completion was already delivered", async () => {

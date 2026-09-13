@@ -54,6 +54,20 @@ export function persistDeleteCleanupDispatch(
   }
 }
 
+/** Keeps a delivered cleanup bound to its original identity when persistence is retryable. */
+export function persistDeliveredDeleteCleanupDispatch(
+  entry: SubagentRunRecord,
+  target: SubagentDeleteCleanupTarget,
+  persistOrThrow: () => void,
+): void {
+  try {
+    persistDeleteCleanupDispatch(entry, target, persistOrThrow);
+  } catch (error) {
+    assignDeleteCleanupDispatch(entry, target);
+    throw error;
+  }
+}
+
 /** Releases a confirmed session-changed rejection so restart cannot retry that delete. */
 function clearDeleteCleanupDispatch(entry: SubagentRunRecord): void {
   entry.deleteCleanupDispatchedAt = undefined;

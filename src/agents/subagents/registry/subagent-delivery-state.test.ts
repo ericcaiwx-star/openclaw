@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   normalizeSubagentRunState,
   persistChangedDeleteCleanupFence,
+  persistDeliveredDeleteCleanupDispatch,
   persistDeleteCleanupDispatch,
   persistSuppressedSubagentSessionEffects,
 } from "./subagent-delivery-state.js";
@@ -42,6 +43,20 @@ describe("delete-cleanup persistence fences", () => {
     ).toThrow("registry store boom");
     expect(entry.deleteCleanupDispatchedAt).toBeUndefined();
     expect(entry.deleteCleanupTarget).toBeUndefined();
+  });
+
+  it("keeps a delivered delete identity in memory for persistence retry", () => {
+    const entry = baseRun({ cleanup: "delete", delivery: { status: "delivered" } });
+    const target = { sessionId: "original-child", lifecycleRevision: "original-revision" };
+    const persistOrThrow = () => {
+      throw new Error("registry store boom");
+    };
+
+    expect(() => persistDeliveredDeleteCleanupDispatch(entry, target, persistOrThrow)).toThrow(
+      "registry store boom",
+    );
+    expect(entry.deleteCleanupDispatchedAt).toEqual(expect.any(Number));
+    expect(entry.deleteCleanupTarget).toEqual(target);
   });
 
   it("rolls back a missing-identity fence when durable persistence fails", () => {
