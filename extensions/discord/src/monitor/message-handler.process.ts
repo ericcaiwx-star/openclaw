@@ -155,6 +155,9 @@ export async function processDiscordMessage(
     return;
   }
   const { ctxPayload, persistedSessionKey, record, replyPlan } = processContext;
+  // Admission stays owned by the Discord source session, while bound-thread
+  // delivery still needs the ACP target to recover its label, avatar, and thread address.
+  const replyDeliverySessionKey = ctx.boundSessionKey ?? ctxPayload.SessionKey;
   let deliverTarget = replyPlan.deliverTarget;
   const activeThreadRoute = createDiscordMessageActiveThreadRoute({
     sessionKey: ctxPayload.SessionKey,
@@ -283,7 +286,7 @@ export async function processDiscordMessage(
       maxLinesPerMessage,
       tableMode,
       chunkMode,
-      sessionKey: deliverySession?.sessionKey ?? ctxPayload.SessionKey,
+      sessionKey: deliverySession?.sessionKey ?? replyDeliverySessionKey,
       threadBindings,
       mediaLocalRoots: deliverySession
         ? getAgentScopedMediaLocalRoots(cfg, deliverySession.agentId)
