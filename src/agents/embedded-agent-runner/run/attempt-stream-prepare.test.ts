@@ -1,7 +1,11 @@
 import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createMessageInjectionAuthority } from "../../../auto-reply/reply/message-injection-authority.js";
-import { createReplyOperation } from "../../../auto-reply/reply/reply-run-registry.js";
+import {
+  claimPendingReplyMessageInjectionTarget,
+  createReplyOperation,
+  replyRunRegistry,
+} from "../../../auto-reply/reply/reply-run-registry.js";
 import { expireStaleReplyOperation } from "../../../auto-reply/reply/reply-run-registry.state.js";
 import { CliPluginInvocationResources } from "../../../cli/plugin-invocation-resources.js";
 import { resolveDefaultSessionStorePath } from "../../../config/sessions/paths.js";
@@ -232,6 +236,7 @@ describe("prepareEmbeddedAttemptStream", () => {
     ["source-recovered-throw", "steering"],
     ["source-recovered-false", "question"],
     ["source-recovered-throw", "question"],
+    ["caller-mismatch", "question"],
   ] as const)(
     "checks %s during real session %s preparation before its effect",
     async (transition, route) => {
@@ -243,6 +248,12 @@ describe("prepareEmbeddedAttemptStream", () => {
           runId: "run-output-schema",
           ingress: { kind: "system", state: "present", boundary: "queue-test" },
         },
+      });
+      const operation = createReplyOperation({
+        sessionKey: "agent:main:main",
+        sessionId: "session-output-schema",
+        turnKind: "visible",
+        resetTriggered: false,
       });
       try {
         const admittedRunContext = await admission.admit("embedded", "queue-test");
@@ -261,6 +272,16 @@ describe("prepareEmbeddedAttemptStream", () => {
           },
           undefined,
           async (preparedAttempt) => {
+            const toolAuthorityFingerprint = preparedAttempt.toolAuthorityFingerprint;
+            if (!toolAuthorityFingerprint) {
+              throw new Error("expected prepared tool authority fingerprint");
+            }
+            operation.bindToolAuthoritySnapshot({
+              fingerprint: () => toolAuthorityFingerprint,
+              project: () =>
+                transition === "caller-mismatch" ? "lower-authority" : toolAuthorityFingerprint,
+            });
+            operation.bindToolAuthorityRoute({ provider: "test-provider", model: "test-model" });
             const { session } = await createTestSession();
             const started = createDeferredCore();
             const release = createDeferredCore();
@@ -301,8 +322,9 @@ describe("prepareEmbeddedAttemptStream", () => {
             const queued = vi.spyOn(session.agent, "steer");
             const prepared = prepareCatalogExecutor([], {
               activeSession: session,
-              attempt: preparedAttempt,
+              attempt: { ...preparedAttempt, replyOperation: operation },
             });
+            operation.setPhase("running");
             let sourceCurrent = true;
             const assertCurrent = createMessageInjectionAuthority(() => {
               if (!sourceCurrent && transition.includes("throw")) {
@@ -310,22 +332,44 @@ describe("prepareEmbeddedAttemptStream", () => {
               }
               return sourceCurrent;
             });
-            const delivery = prepared.queueHandle.messageInjectionV2!.queueMessage(
-              "redirect the original",
-              {
-                isInboundUserMessage: true,
-                userTurnTranscriptRecorder: recorder,
-                toolAuthorityFingerprint: preparedAttempt.toolAuthorityFingerprint,
-              },
-              assertCurrent,
-              "source-bound",
-            );
+            const questionClaim =
+              route === "question"
+                ? vi.spyOn(prepared.queueHandle.messageInjectionV2!, "claimPendingUserInputAnswer")
+                : undefined;
+            const delivery =
+              route === "question"
+                ? claimPendingReplyMessageInjectionTarget({
+                    target: replyRunRegistry.resolveCurrentMessageInjectionTarget(operation.key)!,
+                    text: "redirect the original",
+                    options: {
+                      isInboundUserMessage: true,
+                      userTurnTranscriptRecorder: recorder,
+                      toolAuthorityOverlay: {
+                        senderIsOwner: true,
+                        disableTools: false,
+                        traceAuthorized: false,
+                      },
+                    },
+                    assertSourceCurrent: assertCurrent,
+                  })
+                : prepared.queueHandle.messageInjectionV2!.queueMessage(
+                    "redirect the original",
+                    {
+                      isInboundUserMessage: true,
+                      userTurnTranscriptRecorder: recorder,
+                      toolAuthorityFingerprint: preparedAttempt.toolAuthorityFingerprint,
+                    },
+                    assertCurrent,
+                    "source-bound",
+                  );
             const outcome = delivery.then(
               () => "accepted",
               () => "rejected",
             );
             try {
-              await started.promise;
+              if (transition !== "caller-mismatch") {
+                await started.promise;
+              }
               if (transition === "claim") {
                 admission.close();
               } else if (transition === "replacement") {
@@ -349,6 +393,9 @@ describe("prepareEmbeddedAttemptStream", () => {
               expect(await outcome).toBe(accepted ? "accepted" : "rejected");
               expect(queued).toHaveBeenCalledTimes(accepted && route === "steering" ? 1 : 0);
               expect(gatewayCall).toHaveBeenCalledTimes(accepted && route === "question" ? 1 : 0);
+              if (questionClaim) {
+                expect(questionClaim).toHaveBeenCalledOnce();
+              }
               expect(session.getSteeringMessages()).toEqual(
                 accepted && route === "steering" ? ["redirect the original"] : [],
               );
@@ -373,6 +420,7 @@ describe("prepareEmbeddedAttemptStream", () => {
         );
       } finally {
         admission.close();
+        operation.complete();
       }
     },
   );

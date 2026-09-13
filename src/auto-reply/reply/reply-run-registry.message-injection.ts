@@ -471,7 +471,7 @@ export async function claimPendingReplyMessageInjectionTarget(params: {
     );
   };
   const assertCurrent = createMessageInjectionAuthority(canInject);
-  const assertClaimCurrent = () => {
+  const assertTargetCurrent = () => {
     try {
       assertCurrent();
     } catch (error) {
@@ -481,7 +481,7 @@ export async function claimPendingReplyMessageInjectionTarget(params: {
       );
     }
   };
-  assertClaimCurrent();
+  assertTargetCurrent();
   try {
     if (!guarded.isAvailable()) {
       return false;
@@ -495,17 +495,22 @@ export async function claimPendingReplyMessageInjectionTarget(params: {
   const creatorToolAuthorityFingerprint = normalizeOptionalString(
     backend.toolAuthorityFingerprint ?? operation.toolAuthorityFingerprint,
   );
-  if (
-    !creatorToolAuthorityFingerprint ||
-    projectedToolAuthorityFingerprint !== creatorToolAuthorityFingerprint
-  ) {
-    throw new QuestionDispatchRefusedError(
-      "question answer caller policy does not match its creator",
-    );
-  }
-  // Projection may invoke host policy. Recheck the exact source and operation
-  // after preparation so revocation or reassignment cannot reach backend I/O.
-  assertClaimCurrent();
+  const assertClaimCurrent = () => {
+    assertTargetCurrent();
+    if (
+      !creatorToolAuthorityFingerprint ||
+      projectedToolAuthorityFingerprint !== creatorToolAuthorityFingerprint
+    ) {
+      throw new QuestionDispatchRefusedError(
+        "question answer caller policy does not match its creator",
+      );
+    }
+    assertTargetCurrent();
+  };
+  // An absent question must fall through as an ordinary message. V2 sinks call
+  // this assertion only after they find and reserve a real pending input, then
+  // again at final I/O; projection itself still receives an immediate liveness check.
+  assertTargetCurrent();
   return guarded.claimPendingUserInputAnswer(
     params.text,
     {

@@ -2127,8 +2127,17 @@ describe("reply run registry", () => {
     );
   });
 
-  it("rejects a lower-authority caller before invoking the V2 question backend", async () => {
-    const claimPendingUserInputAnswer = vi.fn(async () => true);
+  it("rejects a lower-authority caller before V2 question-resolution I/O", async () => {
+    const claimPendingUserInputAnswer = vi.fn(
+      async (
+        _text: string,
+        _options: ReplyBackendQueueMessageOptions | undefined,
+        assertCurrent: () => void,
+      ) => {
+        assertCurrent();
+        return true;
+      },
+    );
     const operation = createTestReplyOperation({ sessionId: "session-question-denied" });
     operation.bindToolAuthoritySnapshot({
       fingerprint: () => "creator-authority",
@@ -2165,7 +2174,48 @@ describe("reply run registry", () => {
         assertSourceCurrent: () => {},
       }),
     ).rejects.toBeInstanceOf(QuestionDispatchRefusedError);
-    expect(claimPendingUserInputAnswer).not.toHaveBeenCalled();
+    expect(claimPendingUserInputAnswer).toHaveBeenCalledOnce();
+  });
+
+  it("lets a differing-authority ordinary message fall through without a pending question", async () => {
+    const claimPendingUserInputAnswer = vi.fn(async () => false);
+    const operation = createTestReplyOperation({ sessionId: "session-no-question" });
+    operation.bindToolAuthoritySnapshot({
+      fingerprint: () => "creator-authority",
+      project: () => "lower-authority",
+    });
+    operation.bindToolAuthorityRoute({ provider: "test", model: "test" });
+    operation.attachBackend({
+      kind: "embedded",
+      runId: "run-no-question",
+      toolAuthorityFingerprint: "creator-authority",
+      cancel: vi.fn(),
+      messageInjectionV2: {
+        version: 2,
+        isAvailable: () => true,
+        queueMessage: vi.fn(async () => {}),
+        claimPendingUserInputAnswer,
+      },
+    });
+    operation.setPhase("running");
+    const target = replyRunRegistry.resolveCurrentMessageInjectionTarget(operation.key)!;
+
+    await expect(
+      claimPendingReplyMessageInjectionTarget({
+        target,
+        text: "ordinary follow-up",
+        options: {
+          isInboundUserMessage: true,
+          toolAuthorityOverlay: {
+            senderIsOwner: false,
+            disableTools: false,
+            traceAuthorized: false,
+          },
+        },
+        assertSourceCurrent: () => {},
+      }),
+    ).resolves.toBe(false);
+    expect(claimPendingUserInputAnswer).toHaveBeenCalledOnce();
   });
 
   it("rejects a lower-authority question registered between host lookup and V2 fallback", async () => {
@@ -2238,7 +2288,7 @@ describe("reply run registry", () => {
     question.attachRegistration(Promise.resolve());
     try {
       await expect(claim).rejects.toBeInstanceOf(QuestionDispatchRefusedError);
-      expect(backendClaim).not.toHaveBeenCalled();
+      expect(backendClaim).toHaveBeenCalledOnce();
       expect(questionResolve).not.toHaveBeenCalled();
     } finally {
       question.dispose();
