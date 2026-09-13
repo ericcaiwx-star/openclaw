@@ -476,6 +476,7 @@ function prepareStream(
       attempt.sessionKey,
       composeInjectionGuard(assertCurrent),
       questionAuthority(assertCurrent, authorityKind),
+      attempt.toolAuthorityFingerprint,
     );
   const cancelPendingUserInput = (
     resolvedBy: string,
@@ -494,8 +495,6 @@ function prepareStream(
     claimPendingUserInputAnswer,
     cancelPendingUserInput,
   };
-  const heartbeatReplyOperation =
-    attempt.replyOperation?.turnKind === "heartbeat" ? attempt.replyOperation : undefined;
   const applyPermissionMode = input.applyPermissionMode;
   const queueHandle: AttemptStreamQueueHandle = {
     kind: "embedded",
@@ -531,9 +530,10 @@ function prepareStream(
       : undefined,
     claimPendingUserInputAnswer,
     cancelPendingUserInput,
-    preemptByVisibleTurn: heartbeatReplyOperation
-      ? () => heartbeatReplyOperation.supersede()
-      : undefined,
+    preemptByVisibleTurn:
+      attempt.replyOperation?.turnKind === "heartbeat"
+        ? () => Boolean(attempt.replyOperation?.supersede())
+        : undefined,
     queueMessage,
     messageInjection,
     messageInjectionV2: messageInjection,

@@ -603,11 +603,13 @@ raw callback string. Actor and source-message checks remain channel-owned.
     ```
 
     Do not pre-claim raw text outside normal dispatch. Sending every event through
-    core after admission preserves `/stop`, `/new`, and `/reset` routing, pending
-    question creator authority, input custody, and existing queue/steer/fence
-    behavior. When a pending question accepts the text, core consumes it without
-    starting or replaying a second agent turn. With no pending question, ordinary
-    dispatch behavior is unchanged.
+    the official channel inbound dispatch preserves `/stop`, `/new`, and `/reset`
+    routing, pending question creator authority, input custody, and existing
+    queue/steer/fence behavior. After fast control-command handling and before
+    admitting a successor reply operation, core offers eligible plain text to the
+    active run's pending `ask_user` or `secrets` request. When that request accepts
+    the text, core consumes it without starting or replaying a second agent turn.
+    With no pending request, ordinary dispatch behavior is unchanged.
 
     Routes registered with `auth: "gateway"` use the Gateway's credential
     checks. Before a handler discloses protected data, performs a mutation, or starts other side effects,

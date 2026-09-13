@@ -228,7 +228,9 @@ export async function claimPendingAgentQuestionAnswerFromCaller(params: {
   text: string;
   persist?: () => Promise<void>;
   sourceRecorder?: UserTurnTranscriptRecorder;
-  caller: ReplyToolAuthorityOverlay;
+  caller?: ReplyToolAuthorityOverlay;
+  callerFingerprint?: string;
+  creatorFingerprint?: string;
   assertSourceCurrent: () => void;
   onAnswerProcessed?: () => void;
 }): Promise<boolean> {
@@ -244,14 +246,19 @@ export async function claimPendingAgentQuestionAnswerFromCaller(params: {
         assertCurrent: () => {
           try {
             params.assertSourceCurrent();
-            if (state) {
+            if (state && params.caller) {
               if (!state.answerAuthority) {
                 throw new Error("pending question has no prepared creator authority");
               }
               state.answerAuthority.assertCaller(params.caller);
-              if (pendingAgentQuestions.get(state.sessionKey) !== state) {
-                throw new Error("pending question is no longer current");
-              }
+            } else if (
+              state &&
+              (!params.creatorFingerprint || params.callerFingerprint !== params.creatorFingerprint)
+            ) {
+              throw new Error("question answer caller policy does not match its creator");
+            }
+            if (state && pendingAgentQuestions.get(state.sessionKey) !== state) {
+              throw new Error("pending question is no longer current");
             }
             params.assertSourceCurrent();
           } catch (error) {

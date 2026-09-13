@@ -1,17 +1,7 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { GatewayClientRequestError } from "../../../packages/gateway-client/src/request-error.js";
-import type { QuestionWaitAnswerResult } from "../../../packages/gateway-protocol/src/index.js";
-import { createDeferred } from "../../../test/helpers/promise.js";
 import type { AgentQuestionDispatcher } from "../../agents/harness/gateway-question-dispatch.js";
 import { registerPendingAgentQuestion } from "../../agents/harness/gateway-question.js";
-import {
-  callGatewayTool,
-  withQuestionGateway,
-} from "../../agents/harness/gateway-question.test-support.js";
-import {
-  createAgentQuestionAnswerAuthority,
-  withAgentQuestionAnswerAuthority,
-} from "../../agents/harness/host-private-capabilities.js";
 import { clearAgentHarnesses } from "../../agents/harness/registry.js";
 import { resolveReplyCompletion } from "../../agents/reply-completion.js";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -40,10 +30,6 @@ import {
 import { resetInboundDedupe } from "./inbound-dedupe.js";
 import { createQueueTestRun } from "./queue.test-helpers.js";
 import { admitFollowupRunLifecycle, completeFollowupRunLifecycle } from "./queue/lifecycle.js";
-import {
-  REPLY_ADMISSION_TICKET,
-  type ReplyOptionsWithAdmissionTicket,
-} from "./reply-admission-ticket.js";
 import { resolveReplyOperationRunState } from "./reply-operation-run-state.js";
 import { testing as replyRunTesting } from "./reply-run-registry.test-support.js";
 import { buildTestCtx } from "./test-ctx.js";
@@ -164,181 +150,6 @@ function createQuestionDispatch(name: string) {
 }
 
 describe("dispatch input custody after a question response", () => {
-  it("releases plugin admission at core adoption so a waiting dispatch can receive its answer", async () => {
-    await withQuestionGateway(async (gateway) => {
-      const key = "agent:main:plugin:direct:adoption-lane";
-      const sessionId = "plugin-adoption-lane";
-      const questionId = "ask_plugin_adoption_lane";
-      const sessionEntry = { sessionId, updatedAt: Date.now() };
-      sessionStoreMocks.currentEntry = sessionEntry;
-      const questionStarted = createDeferred();
-      const creatorAuthority = createAgentQuestionAnswerAuthority({
-        sessionKey: key,
-        fingerprint: "plugin-user",
-        project: (caller) =>
-          caller.senderIsOwner && caller.messageProvider === "plugin" ? "plugin-user" : undefined,
-        assertActive: () => {},
-      });
-      let question: ReturnType<typeof registerPendingAgentQuestion> | undefined;
-      let admissionTail: Promise<void> = Promise.resolve();
-      let agentTurns = 0;
-
-      const receive = (
-        text: string,
-        messageId: string,
-        resolver: NonNullable<Parameters<typeof dispatchReplyFromConfig>[0]["replyResolver"]>,
-      ): Promise<Awaited<ReturnType<typeof dispatchReplyFromConfig>>> => {
-        let finish!: (result: Awaited<ReturnType<typeof dispatchReplyFromConfig>>) => void;
-        let fail!: (error: unknown) => void;
-        const completion = new Promise<Awaited<ReturnType<typeof dispatchReplyFromConfig>>>(
-          (resolve, reject) => {
-            finish = resolve;
-            fail = reject;
-          },
-        );
-        const admit = async () => {
-          let released = false;
-          let release!: () => void;
-          const adopted = new Promise<void>((resolve) => {
-            release = () => {
-              if (released) {
-                return;
-              }
-              released = true;
-              resolve();
-            };
-          });
-          const dispatch = dispatchReplyFromConfig({
-            ctx: buildTestCtx({
-              Provider: "plugin",
-              Surface: "plugin",
-              ChatType: "direct",
-              From: "user:plugin-fixture",
-              To: "channel:plugin-fixture",
-              SessionKey: key,
-              MessageSid: messageId,
-              Body: text,
-              RawBody: text,
-              CommandBody: text,
-              BodyForAgent: text,
-            }),
-            cfg: automaticDirectReplyConfig,
-            dispatcher: createDispatcher(),
-            replyOptions: {
-              turnAdoptionLifecycle: {
-                admission: "exclusive",
-                onAdopted: release,
-                onDeferred: release,
-                onAbandoned: release,
-              },
-            },
-            replyResolver: resolver,
-          });
-          void dispatch.then(finish, fail).finally(release);
-          await adopted;
-        };
-        const admitted = admissionTail.then(admit, admit);
-        admissionTail = admitted.then(
-          () => undefined,
-          () => undefined,
-        );
-        return completion;
-      };
-
-      const first = receive("start question", "question-start", async (_ctx, opts) => {
-        agentTurns += 1;
-        // This test resolver begins at the same boundary where runReplyAgent
-        // publishes adoption before an ask_user call can wait.
-        const ticket = (opts as (GetReplyOptions & ReplyOptionsWithAdmissionTicket) | undefined)?.[
-          REPLY_ADMISSION_TICKET
-        ];
-        ticket?.release();
-        await opts?.turnAdoptionLifecycle?.onAdopted();
-        const questions = [
-          {
-            id: "answer",
-            header: "Answer",
-            question: "Continue?",
-            isOther: true,
-            options: [],
-          },
-        ];
-        question = withAgentQuestionAnswerAuthority(creatorAuthority, () =>
-          registerPendingAgentQuestion({ sessionKey: key, questionId, questions }),
-        );
-        const registration = callGatewayTool(
-          "question.request",
-          {},
-          {
-            id: questionId,
-            sessionKey: key,
-            timeoutMs: 60_000,
-            questions: questions.map((entry) => ({
-              questionId: entry.id,
-              header: entry.header,
-              question: entry.question,
-              isOther: entry.isOther,
-              options: entry.options,
-            })),
-          },
-        );
-        question.attachRegistration(registration);
-        await registration;
-        const answer = callGatewayTool(
-          "question.waitAnswer",
-          { timeoutMs: 70_000 },
-          { id: questionId, timeoutMs: 60_000, includeResolutionId: true },
-        ) as Promise<QuestionWaitAnswerResult>;
-        question.setAnswer(answer);
-        questionStarted.resolve();
-        await expect(answer).resolves.toMatchObject({ status: "answered" });
-        return undefined;
-      });
-
-      try {
-        await questionStarted.promise;
-        await gateway.waitStarted;
-        const answer = receive("没事", "question-answer", async (ctx, opts) => {
-          const followupRun = createQueueTestRun({
-            prompt: "没事",
-            messageId: "question-answer",
-            originatingChannel: "plugin",
-            originatingTo: "channel:plugin-fixture",
-          });
-          followupRun.run.agentId = "main";
-          followupRun.run.sessionKey = key;
-          followupRun.run.senderIsOwner = true;
-          followupRun.run.messageProvider = "plugin";
-          followupRun.turnAdoptionLifecycle = opts?.turnAdoptionLifecycle;
-          const claimed = await runReplyQuestionInput({
-            commandBody: "没事",
-            followupRun,
-            sessionKey: key,
-            sessionCtx: ctx,
-            sessionEntry,
-            opts,
-          });
-          if (!claimed.handled) {
-            agentTurns += 1;
-            return { text: "unexpected second agent turn" };
-          }
-          return claimed.payload;
-        });
-
-        await expect(answer).resolves.toMatchObject({ queuedFinal: false });
-        await expect(first).resolves.toMatchObject({ queuedFinal: true });
-        await expect(gateway.manager.waitAnswer(questionId)).resolves.toMatchObject({
-          status: "answered",
-          answers: { answers: { answer: ["没事"] } },
-        });
-        expect(agentTurns).toBe(1);
-        expect(question?.isResolving()).toBe(true);
-      } finally {
-        question?.dispose();
-      }
-    });
-  });
-
   // Real question/receipt classification is covered by the wire regression. Here
   // the real dispatch owner must preserve that recorded fact through source faults.
   it.each(

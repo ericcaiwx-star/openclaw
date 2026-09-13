@@ -30,6 +30,7 @@ import {
   type ReplyMessageInjectionRejectionReason,
   type ReplyMessageInjectionTarget,
   type ReplyOperation,
+  type ReplyToolAuthorityOverlay,
 } from "./reply-run-registry.contracts.js";
 import {
   getAttachedBackend,
@@ -435,6 +436,59 @@ export function beginReplyMessageInjectionTarget(
     acceptance: acceptance.promise,
     outcome,
   };
+}
+
+/** Claims only a pending user-input request on one exact active reply operation. */
+export async function claimPendingReplyMessageInjectionTarget(params: {
+  target: ReplyMessageInjectionTarget;
+  text: string;
+  options: Omit<ReplyMessageInjectionOptions, "toolAuthorityOverlay"> & {
+    toolAuthorityOverlay: ReplyToolAuthorityOverlay;
+  };
+  assertSourceCurrent: () => void;
+}): Promise<boolean> {
+  const operation = params.target[replyMessageInjectionTargetOperation];
+  if (
+    replyRunState.activeRunsByKey.get(operation.key) !== operation ||
+    operation.result ||
+    operation.phase !== "running" ||
+    isReplyRunEvidenceStale(operation)
+  ) {
+    return false;
+  }
+  const backend = getAttachedBackend(operation);
+  const guarded = backend?.messageInjectionV2;
+  if (!backend || guarded?.version !== 2 || !guarded.claimPendingUserInputAnswer) {
+    return false;
+  }
+  const canInject = () => {
+    params.assertSourceCurrent();
+    return (
+      replyRunState.activeRunsByKey.get(operation.key) === operation &&
+      !operation.result &&
+      operation.phase === "running" &&
+      getAttachedBackend(operation) === backend
+    );
+  };
+  try {
+    if (!guarded.isAvailable()) {
+      return false;
+    }
+  } catch {
+    return false;
+  }
+  const { toolAuthorityOverlay, ...backendOptions } = params.options;
+  const projectedToolAuthorityFingerprint =
+    operation.projectToolAuthorityFingerprint(toolAuthorityOverlay);
+  return guarded.claimPendingUserInputAnswer(
+    params.text,
+    {
+      ...backendOptions,
+      toolAuthorityFingerprint: projectedToolAuthorityFingerprint,
+    },
+    createMessageInjectionAuthority(canInject),
+    "source-bound",
+  );
 }
 
 /** Finalize adoption and cleanup on the captured operation without rediscovery. */

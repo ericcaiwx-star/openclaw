@@ -368,6 +368,68 @@ describe("gateway harness questions", () => {
   });
 
   it.each([
+    {
+      label: "matching",
+      callerFingerprint: "creator-policy",
+      creatorFingerprint: "creator-policy",
+      accepted: true,
+    },
+    {
+      label: "mismatched",
+      callerFingerprint: "other-policy",
+      creatorFingerprint: "creator-policy",
+      accepted: false,
+    },
+    {
+      label: "missing-creator",
+      callerFingerprint: "creator-policy",
+      creatorFingerprint: undefined,
+      accepted: false,
+    },
+  ])("checks a $label cross-runtime caller against the frozen creator", async (testCase) => {
+    await withQuestionGateway(async (fixture) => {
+      const sessionKey = `agent:main:fingerprint-${testCase.label}`;
+      const promptDelivered = createDeferred();
+      const run = runAgentHarnessGatewayQuestion({
+        questionId: `ask_fingerprint_${testCase.label}`,
+        sessionKey,
+        runId: `fingerprint-${testCase.label}-run`,
+        questions,
+        timeoutMs: 60_000,
+        signal: fixture.backingRun.signal,
+        delivery: { onBlockReply: async () => promptDelivered.resolve() },
+      });
+      await Promise.all([fixture.waitStarted, promptDelivered.promise]);
+
+      const claim = claimPendingAgentQuestionAnswerFromCaller({
+        sessionKey,
+        text: "Continue",
+        callerFingerprint: testCase.callerFingerprint,
+        creatorFingerprint: testCase.creatorFingerprint,
+        assertSourceCurrent: () => {},
+      });
+      if (testCase.accepted) {
+        await expect(claim).resolves.toBe(true);
+      } else {
+        await expect(claim).rejects.toBeInstanceOf(QuestionDispatchRefusedError);
+        await expect(
+          claimPendingAgentQuestionAnswerFromCaller({
+            sessionKey,
+            text: "Continue",
+            callerFingerprint: "creator-policy",
+            creatorFingerprint: "creator-policy",
+            assertSourceCurrent: () => {},
+          }),
+        ).resolves.toBe(true);
+      }
+      await expect(run).resolves.toEqual({
+        status: "answered",
+        answers: { answers: { answer: ["Continue"] } },
+      });
+    });
+  });
+
+  it.each([
     { change: "open", cancel: false },
     { change: "closed", cancel: false },
     { change: "reassigned", cancel: false },

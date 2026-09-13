@@ -10,6 +10,7 @@ import type { UserTurnTranscriptRecorder } from "../../../sessions/user-turn-tra
 import {
   cancelPendingAgentQuestionForSession,
   claimPendingAgentQuestionAnswer,
+  claimPendingAgentQuestionAnswerFromCaller,
 } from "../../harness/gateway-question.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import { retireQueuedUserMessage } from "../../sessions/queued-user-message-retirement.js";
@@ -404,9 +405,20 @@ export async function claimEmbeddedPendingUserInputAnswer(
   sessionKey?: string,
   canInject?: () => boolean,
   authority?: Parameters<typeof claimPendingAgentQuestionAnswer>[0]["authority"],
+  creatorToolAuthorityFingerprint?: string,
 ): Promise<boolean> {
   if (options?.isInboundUserMessage !== true || hasPromptImageInput(options)) {
     return false;
+  }
+  if (authority?.kind === "source-bound") {
+    return claimPendingAgentQuestionAnswerFromCaller({
+      sessionKey,
+      text,
+      sourceRecorder: options.userTurnTranscriptRecorder,
+      callerFingerprint: options.toolAuthorityFingerprint,
+      creatorFingerprint: creatorToolAuthorityFingerprint,
+      assertSourceCurrent: authority.assertCurrent,
+    });
   }
   const claimed = await claimPendingAgentQuestionAnswer({
     sessionKey,

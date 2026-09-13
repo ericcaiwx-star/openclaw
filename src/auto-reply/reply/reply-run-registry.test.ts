@@ -22,6 +22,7 @@ import { REPLY_RUN_TERMINAL_SETTLE_TIMEOUT_MS } from "./reply-run-registry.contr
 import {
   abortActiveReplyRuns,
   beginReplyMessageInjectionTarget,
+  claimPendingReplyMessageInjectionTarget,
   finalizeReplyMessageInjectionAttempt,
   forceClearReplyOperation,
   forceClearReplyRunBySessionId,
@@ -2057,6 +2058,64 @@ describe("reply run registry", () => {
     operation.attachBackend({ kind: "cli", runId: "run-a", cancel: vi.fn() });
 
     expect(replyRunRegistry.resolveCurrentMessageInjectionTarget(operation.key)).toBeUndefined();
+  });
+
+  it("claims a pending V2 input before admitting a successor reply operation", async () => {
+    const claimPendingUserInputAnswer = vi.fn(
+      async (
+        _text: string,
+        _options: ReplyBackendQueueMessageOptions | undefined,
+        assertCurrent: () => void,
+      ) => {
+        assertCurrent();
+        return true;
+      },
+    );
+    const operation = createTestReplyOperation({ sessionId: "session-question-claim" });
+    operation.bindToolAuthoritySnapshot({
+      fingerprint: () => "creator-authority",
+      project: (overlay) => (overlay.senderIsOwner ? "creator-authority" : "different-authority"),
+    });
+    operation.bindToolAuthorityRoute({ provider: "test", model: "test" });
+    operation.attachBackend({
+      kind: "embedded",
+      runId: "run-question-claim",
+      toolAuthorityFingerprint: "creator-authority",
+      cancel: vi.fn(),
+      messageInjectionV2: {
+        version: 2,
+        isAvailable: () => true,
+        queueMessage: vi.fn(async () => {}),
+        claimPendingUserInputAnswer,
+      },
+    });
+    operation.setPhase("running");
+    const target = replyRunRegistry.resolveCurrentMessageInjectionTarget(operation.key)!;
+
+    await expect(
+      claimPendingReplyMessageInjectionTarget({
+        target,
+        text: "Continue",
+        options: {
+          isInboundUserMessage: true,
+          toolAuthorityOverlay: {
+            senderIsOwner: true,
+            disableTools: false,
+            traceAuthorized: false,
+          },
+        },
+        assertSourceCurrent: () => {},
+      }),
+    ).resolves.toBe(true);
+    expect(claimPendingUserInputAnswer).toHaveBeenCalledWith(
+      "Continue",
+      expect.objectContaining({
+        isInboundUserMessage: true,
+        toolAuthorityFingerprint: "creator-authority",
+      }),
+      expect.any(Function),
+      "source-bound",
+    );
   });
 
   it.each(
