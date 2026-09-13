@@ -10,6 +10,7 @@ import {
   createBaseContext,
   createDirectMessageContextOverrides,
   createDiscordDraftStream,
+  dispatchInboundMessageForTest as dispatchInboundMessage,
   getLastDispatchCtx,
   getLastDispatchReplyOptions,
   getLastRouteUpdate,
@@ -19,6 +20,7 @@ import {
   deliverDiscordReply,
   dispatchBufferedReplyForTest,
 } from "./message-handler.process.test-harness.js";
+import type { DispatchInboundParams } from "./message-handler.process.test-harness.js";
 import { expectRecordFields, requireRecord } from "./message-handler.process.test-helpers.js";
 
 registerDiscordProcessTestLifecycle();
@@ -292,12 +294,17 @@ describe("processDiscordMessage session routing", () => {
 
   it("dispatches runtime ACP thread messages with the Discord source owner and session", async () => {
     const sourceSessionKey = "agent:worker:discord:channel:thread-1";
+    const targetSessionKey = "agent:claude:acp:runtime:discord-thread";
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await params?.dispatcher.sendFinalReply({ text: "ACP reply" });
+      return { queuedFinal: true, counts: { final: 1, tool: 0, block: 0 } };
+    });
     const ctx = await createBaseContext({
       baseSessionKey: sourceSessionKey,
-      boundSessionKey: "agent:claude:acp:runtime:discord-thread",
+      boundSessionKey: targetSessionKey,
       threadBinding: {
         bindingId: "runtime-acp-thread",
-        targetSessionKey: "agent:claude:acp:runtime:discord-thread",
+        targetSessionKey,
         targetKind: "session",
         conversation: {
           channel: "discord",
@@ -323,6 +330,12 @@ describe("processDiscordMessage session routing", () => {
       AgentId: "worker",
       SessionKey: sourceSessionKey,
     });
+    expect(deliverDiscordReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: targetSessionKey,
+        target: "channel:c1",
+      }),
+    );
   });
 
   it("marks explicit message-tool guild replies as message-tool-only and disables source streaming", async () => {
