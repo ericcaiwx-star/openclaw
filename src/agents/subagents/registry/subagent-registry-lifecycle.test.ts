@@ -4619,6 +4619,103 @@ describe("subagent registry lifecycle hardening", () => {
     expect(Number.isNaN(entry.cleanupCompletedAt)).toBe(false);
   });
 
+  it("durably fences an unbound delete give-up before completing retained bookkeeping", async () => {
+    const snapshots: Array<{ cleanupCompletedAt?: number; suppressSessionEffects?: boolean }> = [];
+    const persistOrThrow = vi.fn(() => {
+      snapshots.push({
+        cleanupCompletedAt: entry.cleanupCompletedAt,
+        suppressSessionEffects: entry.execution.suppressSessionEffects,
+      });
+    });
+    const entry = createRunEntry({
+      cleanup: "delete",
+      archiveAtMs: 60_000,
+      endedAt: 4_000,
+      expectsCompletionMessage: false,
+    });
+    const controller = createLifecycleController({ entry, persistOrThrow });
+
+    await controller.finalizeResumedAnnounceGiveUp({
+      runId: entry.runId,
+      entry,
+      reason: "expiry",
+    });
+
+    expect(snapshots[0]).toEqual({
+      cleanupCompletedAt: undefined,
+      suppressSessionEffects: true,
+    });
+    expect(entry.execution.suppressSessionEffects).toBe(true);
+    expect(entry.cleanupCompletedAt).toBeTypeOf("number");
+  });
+
+  it("leaves an unbound delete give-up incomplete when its no-delete fence cannot persist", async () => {
+    const persistOrThrow = vi.fn(() => {
+      throw new Error("registry store boom");
+    });
+    const entry = createRunEntry({
+      cleanup: "delete",
+      archiveAtMs: 60_000,
+      endedAt: 4_000,
+      expectsCompletionMessage: false,
+    });
+    const controller = createLifecycleController({ entry, persistOrThrow });
+
+    await expect(
+      controller.finalizeResumedAnnounceGiveUp({
+        runId: entry.runId,
+        entry,
+        reason: "expiry",
+      }),
+    ).rejects.toThrow("registry store boom");
+
+    expect(entry.execution.suppressSessionEffects).toBeUndefined();
+    expect(entry.cleanupCompletedAt).toBeUndefined();
+    expect(helperMocks.safeRemoveAttachmentsDir).not.toHaveBeenCalled();
+  });
+
+  it("retires a delete give-up superseded while attachment removal is pending", async () => {
+    const attachmentRemoval = createDeferredCore();
+    helperMocks.safeRemoveAttachmentsDir.mockImplementationOnce(() => attachmentRemoval.promise);
+    const entry = createRunEntry({
+      cleanup: "delete",
+      archiveAtMs: 60_000,
+      endedAt: 4_000,
+      expectsCompletionMessage: false,
+      cleanupHandled: true,
+      generation: 1,
+    });
+    const runs = new Map([[entry.runId, entry]]);
+    const retireSupersededRun = vi.fn(async () => {
+      runs.delete(entry.runId);
+    });
+    const controller = createLifecycleController({ entry, runs, retireSupersededRun });
+    const cleanupGeneration = controller.bumpCleanupGeneration(entry);
+
+    const finalizing = controller.finalizeResumedAnnounceGiveUp({
+      runId: entry.runId,
+      entry,
+      reason: "expiry",
+      cleanupGeneration,
+    });
+    await waitForLifecycleState(() =>
+      expect(helperMocks.safeRemoveAttachmentsDir).toHaveBeenCalledWith(entry),
+    );
+    const successor = createRunEntry({
+      runId: "run-2",
+      createdAt: 5_000,
+      startedAt: 5_000,
+      generation: 2,
+    });
+    runs.set(successor.runId, successor);
+    attachmentRemoval.resolve();
+    await finalizing;
+
+    expect(retireSupersededRun).toHaveBeenCalledWith(entry.runId, entry);
+    expect(entry.cleanupCompletedAt).toBeUndefined();
+    expect(runs.get(successor.runId)).toBe(successor);
+  });
+
   it.each([
     { name: "original window", required: true, redriven: false, replaced: false },
     { name: "explicit retry window", required: true, redriven: true, replaced: false },

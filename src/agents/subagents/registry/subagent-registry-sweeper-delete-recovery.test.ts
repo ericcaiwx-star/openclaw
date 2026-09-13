@@ -210,6 +210,34 @@ describe("subagent registry delete recovery", () => {
     expect(runs.has(entry.runId)).toBe(false);
   });
 
+  it("archives a fenced give-up row without deleting its same-key successor", async () => {
+    const { entry, runs, callGateway, notifyContextEngineSubagentEnded, sweeper } = createHarness({
+      current: {} as GatewayRecoveryRuntime,
+    });
+    const now = Date.now();
+    entry.cleanup = "delete";
+    entry.archiveAtMs = now - 1;
+    entry.cleanupCompletedAt = now - 5_000;
+    entry.execution = {
+      status: "terminal",
+      startedAt: now - 60_000,
+      endedAt: now - 55_000,
+      outcome: { status: "timeout" },
+      suppressSessionEffects: true,
+    };
+    killSessionEntry.current = {
+      sessionId: "successor-session",
+      lifecycleRevision: "successor-revision",
+      updatedAt: now,
+    };
+
+    await sweeper.sweepOnce();
+
+    expect(callGateway).not.toHaveBeenCalled();
+    expect(notifyContextEngineSubagentEnded).not.toHaveBeenCalled();
+    expect(runs.has(entry.runId)).toBe(false);
+  });
+
   it("retries an unfinished dispatched delete against its persisted identity at expiry", async () => {
     const { entry, runs, callGateway, notifyContextEngineSubagentEnded, sweeper } = createHarness({
       current: {} as GatewayRecoveryRuntime,

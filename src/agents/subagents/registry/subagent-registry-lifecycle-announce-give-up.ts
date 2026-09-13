@@ -2,6 +2,8 @@ import {
   ensureCompletionState,
   ensureDeliveryState,
   getDeliveryLastError,
+  normalizeDeleteCleanupTarget,
+  persistSuppressedSubagentSessionEffects,
 } from "./subagent-delivery-state.js";
 import { SUBAGENT_ENDED_REASON_COMPLETE } from "./subagent-lifecycle-events.js";
 import { shouldSuppressSubagentRecoverySessionEffects } from "./subagent-recovery-state.js";
@@ -66,7 +68,28 @@ export const finalizeResumedAnnounceGiveUp = async (
   const completion = ensureCompletionState(entry);
   completion.fallbackResultText = undefined;
   completion.fallbackCapturedAt = undefined;
-  if ((cleanup ?? entry.cleanup) === "delete" || !entry.retainAttachmentsOnKeep) {
+  if (
+    cleanupGeneration !== undefined &&
+    !context.isCleanupAttemptCurrent(runId, entry, cleanupGeneration)
+  ) {
+    await retireSupersededCleanupIfNeeded(context, runId, entry, cleanupGeneration);
+    return;
+  }
+  const effectiveCleanup = cleanup ?? entry.cleanup;
+  const hasGuardedDeleteDispatch =
+    typeof entry.deleteCleanupDispatchedAt === "number" &&
+    normalizeDeleteCleanupTarget(entry.deleteCleanupTarget) !== undefined;
+  if (
+    effectiveCleanup === "delete" &&
+    !hasGuardedDeleteDispatch &&
+    !shouldSuppressSubagentRecoverySessionEffects(entry)
+  ) {
+    // Give-up completes and may retain the row until its archive deadline.
+    // Without an exact dispatched target, expiry must never resolve the live
+    // same-key session later and delete a successor.
+    persistSuppressedSubagentSessionEffects(entry, () => params.persistOrThrow(runId));
+  }
+  if (effectiveCleanup === "delete" || !entry.retainAttachmentsOnKeep) {
     await safeRemoveAttachmentsDir(entry);
   }
   if (
@@ -83,7 +106,7 @@ export const finalizeResumedAnnounceGiveUp = async (
   context.completeCleanupBookkeeping({
     runId,
     entry,
-    cleanup: cleanup ?? entry.cleanup,
+    cleanup: effectiveCleanup,
     completedAt: completedAt ?? Date.now(),
   });
   if (!shouldSuppressSubagentRecoverySessionEffects(entry)) {

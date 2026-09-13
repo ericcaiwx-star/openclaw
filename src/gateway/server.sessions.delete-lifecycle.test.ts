@@ -440,6 +440,70 @@ test.each(["runtime loading", "cleanup"] as const)(
   },
 );
 
+test.each(["gateway-retired", "cleanup-owner-replaced"] as const)(
+  "sessions.delete preserves the stored row when transferred cleanup loses %s authority",
+  async (expiredAuthority) => {
+    const sessionKey = `agent:main:subagent:${expiredAuthority}`;
+    const sessionId = `sess-${expiredAuthority}`;
+    const lifecycleRevision = `revision-${expiredAuthority}`;
+    const { storePath } = await createSessionStoreDir();
+    await writeSessionStore({
+      entries: {
+        [sessionKey]: sessionStoreEntry(sessionId, { lifecycleRevision }),
+      },
+    });
+    let gatewayCurrent = true;
+    let cleanupOwnerCurrent = true;
+    const assertCurrent = () => {
+      if (!gatewayCurrent) {
+        throw new Error("gateway retired");
+      }
+      if (!cleanupOwnerCurrent) {
+        throw new Error("cleanup owner replaced");
+      }
+    };
+    let releaseRuntimeCleanup = () => {};
+    const runtimeCleanupStarted = new Promise<void>((resolve) => {
+      bundleMcpRuntimeMocks.disposeSessionMcpRuntime.mockImplementationOnce(async () => {
+        resolve();
+        await new Promise<void>((release) => {
+          releaseRuntimeCleanup = release;
+        });
+      });
+    });
+
+    const deletion = directSessionReq(
+      "sessions.delete",
+      {
+        key: sessionKey,
+        expectedSessionId: sessionId,
+        expectedLifecycleRevision: lifecycleRevision,
+      },
+      {
+        sessionMutationAuthorization: {
+          assertCurrent,
+          assertTargetCurrent: assertCurrent,
+        },
+      },
+    );
+    await runtimeCleanupStarted;
+    if (expiredAuthority === "gateway-retired") {
+      gatewayCurrent = false;
+    } else {
+      cleanupOwnerCurrent = false;
+    }
+    releaseRuntimeCleanup();
+
+    await expect(deletion).rejects.toThrow(
+      expiredAuthority === "gateway-retired" ? "gateway retired" : "cleanup owner replaced",
+    );
+    expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject({
+      sessionId,
+      lifecycleRevision,
+    });
+  },
+);
+
 test("sessions.delete includes cleanup-owned row changes in its guarded deletion", async () => {
   const sessionKey = "agent:main:cron:cleanup";
   const sessionId = "sess-cleanup";
