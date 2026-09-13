@@ -1,5 +1,7 @@
+import path from "node:path";
 import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import { createMessageInjectionAuthority } from "../../../auto-reply/reply/message-injection-authority.js";
 import {
   claimPendingReplyMessageInjectionTarget,
@@ -31,7 +33,13 @@ import {
   prepareAgentRunAdmission,
   createOperationalRunInstanceRef,
 } from "../../admitted-run-context.js";
-import { registerPendingAgentQuestion } from "../../harness/gateway-question.js";
+import { buildToolLifecycleErrorResult } from "../../embedded-agent-tool-results.js";
+import { QuestionDispatchRefusedError } from "../../harness/gateway-question-dispatch.js";
+import {
+  registerPendingAgentQuestion,
+  runAgentHarnessGatewayQuestion,
+} from "../../harness/gateway-question.js";
+import { withQuestionGateway } from "../../harness/gateway-question.test-support.js";
 import { withPreparedEmbeddedRunToolAuthority } from "../../harness/tool-authority.runtime.js";
 import {
   isAgentRunRestartAbortReason,
@@ -92,6 +100,8 @@ import {
 registerAgentSessionLoopTestLifecycle();
 
 describe("prepareEmbeddedAttemptStream", () => {
+  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
   afterEach(async () => {
     const { testing } = await import("../runs.test-support.js");
     testing.resetActiveEmbeddedRuns();
@@ -422,6 +432,179 @@ describe("prepareEmbeddedAttemptStream", () => {
         admission.close();
         operation.complete();
       }
+    },
+  );
+
+  it.each(["allowed", "caller-mismatch", "source-revoked", "operation-reassigned"] as const)(
+    "carries %s authority through the production V2 backend and Gateway transport",
+    async (change) => {
+      await withQuestionGateway(async (gateway) => {
+        const sessionKey = `agent:main:production-question-${change}`;
+        const sessionId = `production-question-${change}`;
+        const runId = `production-question-${change}-run`;
+        const questionId = `ask_production_${change.replaceAll("-", "_")}`;
+        const admission = prepareAgentRunAdmission({
+          cfg: {},
+          operationalRunInstance: createOperationalRunInstanceRef(runId),
+          facts: {
+            agentId: "main",
+            runId,
+            ingress: { kind: "system", state: "present", boundary: "queue-test" },
+          },
+        });
+        const operation = createReplyOperation({
+          sessionKey,
+          sessionId,
+          resetTriggered: false,
+        });
+        let replacement: ReplyOperation | undefined;
+        let question: ReturnType<typeof runAgentHarnessGatewayQuestion> | undefined;
+        let prepared: ReturnType<typeof prepareCatalogExecutor> | undefined;
+        let callerMatches = change !== "caller-mismatch";
+        const source = new AbortController();
+        const target = createTestUserTurnTranscriptTarget({
+          sessionId,
+          sessionKey,
+          storePath: path.join(tempDirs.make(`production-question-${change}-`), "sessions.sqlite"),
+        });
+        await replaceSessionEntry(target, { sessionId, updatedAt: Date.now() });
+        const recorder = createUserTurnTranscriptRecorder({
+          input: { text: "Old source answer", idempotencyKey: `${runId}:user` },
+          target,
+        });
+        expect(
+          await recorder.stageApproved?.({
+            runId,
+            assertCurrent: () => source.signal.throwIfAborted(),
+          }),
+        ).toBe(true);
+        try {
+          const admittedRunContext = await admission.admit("embedded", "queue-test");
+          await withPreparedEmbeddedRunToolAuthority(
+            { admittedRunContext },
+            {
+              runId,
+              sessionId,
+              sessionKey,
+              agentId: "main",
+              config: {},
+              provider: "test-provider",
+              modelId: "test-model",
+              sessionFile: `/tmp/${sessionId}.jsonl`,
+              workspaceDir: "/tmp/production-question-workspace",
+            },
+            undefined,
+            async (preparedAttempt) => {
+              const toolAuthorityFingerprint = preparedAttempt.toolAuthorityFingerprint;
+              if (!toolAuthorityFingerprint) {
+                throw new Error("expected prepared tool authority fingerprint");
+              }
+              const bindOperation = (owner: ReplyOperation) => {
+                owner.bindToolAuthoritySnapshot({
+                  fingerprint: () => toolAuthorityFingerprint,
+                  project: () => (callerMatches ? toolAuthorityFingerprint : "lower-authority"),
+                });
+                const route = { provider: "test-provider", model: "test-model" };
+                owner.bindToolAuthorityRoute(route);
+              };
+              bindOperation(operation);
+              const { session } = await createTestSession();
+              prepared = prepareCatalogExecutor([], {
+                activeSession: session,
+                attempt: { ...preparedAttempt, replyOperation: operation },
+              });
+              operation.setPhase("running");
+              const claimQuestion = (
+                owner: ReplyOperation,
+                text: string,
+                sourceRecorder: typeof recorder | undefined,
+                assertSourceCurrent: () => void,
+              ) =>
+                claimPendingReplyMessageInjectionTarget({
+                  target: replyRunRegistry.resolveCurrentMessageInjectionTarget(owner.key)!,
+                  text,
+                  options: {
+                    isInboundUserMessage: true,
+                    userTurnTranscriptRecorder: sourceRecorder,
+                    toolAuthorityOverlay: {
+                      senderIsOwner: true,
+                      disableTools: false,
+                      traceAuthorized: false,
+                    },
+                  },
+                  assertSourceCurrent,
+                });
+              const promptDelivered = createDeferredCore();
+              question = runAgentHarnessGatewayQuestion({
+                questionId,
+                sessionKey,
+                runId,
+                questions: [{ id: "answer", header: "Answer", question: "Continue?", options: [] }],
+                timeoutMs: 60_000,
+                signal: gateway.backingRun.signal,
+                delivery: { onBlockReply: async () => promptDelivered.resolve() },
+              });
+              await Promise.all([gateway.waitStarted, promptDelivered.promise]);
+
+              const heldHello = change === "caller-mismatch" ? undefined : gateway.holdNextHello();
+              const claim = claimQuestion(operation, "Old source answer", recorder, () =>
+                source.signal.throwIfAborted(),
+              );
+              if (heldHello) {
+                await heldHello.entered;
+                if (change === "source-revoked") {
+                  source.abort();
+                } else if (change === "operation-reassigned") {
+                  operation.complete();
+                  replacement = createReplyOperation({
+                    sessionKey,
+                    sessionId: `${sessionId}-replacement`,
+                    resetTriggered: false,
+                  });
+                  bindOperation(replacement);
+                  replacement.attachBackend(prepared.queueHandle);
+                  replacement.setPhase("running");
+                }
+                heldHello.release();
+              }
+
+              const resolveRequests = () =>
+                gateway.requests.filter((frame) => frame.method === "question.resolve");
+              if (change === "allowed") {
+                await expect(claim).resolves.toBe(true);
+                await expect(question).resolves.toMatchObject({ status: "answered" });
+                expect(resolveRequests()).toHaveLength(1);
+                expect(gateway.manager.get(questionId)?.status).toBe("answered");
+                expect(recorder.hasPersisted()).toBe(true);
+                return;
+              }
+
+              await expect(claim).rejects.toBeInstanceOf(QuestionDispatchRefusedError);
+              expect(resolveRequests()).toEqual([]);
+              expect(gateway.manager.get(questionId)?.status).toBe("pending");
+              callerMatches = true;
+              recorder.finishPendingInput?.("interrupted");
+              const currentOperation = replacement ?? operation;
+              await expect(
+                claimQuestion(currentOperation, "Current source answer", undefined, () => {}),
+              ).resolves.toBe(true);
+              await expect(question).resolves.toMatchObject({ status: "answered" });
+              expect(resolveRequests()).toHaveLength(1);
+            },
+          );
+        } finally {
+          source.abort();
+          gateway.backingRun.abort();
+          await question;
+          recorder.finishPendingInput?.("interrupted");
+          prepared?.subscription.unsubscribe();
+          replacement?.complete();
+          if (!operation.result) {
+            operation.complete();
+          }
+          admission.close();
+        }
+      });
     },
   );
 
