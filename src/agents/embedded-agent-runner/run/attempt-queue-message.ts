@@ -327,6 +327,7 @@ export async function steerActiveSessionWithOptionalDeliveryWait(
   sessionKey?: string,
   canInject?: () => boolean,
   authority?: Parameters<typeof claimPendingAgentQuestionAnswer>[0]["authority"],
+  creatorToolAuthorityFingerprint?: string,
 ): Promise<void | EmbeddedAgentQueueMessageResult> {
   const isInboundUserMessage = options?.isInboundUserMessage === true;
   const isPlainTextAnswer = !hasPromptImageInput(options);
@@ -352,7 +353,14 @@ export async function steerActiveSessionWithOptionalDeliveryWait(
   if (
     isInboundUserMessage &&
     isPlainTextAnswer &&
-    (await claimEmbeddedPendingUserInputAnswer(text, options, sessionKey, canInject, authority))
+    (await claimEmbeddedPendingUserInputAnswer(
+      text,
+      options,
+      sessionKey,
+      canInject,
+      authority,
+      creatorToolAuthorityFingerprint,
+    ))
   ) {
     options?.onQueueAccepted?.(true);
     return;

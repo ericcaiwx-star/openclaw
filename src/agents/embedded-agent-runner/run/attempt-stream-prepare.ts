@@ -271,8 +271,7 @@ function prepareStream(
     : undefined;
 
   let toolMetasForTerminal: readonly AsyncStartedToolMeta[] = [];
-  // Terminal callbacks run after queue construction; keep the queue in this
-  // phase so active-run clearing and subscription teardown share one owner.
+  // Keep this phase so terminal callbacks, active-run clearing, and teardown share one owner.
   let deferredLifecycleOwner: EmbeddedAttemptDeferredLifecycleOwner | undefined;
   const streamSubscription = subscribeEmbeddedAgentSession({
     session: activeSession,
@@ -443,8 +442,7 @@ function prepareStream(
     assertCurrent?: () => void,
     authorityKind: InputAuthority["kind"] = assertCurrent ? "source-bound" : "run",
   ) => {
-    const canInjectMessage = composeInjectionGuard(assertCurrent);
-    if (!canInjectMessage()) {
+    if (!composeInjectionGuard(assertCurrent)()) {
       throw new Error("active session is finalizing");
     }
     activeQueueAdmissions++;
@@ -457,8 +455,9 @@ function prepareStream(
         text,
         options,
         attempt.sessionKey,
-        canInjectMessage,
+        composeInjectionGuard(assertCurrent),
         questionAuthority(assertCurrent, authorityKind),
+        attempt.toolAuthorityFingerprint,
       );
     } finally {
       activeQueueAdmissions--;

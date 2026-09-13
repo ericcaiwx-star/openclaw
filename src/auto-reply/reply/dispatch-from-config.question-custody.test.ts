@@ -1,11 +1,15 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { GatewayClientRequestError } from "../../../packages/gateway-client/src/request-error.js";
 import type { AgentQuestionDispatcher } from "../../agents/harness/gateway-question-dispatch.js";
-import { registerPendingAgentQuestion } from "../../agents/harness/gateway-question.js";
+import {
+  claimPendingAgentQuestionAnswer,
+  registerPendingAgentQuestion,
+} from "../../agents/harness/gateway-question.js";
 import { clearAgentHarnesses } from "../../agents/harness/registry.js";
 import { resolveReplyCompletion } from "../../agents/reply-completion.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { EmbeddedQuestionBroker } from "../../infra/embedded-question-broker.js";
+import { registerPluginCommand } from "../../plugins/commands.js";
 import type { MsgContext } from "../templating.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { runReplyQuestionInput } from "./agent-runner-question-input.js";
@@ -150,6 +154,76 @@ function createQuestionDispatch(name: string) {
 }
 
 describe("dispatch input custody after a question response", () => {
+  it("keeps an authorized registered plugin command out of a pending question", async () => {
+    const sessionKey = "agent:main:discord:direct:plugin-command-question";
+    sessionStoreMocks.currentEntry = {
+      sessionId: "plugin-command-question",
+      updatedAt: Date.now(),
+    };
+    const pluginHandler = vi.fn(async () => ({ text: "paired" }));
+    expect(
+      registerPluginCommand("test-plugin", {
+        name: "pair-test",
+        description: "Pair test command",
+        handler: pluginHandler,
+      }),
+    ).toEqual({ ok: true });
+    const resolved = vi.fn();
+    const gatewayCall: AgentQuestionDispatcher = {
+      version: 2,
+      call: async (request) => {
+        if (request.authority.kind === "source-bound") {
+          request.authority.assertCurrent();
+        }
+        if (request.method === "question.resolve") {
+          resolved();
+        }
+        return {};
+      },
+    };
+    const question = registerPendingAgentQuestion({
+      sessionKey,
+      questionId: "ask_plugin_command_question",
+      questions: [{ id: "answer", header: "Answer", question: "Continue?" }],
+      gatewayCall,
+    });
+    question.attachRegistration(Promise.resolve());
+    const command = "/pair-test";
+    const replyResolver = vi.fn(async () => ({ text: "normal command path" }));
+    try {
+      await dispatchReplyFromConfig({
+        ctx: buildTestCtx({
+          Provider: "discord",
+          Surface: "discord",
+          ChatType: "direct",
+          From: "user:plugin-command",
+          To: "channel:plugin-command",
+          SessionKey: sessionKey,
+          MessageSid: "plugin-command-answer",
+          Body: command,
+          RawBody: command,
+          BodyForAgent: command,
+          BodyForCommands: command,
+          CommandBody: command,
+          CommandSource: "text",
+          CommandAuthorized: true,
+        }),
+        cfg: { ...automaticDirectReplyConfig, commands: { text: true } },
+        dispatcher: createDispatcher(),
+        replyResolver,
+      });
+
+      expect(replyResolver).toHaveBeenCalledOnce();
+      expect(resolved).not.toHaveBeenCalled();
+      await expect(claimPendingAgentQuestionAnswer({ sessionKey, text: "Continue" })).resolves.toBe(
+        true,
+      );
+      expect(resolved).toHaveBeenCalledOnce();
+    } finally {
+      question.dispose();
+    }
+  });
+
   // Real question/receipt classification is covered by the wire regression. Here
   // the real dispatch owner must preserve that recorded fact through source faults.
   it.each(

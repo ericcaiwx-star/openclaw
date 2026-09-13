@@ -470,6 +470,18 @@ export async function claimPendingReplyMessageInjectionTarget(params: {
       getAttachedBackend(operation) === backend
     );
   };
+  const assertCurrent = createMessageInjectionAuthority(canInject);
+  const assertClaimCurrent = () => {
+    try {
+      assertCurrent();
+    } catch (error) {
+      throw new QuestionDispatchRefusedError(
+        error instanceof Error ? error.message : "question answer authority refused",
+        { cause: error },
+      );
+    }
+  };
+  assertClaimCurrent();
   try {
     if (!guarded.isAvailable()) {
       return false;
@@ -480,13 +492,27 @@ export async function claimPendingReplyMessageInjectionTarget(params: {
   const { toolAuthorityOverlay, ...backendOptions } = params.options;
   const projectedToolAuthorityFingerprint =
     operation.projectToolAuthorityFingerprint(toolAuthorityOverlay);
+  const creatorToolAuthorityFingerprint = normalizeOptionalString(
+    backend.toolAuthorityFingerprint ?? operation.toolAuthorityFingerprint,
+  );
+  if (
+    !creatorToolAuthorityFingerprint ||
+    projectedToolAuthorityFingerprint !== creatorToolAuthorityFingerprint
+  ) {
+    throw new QuestionDispatchRefusedError(
+      "question answer caller policy does not match its creator",
+    );
+  }
+  // Projection may invoke host policy. Recheck the exact source and operation
+  // after preparation so revocation or reassignment cannot reach backend I/O.
+  assertClaimCurrent();
   return guarded.claimPendingUserInputAnswer(
     params.text,
     {
       ...backendOptions,
       toolAuthorityFingerprint: projectedToolAuthorityFingerprint,
     },
-    createMessageInjectionAuthority(canInject),
+    assertClaimCurrent,
     "source-bound",
   );
 }
