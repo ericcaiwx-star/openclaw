@@ -414,6 +414,41 @@ describe("processDiscordMessage session routing", () => {
     });
   });
 
+  it("dispatches runtime ACP thread messages with the Discord source owner and session", async () => {
+    const sourceSessionKey = "agent:worker:discord:channel:thread-1";
+    const ctx = await createBaseContext({
+      baseSessionKey: sourceSessionKey,
+      boundSessionKey: "agent:claude:acp:runtime:discord-thread",
+      threadBinding: {
+        bindingId: "runtime-acp-thread",
+        targetSessionKey: "agent:claude:acp:runtime:discord-thread",
+        targetKind: "session",
+        conversation: {
+          channel: "discord",
+          accountId: "default",
+          conversationId: "thread-1",
+          parentConversationId: "channel-1",
+        },
+        status: "active",
+        boundAt: 1,
+      },
+      route: {
+        agentId: "worker",
+        channel: "discord",
+        accountId: "default",
+        sessionKey: sourceSessionKey,
+        mainSessionKey: "agent:worker:main",
+      },
+    });
+
+    await runProcessDiscordMessage(ctx);
+
+    expectRecordFields(requireRecord(getLastDispatchCtx(), "dispatch context"), {
+      AgentId: "worker",
+      SessionKey: sourceSessionKey,
+    });
+  });
+
   it("marks explicit message-tool guild replies as message-tool-only and disables source streaming", async () => {
     const ctx = await createBaseContext({
       shouldRequireMention: false,
