@@ -160,52 +160,61 @@ describe("hosted lifecycle Gateway dispatch", () => {
     },
   );
 
-  it("keeps transferred cleanup independent of expired tool authority and checks its owner before commit", async () => {
-    const beforeCommit = createDeferredCore();
-    const resumeCommit = createDeferredCore();
-    const mutate = vi.fn();
-    const context = createContext({
-      "sessions.delete": async ({ sessionMutationCommitGuard, respond }) => {
-        beforeCommit.resolve();
-        await resumeCommit.promise;
-        sessionMutationCommitGuard?.();
-        mutate();
-        respond(true, { deleted: true });
-      },
-    });
-    let current = true;
-    const cleanup = () =>
-      deleteSubagentSessionForCleanup({
-        callGateway: subagentRegistryDeps.callGateway,
-        gatewayBinding: { resolveGatewayContext: () => context },
-        childSessionKey: "agent:main:subagent:child",
-        expectedSessionId: "child-session",
-        expectedLifecycleRevision: "child-revision",
-        isCurrent: () => current,
-      });
-    const invoke = await withOperatorToolGatewayAuthority(
-      {
-        authenticatedUserProfile: {
-          profileId: "operator",
-          displayName: null,
-          hasAvatar: false,
-          updatedAt: 1,
+  it.each(["gateway-retired", "cleanup-owner-replaced"] as const)(
+    "rejects transferred cleanup before commit when its %s authority expires",
+    async (expiredAuthority) => {
+      const beforeCommit = createDeferredCore();
+      const resumeCommit = createDeferredCore();
+      const mutate = vi.fn();
+      const context = createContext({
+        "sessions.delete": async ({ sessionMutationCommitGuard, respond }) => {
+          beforeCommit.resolve();
+          await resumeCommit.promise;
+          sessionMutationCommitGuard?.();
+          mutate();
+          respond(true, { deleted: true });
         },
-        scopes: ["operator.write"],
-      },
-      async () => {
-        const run = AsyncLocalStorage.snapshot();
-        return () => run(cleanup);
-      },
-    );
-    const result = invoke();
-    await beforeCommit.promise;
-    current = false;
-    resumeCommit.resolve();
-    await expect(result).resolves.toBe("failed");
-    expect(mutate).not.toHaveBeenCalled();
-    expect(socketCall).not.toHaveBeenCalled();
-  });
+      });
+      let gatewayCurrent = true;
+      let cleanupOwnerCurrent = true;
+      const resolveGatewayContext = () => (gatewayCurrent ? context : undefined);
+      const cleanup = () =>
+        deleteSubagentSessionForCleanup({
+          callGateway: subagentRegistryDeps.callGateway,
+          gatewayBinding: { resolveGatewayContext },
+          childSessionKey: "agent:main:subagent:child",
+          expectedSessionId: "child-session",
+          expectedLifecycleRevision: "child-revision",
+          isCurrent: () => cleanupOwnerCurrent,
+        });
+      const invoke = await withOperatorToolGatewayAuthority(
+        {
+          authenticatedUserProfile: {
+            profileId: "operator",
+            displayName: null,
+            hasAvatar: false,
+            updatedAt: 1,
+          },
+          scopes: ["operator.write"],
+        },
+        async () => {
+          const run = AsyncLocalStorage.snapshot();
+          return () => run(cleanup);
+        },
+      );
+      const result = invoke();
+      await beforeCommit.promise;
+      if (expiredAuthority === "gateway-retired") {
+        gatewayCurrent = false;
+      } else {
+        cleanupOwnerCurrent = false;
+      }
+      resumeCommit.resolve();
+      await expect(result).resolves.toBe("failed");
+      expect(mutate).not.toHaveBeenCalled();
+      expect(socketCall).not.toHaveBeenCalled();
+    },
+  );
 
   it("answers on the same Gateway and rejects replacement during source authorization", async () => {
     const answer = vi.fn();

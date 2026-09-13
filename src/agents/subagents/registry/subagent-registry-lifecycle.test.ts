@@ -8,7 +8,10 @@ import type { CallGatewayOptions } from "../../../gateway/call.js";
 import { getAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
 // Subagent registry lifecycle tests cover completion, cleanup, announce retry,
 // detached task status, and resource retirement around child-run endings.
-import { bindGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
+import {
+  bindGatewayContextResolver,
+  getPluginRuntimeGatewayRequestScope,
+} from "../../../plugins/runtime/gateway-request-scope.js";
 import {
   getActiveGatewayRootWorkCount,
   getActiveGatewayRootWorkHolders,
@@ -4382,6 +4385,14 @@ describe("subagent registry lifecycle hardening", () => {
       delivery: { status: "delivered", announcedAt: 3_500, deliveredAt: 3_500 },
       endedAt: 4_000,
     });
+    const gatewayContext = { marker: "delivered-retry-owner" };
+    bindGatewayContextResolver(entry, () => gatewayContext as never);
+    gatewayMocks.callGateway.mockImplementationOnce(async (options) => {
+      expect(getPluginRuntimeGatewayRequestScope()?.resolveGatewayContext?.()).toBe(gatewayContext);
+      expect(options.assertDispatchCurrent).toBeTypeOf("function");
+      options.assertDispatchCurrent?.();
+      return {};
+    });
     const persistedSnapshots: SubagentRunRecord[] = [];
     const runSubagentAnnounceFlow = vi.fn(async () => "delivered" as const);
     const controller = createLifecycleController({
@@ -4405,6 +4416,7 @@ describe("subagent registry lifecycle hardening", () => {
       },
     });
     expect(dispatchSnapshot?.cleanupCompletedAt).toBeUndefined();
+    expect(gatewayMocks.callGateway).toHaveBeenCalledOnce();
   });
 
   it("emits ended hook while retrying cleanup after completion was already delivered", async () => {
