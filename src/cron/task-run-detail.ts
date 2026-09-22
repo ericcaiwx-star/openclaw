@@ -252,6 +252,18 @@ export function cronRunLogEntryToTaskDetail(
   return detail ?? { kind: CRON_TASK_DETAIL_KIND };
 }
 
+/** Keeps durable transport custody attached when terminal history replaces running detail. */
+export function preserveCronTaskDeliveryEvidence(
+  detail: JsonValue,
+  task: Pick<TaskRecord, "detail"> | undefined,
+): JsonValue {
+  if (!isJsonObject(detail) || !isJsonObject(task?.detail)) {
+    return detail;
+  }
+  const evidence = task.detail.deliveryEvidence;
+  return isJsonObject(evidence) ? { ...detail, deliveryEvidence: evidence } : detail;
+}
+
 /** Stores quiet-trigger recovery facts without creating a run-history detail row. */
 export function cronQuietTriggerTaskDetail(
   storeKey: string,

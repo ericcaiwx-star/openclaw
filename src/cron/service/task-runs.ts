@@ -15,6 +15,7 @@ import {
   finalizeTaskRunByRunIdCore,
   findTaskByRunId,
   recordTaskRunProgressByRunIdCore,
+  setDetachedTaskDeliveryStatusByRunIdCore,
 } from "../../tasks/task-executor.js";
 import { bindTaskFlowExecution } from "../../tasks/task-flow-registry.store.sqlite.js";
 import { listTaskRecordsByRuntimeSourceIdInDatabase } from "../../tasks/task-registry.store.kernel.js";
@@ -24,6 +25,7 @@ import {
   CRON_AGENT_SELECTION_REQUIRED_MESSAGE,
   resolveCronJobEffectiveAgentId,
 } from "../agent-id.js";
+import { resolveCronDeliveryPlan } from "../delivery-plan.js";
 import { createCronExecutionId } from "../run-id.js";
 import type { CronRunLogEntry } from "../run-log-types.js";
 import { cronStoreKey } from "../store/key.js";
@@ -33,6 +35,7 @@ import {
   cronRunLogEntryToTaskDetail,
   cronRunStatusToTaskStatus,
   cronQuietTriggerTaskDetail,
+  preserveCronTaskDeliveryEvidence,
   cronTaskRecordStoreKey,
   cronTaskRecordToRunLogEntry,
   cronTaskRecordToScriptRunResult,
@@ -337,7 +340,11 @@ function tryCreateCronTaskRunRecord(params: {
       runId: params.runId,
       label: params.job?.name,
       task: params.job?.name || params.jobId,
-      deliveryStatus: "not_applicable",
+      deliveryStatus:
+        params.job?.payload.kind === "command" &&
+        resolveCronDeliveryPlan(params.job).mode === "announce"
+          ? "pending"
+          : "not_applicable",
       notifyPolicy: "silent",
       startedAt: params.startedAt,
       lastEventAt: params.startedAt,
@@ -464,11 +471,14 @@ export function tryFinishCronTaskRun(
     }
     const storeKey = cronStoreKey(state.deps.storePath);
     const legacyRecoveryRunId = createCronExecutionId(entry.jobId, startedAt);
-    const detail = cronRunLogEntryToTaskDetail(entry, {
-      storeKey,
-      ...(result.scriptResult ? { scriptResult: result.scriptResult } : {}),
-      ...(result.triggerEval ? { triggerEval: result.triggerEval } : {}),
-    });
+    const detail = preserveCronTaskDeliveryEvidence(
+      cronRunLogEntryToTaskDetail(entry, {
+        storeKey,
+        ...(result.scriptResult ? { scriptResult: result.scriptResult } : {}),
+        ...(result.triggerEval ? { triggerEval: result.triggerEval } : {}),
+      }),
+      existingCandidate,
+    );
     const finalize = (
       runId: string,
       status: Extract<
@@ -541,7 +551,19 @@ export function tryFinishCronTaskRun(
     }
     if (updated.length === 0) {
       state.deps.log.warn({ runId: taskRunId }, "cron: task ledger record was not finalized");
+      return;
     }
+    const taskDeliveryStatus =
+      entry.deliveryStatus === "delivered"
+        ? "delivered"
+        : entry.deliveryStatus === "not-requested" || entry.deliveryStatus === undefined
+          ? "not_applicable"
+          : "failed";
+    setDetachedTaskDeliveryStatusByRunIdCore({
+      runId: taskRunId,
+      runtime: "cron",
+      deliveryStatus: taskDeliveryStatus,
+    });
   } catch (error) {
     state.deps.log.warn(
       { runId: candidateRunId, jobStatus: entry.status, error },

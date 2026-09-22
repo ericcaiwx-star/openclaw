@@ -197,6 +197,25 @@ export function setTaskRunDeliveryStatusByRunId(params: {
   return updateTaskDeliveryByRunId(params);
 }
 
+/** Applies delivery evidence only when the exact runtime-owned task identity still matches. */
+export function setTaskDeliveryEvidenceById(params: {
+  taskId: string;
+  runId: string;
+  runtime: TaskRuntime;
+  deliveryStatus: TaskDeliveryStatus;
+  detail: JsonValue;
+}): TaskRecord | null {
+  ensureTaskRegistryReady();
+  const current = tasks.get(params.taskId);
+  if (current?.runId !== params.runId || current.runtime !== params.runtime) {
+    return null;
+  }
+  return updateTask(params.taskId, {
+    deliveryStatus: params.deliveryStatus,
+    detail: structuredClone(params.detail),
+  });
+}
+
 export function updateTaskNotifyPolicyById(params: {
   taskId: string;
   notifyPolicy: TaskNotifyPolicy;
