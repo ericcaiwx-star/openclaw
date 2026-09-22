@@ -3,6 +3,9 @@ import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { retryTransientDirectCronDelivery } from "../../cron/isolated-agent/delivery-dispatch-policy.js";
+import { createCronServiceState } from "../../cron/service/state.js";
+import { tryFinishCronTaskRun } from "../../cron/service/task-runs.js";
+import type { CronJob } from "../../cron/types.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
@@ -20,7 +23,11 @@ import { PlatformMessageNotDispatchedError } from "./deliver-types.js";
 import { matrixOutboundForQueueTest } from "./deliver.queue-integration.test-support.js";
 import { createCommandCronDeliveryCustody } from "./delivery-completion.js";
 import { OUTBOUND_DELIVERY_QUEUE_NAME } from "./delivery-queue-media-staging.js";
-import { recoverPendingDeliveries, type DeliverFn } from "./delivery-queue-recovery.js";
+import {
+  drainPendingDeliveriesCore,
+  recoverPendingDeliveries,
+  type DeliverFn,
+} from "./delivery-queue-recovery.js";
 import { enqueueDeliveryOnce } from "./delivery-queue-storage.js";
 import {
   createRecoveryLog,
@@ -244,6 +251,142 @@ describe("command cron delivery recovery", () => {
       deliveryStatus: "delivered",
       detail: { deliveryEvidence: { state: "delivered" } },
     });
+  });
+
+  it("keeps retry-exhausted custody pending through cron finalization and recovery", async () => {
+    const startedAt = 1_000;
+    const runId = "cron:job-retry-exhausted:1000:receipt-retry-exhausted";
+    const job: CronJob = {
+      id: "job-retry-exhausted",
+      name: "retry exhausted command delivery",
+      enabled: true,
+      createdAtMs: 100,
+      updatedAtMs: 100,
+      schedule: { kind: "every", everyMs: 60_000, anchorMs: 100 },
+      sessionTarget: "isolated",
+      wakeMode: "next-heartbeat",
+      payload: { kind: "agentTurn", message: "work" },
+      state: { nextRunAtMs: 60_000 },
+    };
+    const task = createRunningTaskRunCore({
+      runtime: "cron",
+      sourceId: job.id,
+      ownerKey: "",
+      scopeKind: "system",
+      agentId: "main",
+      runId,
+      task: "retry exhausted command delivery",
+      deliveryStatus: "pending",
+      notifyPolicy: "silent",
+      startedAt,
+    })!;
+    const custody = createCommandCronDeliveryCustody({ taskId: task.taskId, runId });
+    const notDispatched = () =>
+      new PlatformMessageNotDispatchedError("synthetic pre-send refusal", {
+        cause: new Error("synthetic transport unavailable"),
+      });
+    const sendText = vi
+      .fn()
+      .mockRejectedValueOnce(notDispatched())
+      .mockRejectedValueOnce(notDispatched())
+      .mockRejectedValueOnce(notDispatched())
+      .mockRejectedValueOnce(notDispatched())
+      .mockResolvedValueOnce({ channel: "matrix", messageId: "synthetic-recovered-message" });
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "matrix",
+          source: "test",
+          plugin: createOutboundTestPlugin({
+            id: "matrix",
+            outbound: { deliveryMode: "direct", sendText },
+          }),
+        },
+      ]),
+    );
+    const deliver = () =>
+      deliverOutboundPayloads({
+        cfg: {} as OpenClawConfig,
+        channel: "matrix",
+        to: "!synthetic:retry-exhausted",
+        payloads: [{ text: "recover after finalization" }],
+        deps: {},
+        queuePolicy: "required",
+        deliveryQueueStateDir: stateDir,
+        deliveryIntentId: custody.deliveryIntentId,
+        deliveryCompletion: custody.deliveryCompletion,
+        completionRetention: custody.completionRetention,
+        reusePendingDeliveryIntent: true,
+      });
+
+    await expect(retryTransientDirectCronDelivery({ jobId: job.id, run: deliver })).rejects.toThrow(
+      "synthetic pre-send refusal",
+    );
+    expect(sendText).toHaveBeenCalledTimes(4);
+    expect(getTaskById(task.taskId)).toMatchObject({
+      deliveryStatus: "pending",
+      detail: { deliveryEvidence: { state: "queued" } },
+    });
+
+    const cronState = createCronServiceState({
+      storePath: path.join(stateDir, "cron", "jobs.json"),
+      cronEnabled: true,
+      defaultAgentId: "main",
+      log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      nowMs: () => startedAt + 100,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+    });
+    tryFinishCronTaskRun(cronState, {
+      taskRunId: runId,
+      job,
+      event: {
+        jobId: job.id,
+        action: "finished",
+        job,
+        status: "error",
+        completionStatus: "unknown",
+        error: "synthetic direct delivery retry exhausted",
+        delivered: false,
+        deliveryStatus: "not-delivered",
+        runAtMs: startedAt,
+        durationMs: 100,
+      },
+    });
+
+    expect(getTaskById(task.taskId)).toMatchObject({
+      deliveryStatus: "pending",
+      detail: {
+        deliveryStatus: "unknown",
+        deliveryEvidence: { intentId: custody.deliveryIntentId, state: "queued" },
+      },
+    });
+
+    await drainPendingDeliveriesCore({
+      drainKey: "cron-retry-exhausted-test",
+      logLabel: "cron retry exhausted test drain",
+      cfg: {} as OpenClawConfig,
+      deliver: (params) => deliverOutboundPayloads({ ...params, deps: {} }),
+      log: createRecoveryLog(),
+      stateDir,
+      selectEntry: (entry) => ({
+        match: entry.id === custody.deliveryIntentId,
+        bypassBackoff: true,
+      }),
+    });
+
+    expect(sendText).toHaveBeenCalledTimes(5);
+    expect(getTaskById(task.taskId)).toMatchObject({
+      deliveryStatus: "delivered",
+      detail: {
+        deliveryStatus: "delivered",
+        deliveryEvidence: { intentId: custody.deliveryIntentId, state: "delivered" },
+      },
+    });
+    expect(
+      getDeliveryQueueEntryStatus(OUTBOUND_DELIVERY_QUEUE_NAME, custody.deliveryIntentId, stateDir),
+    ).toBe("completed");
   });
 
   it("retains queue custody when task evidence storage is unavailable", async () => {

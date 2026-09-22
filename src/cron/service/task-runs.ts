@@ -560,10 +560,12 @@ export function tryFinishCronTaskRun(
     const taskDeliveryStatus =
       retainedDeliveryState === "delivered" || entry.deliveryStatus === "delivered"
         ? "delivered"
-        : retainedDeliveryState === undefined &&
-            (entry.deliveryStatus === "not-requested" || entry.deliveryStatus === undefined)
-          ? "not_applicable"
-          : "failed";
+        : retainedDeliveryState === "queued"
+          ? "pending"
+          : retainedDeliveryState === undefined &&
+              (entry.deliveryStatus === "not-requested" || entry.deliveryStatus === undefined)
+            ? "not_applicable"
+            : "failed";
     setDetachedTaskDeliveryStatusByRunIdCore({
       runId: taskRunId,
       runtime: "cron",

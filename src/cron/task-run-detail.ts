@@ -280,6 +280,12 @@ export function preserveCronTaskDeliveryEvidence(
       preserved.deliveryStatus = "unknown";
       delete preserved.delivered;
       break;
+    case "queued":
+      // Cron history has no pending delivery value. Keep it non-terminal while
+      // the durable queue still owns the send; deliveryEvidence is authoritative.
+      preserved.deliveryStatus = "unknown";
+      delete preserved.delivered;
+      break;
     default:
       break;
   }

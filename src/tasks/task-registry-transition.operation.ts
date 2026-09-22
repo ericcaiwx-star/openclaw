@@ -288,12 +288,14 @@ function prepareTaskRecordTransition(
           : state === "unknown"
             ? "unknown"
             : state === "queued"
-              ? (detail.deliveryStatus ?? "unknown")
+              ? "unknown"
               : "not-delivered";
       if (state === "delivered") {
         detail.delivered = true;
       } else if (state === "suppressed" || state === "rejected") {
         detail.delivered = false;
+      } else if (state === "queued" || state === "unknown") {
+        delete detail.delivered;
       }
     }
     const deliveryStatus: TaskDeliveryStatus =
