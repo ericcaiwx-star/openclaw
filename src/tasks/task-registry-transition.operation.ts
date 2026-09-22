@@ -45,7 +45,7 @@ export type TaskRunStateTransitionParams = {
   suppressDelivery?: boolean;
 };
 
-type TaskRunDeliveryTransitionParams = {
+export type TaskRunDeliveryTransitionParams = {
   runId: string;
   runtime?: TaskRuntime;
   sessionKey?: string;

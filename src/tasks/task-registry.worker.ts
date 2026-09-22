@@ -101,6 +101,7 @@ export function executeTaskRegistryCommand(
     command.type === "tasks.finalizeActive" ||
     command.type === "tasks.settleUnstarted" ||
     command.type === "tasks.setCronDeliveryEvidence" ||
+    command.type === "tasks.setDeliveryStatus" ||
     command.type === "flows.createForTask" ||
     command.type === "tasks.linkInitialFlow" ||
     command.type === "flows.deleteUnlinkedForTask" ||

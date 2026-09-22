@@ -211,6 +211,67 @@ export function setTaskRunDeliveryStatusByRunId(params: {
   return updateTaskDeliveryByRunId(params);
 }
 
+/** Commits one exact task's delivery projection through the task worker. */
+export async function setTaskDeliveryStatusById(params: {
+  taskId: string;
+  runId: string;
+  runtime: TaskRuntime;
+  deliveryStatus: TaskDeliveryStatus;
+  error?: string;
+  context?: OpenClawStateWorkerContext;
+}): Promise<TaskRecord | null> {
+  const context = params.context ?? captureOpenClawStateWorkerContext();
+  const store = getTaskRegistryStore();
+  const assertCurrent = () => {
+    context.admission.assertCurrent();
+    if (getTaskRegistryStore() !== store) {
+      throw new Error("Task delivery projection lost its selected registry owner");
+    }
+  };
+  const command = {
+    type: "tasks.setDeliveryStatus" as const,
+    input: {
+      taskId: params.taskId,
+      params: {
+        runId: params.runId,
+        runtime: params.runtime,
+        deliveryStatus: params.deliveryStatus,
+        ...(params.error !== undefined ? { error: params.error } : {}),
+      },
+      now: Date.now(),
+    },
+  };
+  const mutate = () => store.runInitialMutationAsync(context, command, assertCurrent);
+
+  if (path.resolve(resolveOpenClawStateSqlitePath()) !== context.admission.databasePath) {
+    const committed = await mutate();
+    return committed ? cloneTaskRecord(committed.task) : null;
+  }
+
+  await ensureTaskRegistryReadyAsync(context);
+  assertCurrent();
+  let committed: Awaited<
+    ReturnType<typeof store.runInitialMutationAsync<"tasks.setDeliveryStatus">>
+  > = null;
+  const scope = { taskId: params.taskId, runId: params.runId };
+  const receipt = await runTaskRegistryWorkerMutation(
+    {
+      scope,
+      admission: context.admission,
+      readIdentity: "preserved",
+      taskRowsWritten: () => committed?.persisted ?? false,
+      publicationRecords: () => new Map(committed ? [[committed.task.taskId, committed.task]] : []),
+      forcePublish: () => committed?.task,
+    },
+    async () => {
+      committed = await mutate();
+      return committed;
+    },
+    () => store.loadMutationSnapshotAsync(context, scope),
+  );
+  return receipt ? cloneTaskRecord(receipt.task) : null;
+}
+
 /** Commits delivery evidence through the task worker after exact row identity validation. */
 export async function setTaskCronDeliveryEvidenceById(params: {
   taskId: string;

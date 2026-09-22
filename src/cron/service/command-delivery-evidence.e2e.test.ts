@@ -62,16 +62,19 @@ describe("command cron delivery evidence chain", () => {
               "SELECT receipt_id AS receiptId FROM cron_run_receipts WHERE job_id = ? ORDER BY started_at_ms DESC LIMIT 1",
             )
             .get(job.id) as { receiptId: string };
-          const task = db
-            .prepare(
-              "SELECT task_id AS taskId, run_id AS runId, delivery_status AS deliveryStatus, detail_json AS detailJson FROM task_runs WHERE source_id = ? ORDER BY created_at DESC LIMIT 1",
-            )
-            .get(job.id) as {
-            taskId: string;
-            runId: string;
-            deliveryStatus: string;
-            detailJson: string;
-          };
+          const readTask = () =>
+            db
+              .prepare(
+                "SELECT task_id AS taskId, run_id AS runId, delivery_status AS deliveryStatus, detail_json AS detailJson FROM task_runs WHERE source_id = ? ORDER BY created_at DESC LIMIT 1",
+              )
+              .get(job.id) as {
+              taskId: string;
+              runId: string;
+              deliveryStatus: string;
+              detailJson: string;
+            };
+          await vi.waitFor(() => expect(readTask().deliveryStatus).toBe("failed"));
+          const task = readTask();
           expect(observedIdentity).toEqual({ taskId: task.taskId, runId: task.runId });
           expect(task.runId).toContain(`:${receipt.receiptId}`);
           expect(task.deliveryStatus).toBe("failed");

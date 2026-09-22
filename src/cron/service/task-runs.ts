@@ -9,13 +9,13 @@ import {
 import { normalizeAgentId, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { CRON_TASK_KIND } from "../../tasks/cron-task-contract.js";
+import { setTaskDeliveryStatusById } from "../../tasks/runtime-internal.js";
 import {
   createRunningTaskRunCore,
   finalizeTaskRunById,
   finalizeTaskRunByRunIdCore,
   findTaskByRunId,
   recordTaskRunProgressByRunIdCore,
-  setDetachedTaskDeliveryStatusByRunIdCore,
 } from "../../tasks/task-executor.js";
 import { bindTaskFlowExecution } from "../../tasks/task-flow-registry.store.sqlite.js";
 import { listTaskRecordsByRuntimeSourceIdInDatabase } from "../../tasks/task-registry.store.kernel.js";
@@ -566,11 +566,26 @@ export function tryFinishCronTaskRun(
               (entry.deliveryStatus === "not-requested" || entry.deliveryStatus === undefined)
             ? "not_applicable"
             : "failed";
-    setDetachedTaskDeliveryStatusByRunIdCore({
-      runId: taskRunId,
-      runtime: "cron",
-      deliveryStatus: taskDeliveryStatus,
-    });
+    const completedJob = result.job ?? result.event.job;
+    if (completedJob?.payload.kind === "command") {
+      // Finalization runs on the Gateway thread. Keep the new delivery projection
+      // off that thread and publish only after the task worker commits each exact row.
+      void Promise.all(
+        updated.map((task) =>
+          setTaskDeliveryStatusById({
+            taskId: task.taskId,
+            runId: taskRunId,
+            runtime: "cron",
+            deliveryStatus: taskDeliveryStatus,
+          }),
+        ),
+      ).catch((error: unknown) => {
+        state.deps.log.warn(
+          { runId: taskRunId, jobStatus: entry.status, error },
+          "cron: failed to project task delivery status",
+        );
+      });
+    }
   } catch (error) {
     state.deps.log.warn(
       { runId: candidateRunId, jobStatus: entry.status, error },

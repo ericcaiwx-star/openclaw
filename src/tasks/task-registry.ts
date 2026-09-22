@@ -15,6 +15,7 @@ export {
   markTaskTerminalById,
   recordTaskProgressByRunId,
   setTaskCronDeliveryEvidenceById,
+  setTaskDeliveryStatusById,
   setTaskCleanupAfterById,
   setTaskRunDeliveryStatusByRunId,
   updateTaskNotifyPolicyById,

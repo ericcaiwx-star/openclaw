@@ -28,6 +28,10 @@ type TaskWorkerTransitionInput =
   | (Extract<TaskRecordTransitionInput, { kind: "cron-delivery-evidence" }> & {
       expectedTask?: never;
       selection?: never;
+    })
+  | (Extract<TaskRecordTransitionInput, { kind: "delivery" }> & {
+      expectedTask?: never;
+      selection?: never;
     });
 
 export function hasAuthoritativeTaskBackingInDatabase(db: DatabaseSync, task: TaskRecord): boolean {
