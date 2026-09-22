@@ -50,6 +50,7 @@ import { emit, isImmediateCronRunMode } from "./state.js";
 import { ensureLoaded, runPostPersistCronNotifications } from "./store.js";
 import {
   createCronOwnerExecutionIdentityAdmission,
+  drainCronTaskDeliveryProjections,
   tryFinishCronTaskRunWithoutHistory,
 } from "./task-runs.js";
 import { createCronOutcomeEvent, recordCronOutcomeForJob } from "./timer-outcome-events.js";
@@ -346,6 +347,7 @@ async function finishPreparedManualRun(
     }
     emitMissingTerminal();
   } finally {
+    await drainCronTaskDeliveryProjections();
     // A failed row write leaves the exact receipt for recovery of its terminal
     // task fact. Only local liveness and admission ownership retire here.
     releaseLocalCronRunReceiptOwnership(prepared.runReceipt);

@@ -126,7 +126,6 @@ export async function finalizeCompletedCronRunOutcomes(
           recordCronOutcomeForJob(state, taskJob, outcome);
         }
       }
-      await drainCronTaskDeliveryProjections();
       // Retirement fences publication, not the exact receipt's durable result.
       // The transaction revalidates ownership before touching authoritative rows.
       finalizedOutcomes = outcomes.filter((outcome) => outcome.runReceipt || canPublish(outcome));
@@ -306,6 +305,7 @@ export async function finalizeCompletedCronRunOutcomes(
     }
     throw error;
   } finally {
+    await drainCronTaskDeliveryProjections();
     for (const outcome of outcomes) {
       if (outcome.reservationIdentity) {
         releaseQueuedCronRun(state, outcome.jobId, outcome.reservationIdentity);
