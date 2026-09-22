@@ -121,12 +121,6 @@ it("does not let a delayed command projection overwrite delivered evidence", asy
         throw new Error("expected cron task id");
       }
       const intentId = `cron-command-delivery:v1:${task.taskId}`;
-      await setTaskCronDeliveryEvidenceById({
-        taskId: task.taskId,
-        runId: task.runId,
-        intentId,
-        state: "queued",
-      });
 
       const store = getTaskRegistryStore();
       const mutate = store.runInitialMutationAsync.bind(store);
@@ -148,10 +142,11 @@ it("does not let a delayed command projection overwrite delivered evidence", asy
             jobId: job.id,
             action: "finished",
             job,
-            status: "ok",
-            completionStatus: "succeeded",
+            status: "error",
+            completionStatus: "failed",
+            error: "synthetic delivery failure",
             delivered: false,
-            deliveryStatus: "unknown",
+            deliveryStatus: "not-delivered",
             runAtMs: startedAt,
             durationMs: 100,
           },

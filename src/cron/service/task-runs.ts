@@ -567,11 +567,14 @@ export function tryFinishCronTaskRun(
             ? "not_applicable"
             : "failed";
     const completedJob = result.job ?? result.event.job;
-    if (completedJob?.payload.kind === "command") {
+    const tasksNeedingDeliveryProjection = updated.filter(
+      (task) => task.deliveryStatus !== taskDeliveryStatus,
+    );
+    if (completedJob?.payload.kind === "command" && tasksNeedingDeliveryProjection.length > 0) {
       // Finalization runs on the Gateway thread. Keep the new delivery projection
       // off that thread and publish only after the task worker commits each exact row.
       void Promise.all(
-        updated.map((task) =>
+        tasksNeedingDeliveryProjection.map((task) =>
           setTaskDeliveryStatusById({
             taskId: task.taskId,
             runId: taskRunId,
