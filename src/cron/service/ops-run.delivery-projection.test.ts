@@ -1,5 +1,6 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.js";
+import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
 import { getTaskRegistryStore } from "../../tasks/task-registry.store.js";
 import { resetTaskRegistryForTests } from "../../tasks/task-runtime.test-helpers.js";
 import { setupCronServiceSuite } from "../service.test-harness.js";
@@ -15,6 +16,7 @@ const { logger, makeStorePath } = setupCronServiceSuite({
 
 afterEach(async () => {
   await drainCronTaskDeliveryProjections();
+  await closeOpenClawStateDatabaseAsync();
   vi.restoreAllMocks();
   resetTaskRegistryForTests({ persist: false });
 });
