@@ -36,6 +36,7 @@ import {
   cronRunStatusToTaskStatus,
   cronQuietTriggerTaskDetail,
   preserveCronTaskDeliveryEvidence,
+  readCronTaskDeliveryEvidenceState,
   cronTaskRecordStoreKey,
   cronTaskRecordToRunLogEntry,
   cronTaskRecordToScriptRunResult,
@@ -553,10 +554,14 @@ export function tryFinishCronTaskRun(
       state.deps.log.warn({ runId: taskRunId }, "cron: task ledger record was not finalized");
       return;
     }
+    const retainedDeliveryState = updated
+      .map((task) => readCronTaskDeliveryEvidenceState(task.detail))
+      .find((value) => value !== undefined);
     const taskDeliveryStatus =
-      entry.deliveryStatus === "delivered"
+      retainedDeliveryState === "delivered" || entry.deliveryStatus === "delivered"
         ? "delivered"
-        : entry.deliveryStatus === "not-requested" || entry.deliveryStatus === undefined
+        : retainedDeliveryState === undefined &&
+            (entry.deliveryStatus === "not-requested" || entry.deliveryStatus === undefined)
           ? "not_applicable"
           : "failed";
     setDetachedTaskDeliveryStatusByRunIdCore({

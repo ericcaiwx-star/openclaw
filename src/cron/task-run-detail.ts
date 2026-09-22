@@ -24,6 +24,7 @@ type CronDeliveryStatus = import("./types.js").CronDeliveryStatus;
 type CronRunStatus = import("./types.js").CronRunStatus;
 
 const CRON_TASK_DETAIL_KIND = "cron-run";
+type CronTaskDeliveryEvidenceState = "queued" | "delivered" | "suppressed" | "rejected" | "unknown";
 const CRON_FAILOVER_REASONS = new Set(FAILOVER_REASONS);
 const cronRunStatusSchema = z.enum(["ok", "error", "skipped"]);
 const cronCompletionStatusSchema = z.enum(["succeeded", "failed", "unknown"]);
@@ -261,7 +262,45 @@ export function preserveCronTaskDeliveryEvidence(
     return detail;
   }
   const evidence = task.detail.deliveryEvidence;
-  return isJsonObject(evidence) ? { ...detail, deliveryEvidence: evidence } : detail;
+  if (!isJsonObject(evidence)) {
+    return detail;
+  }
+  const preserved: { [key: string]: JsonValue } = { ...detail, deliveryEvidence: evidence };
+  switch (readCronTaskDeliveryEvidenceState(preserved)) {
+    case "delivered":
+      preserved.deliveryStatus = "delivered";
+      preserved.delivered = true;
+      break;
+    case "suppressed":
+    case "rejected":
+      preserved.deliveryStatus = "not-delivered";
+      preserved.delivered = false;
+      break;
+    case "unknown":
+      preserved.deliveryStatus = "unknown";
+      delete preserved.delivered;
+      break;
+    default:
+      break;
+  }
+  return preserved;
+}
+
+/** Reads the private transport evidence used to keep public delivery projections monotonic. */
+export function readCronTaskDeliveryEvidenceState(
+  detail: JsonValue | undefined,
+): CronTaskDeliveryEvidenceState | undefined {
+  if (!isJsonObject(detail) || !isJsonObject(detail.deliveryEvidence)) {
+    return undefined;
+  }
+  const state = detail.deliveryEvidence.state;
+  return state === "queued" ||
+    state === "delivered" ||
+    state === "suppressed" ||
+    state === "rejected" ||
+    state === "unknown"
+    ? state
+    : undefined;
 }
 
 /** Stores quiet-trigger recovery facts without creating a run-history detail row. */

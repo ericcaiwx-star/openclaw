@@ -1,4 +1,7 @@
+import path from "node:path";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
+import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
 import { normalizeTaskSummary, resolveTaskTerminalOutcome } from "./task-registry-common.js";
 import { assertParentFlowLinkAllowed } from "./task-registry-flow-link.js";
 import { updateTask } from "./task-registry-mutation.js";
@@ -214,16 +217,40 @@ export async function setTaskCronDeliveryEvidenceById(params: {
   runId: string;
   intentId: string;
   state: TaskCronDeliveryEvidenceState;
+  context?: OpenClawStateWorkerContext;
 }): Promise<TaskRecord | null> {
-  const context = captureOpenClawStateWorkerContext();
+  const context = params.context ?? captureOpenClawStateWorkerContext();
   const store = getTaskRegistryStore();
-  await ensureTaskRegistryReadyAsync(context);
   const assertCurrent = () => {
     context.admission.assertCurrent();
     if (getTaskRegistryStore() !== store) {
       throw new Error("Task delivery evidence lost its selected registry owner");
     }
   };
+  const command = {
+    type: "tasks.setCronDeliveryEvidence" as const,
+    input: {
+      taskId: params.taskId,
+      params: {
+        runId: params.runId,
+        runtime: "cron" as const,
+        intentId: params.intentId,
+        state: params.state,
+      },
+      now: Date.now(),
+    },
+  };
+  const mutate = () => store.runInitialMutationAsync(context, command, assertCurrent);
+
+  // Recovery may intentionally select a state root other than the process ambient root.
+  // Mutate that exact database through its worker without publishing it into the ambient
+  // in-memory projection.
+  if (path.resolve(resolveOpenClawStateSqlitePath()) !== context.admission.databasePath) {
+    const committed = await mutate();
+    return committed ? cloneTaskRecord(committed.task) : null;
+  }
+
+  await ensureTaskRegistryReadyAsync(context);
   assertCurrent();
   let committed: Awaited<
     ReturnType<typeof store.runInitialMutationAsync<"tasks.setCronDeliveryEvidence">>
@@ -239,23 +266,7 @@ export async function setTaskCronDeliveryEvidenceById(params: {
       forcePublish: () => committed?.task,
     },
     async () => {
-      committed = await store.runInitialMutationAsync(
-        context,
-        {
-          type: "tasks.setCronDeliveryEvidence",
-          input: {
-            taskId: params.taskId,
-            params: {
-              runId: params.runId,
-              runtime: "cron",
-              intentId: params.intentId,
-              state: params.state,
-            },
-            now: Date.now(),
-          },
-        },
-        assertCurrent,
-      );
+      committed = await mutate();
       return committed;
     },
     () => store.loadMutationSnapshotAsync(context, scope),

@@ -1,11 +1,17 @@
+import fs from "node:fs";
+import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { retryTransientDirectCronDelivery } from "../../cron/isolated-agent/delivery-dispatch-policy.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
+import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { createRunningTaskRunCore } from "../../tasks/task-executor.js";
 import { getTaskById } from "../../tasks/task-registry.js";
-import { configureTaskRegistryRuntime } from "../../tasks/task-registry.store.js";
+import {
+  configureTaskRegistryRuntime,
+  getTaskRegistryStore,
+} from "../../tasks/task-registry.store.js";
 import { resetTaskRegistryForTests } from "../../tasks/task-runtime.test-helpers.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { createInMemoryTaskRegistryStore } from "../../test-utils/task-registry-store.js";
@@ -106,6 +112,75 @@ describe("command cron delivery recovery", () => {
         deliveryEvidence: { intentId: custody.deliveryIntentId, state: "delivered" },
       },
     });
+  });
+
+  it("recovers the selected durable task root when the ambient root differs", async () => {
+    resetTaskRegistryForTests({ persist: false });
+    const selectedStateDir = stateDir;
+    const runId = "cron:job-selected-root:1000:receipt-selected-root";
+    const task = createRunningTaskRunCore({
+      runtime: "cron",
+      sourceId: "job-selected-root",
+      ownerKey: "",
+      scopeKind: "system",
+      agentId: "main",
+      runId,
+      task: "recover selected root",
+      deliveryStatus: "pending",
+      notifyPolicy: "silent",
+      startedAt: 1_000,
+    })!;
+    const custody = createCommandCronDeliveryCustody({ taskId: task.taskId, runId });
+    await enqueueDeliveryOnce(
+      {
+        channel: "matrix",
+        to: "!synthetic:selected-root",
+        payloads: [{ text: "recover selected root" }],
+        queuePolicy: "required",
+        deliveryCompletion: custody.deliveryCompletion,
+        completionRetention: custody.completionRetention,
+      },
+      custody.deliveryIntentId,
+      selectedStateDir,
+    );
+
+    resetTaskRegistryForTests({ persist: false });
+    const ambientStateDir = path.join(selectedStateDir, "ambient-root");
+    fs.mkdirSync(ambientStateDir, { recursive: true });
+    process.env.OPENCLAW_STATE_DIR = ambientStateDir;
+    const sendMatrix = vi.fn().mockResolvedValue({ messageId: "synthetic-selected-root" });
+    const deliver = vi.fn<DeliverFn>(async (params) =>
+      deliverOutboundPayloads({ ...params, deps: { matrix: sendMatrix } }),
+    );
+
+    await recoverPendingDeliveries({
+      cfg: {} as OpenClawConfig,
+      deliver,
+      log: createRecoveryLog(),
+      stateDir: selectedStateDir,
+    });
+
+    expect(deliver).toHaveBeenCalledOnce();
+    expect(sendMatrix).toHaveBeenCalledOnce();
+    const selectedContext = captureOpenClawStateWorkerContext({
+      env: { ...process.env, OPENCLAW_STATE_DIR: selectedStateDir },
+    });
+    const snapshot = await getTaskRegistryStore().loadMutationSnapshotAsync(selectedContext, {
+      taskId: task.taskId,
+    });
+    expect(snapshot.tasks.get(task.taskId)).toMatchObject({
+      deliveryStatus: "delivered",
+      detail: {
+        deliveryEvidence: { intentId: custody.deliveryIntentId, state: "delivered" },
+      },
+    });
+    expect(
+      getDeliveryQueueEntryStatus(
+        OUTBOUND_DELIVERY_QUEUE_NAME,
+        custody.deliveryIntentId,
+        selectedStateDir,
+      ),
+    ).toBe("completed");
   });
 
   it("reuses the pending command intent after a proven no-send and then succeeds", async () => {

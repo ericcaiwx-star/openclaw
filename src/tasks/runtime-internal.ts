@@ -73,6 +73,7 @@ export {
   resolveTaskForLookupToken,
   isParentFlowLinkError,
   setTaskCleanupAfterById,
+  setTaskCronDeliveryEvidenceById,
   setTaskRunDeliveryStatusByRunId,
   updateTaskNotifyPolicyById,
 } from "./task-registry.js";
