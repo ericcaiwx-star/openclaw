@@ -106,6 +106,52 @@ export type TaskRecordTransitionReceipt = TaskRecordUpdate & {
   nextEvent?: TaskEventRecord;
 };
 
+type CronTaskDeliveryEvidence = {
+  intentId: string;
+  state: TaskCronDeliveryEvidenceState;
+};
+
+function readCronTaskDeliveryEvidence(
+  detail: JsonValue | undefined,
+): CronTaskDeliveryEvidence | null {
+  if (!detail || typeof detail !== "object" || Array.isArray(detail)) {
+    return null;
+  }
+  const evidence = detail.deliveryEvidence;
+  if (!evidence || typeof evidence !== "object" || Array.isArray(evidence)) {
+    return null;
+  }
+  const state = evidence.state;
+  if (
+    typeof evidence.intentId !== "string" ||
+    (state !== "queued" &&
+      state !== "delivered" &&
+      state !== "suppressed" &&
+      state !== "rejected" &&
+      state !== "unknown")
+  ) {
+    return null;
+  }
+  return { intentId: evidence.intentId, state };
+}
+
+function deliveryStatusFromCronEvidence(
+  current: TaskRecord,
+  fallback: TaskDeliveryStatus,
+): TaskDeliveryStatus {
+  if (current.runtime !== "cron") {
+    return fallback;
+  }
+  const evidence = readCronTaskDeliveryEvidence(current.detail);
+  return evidence?.state === "queued"
+    ? "pending"
+    : evidence?.state === "delivered"
+      ? "delivered"
+      : evidence
+        ? "failed"
+        : fallback;
+}
+
 /** This is also the ordinary synchronous update owner's persistence/no-op decision. */
 export function prepareTaskRecordUpdate(
   current: TaskRecord,
@@ -253,22 +299,10 @@ function prepareTaskRecordTransition(
       current.detail && typeof current.detail === "object" && !Array.isArray(current.detail)
         ? { ...current.detail }
         : {};
-    const existing = detail.deliveryEvidence;
-    const existingState =
-      existing && typeof existing === "object" && !Array.isArray(existing)
-        ? existing.state
-        : undefined;
-    const existingIntentId =
-      existing && typeof existing === "object" && !Array.isArray(existing)
-        ? existing.intentId
-        : undefined;
+    const existing = readCronTaskDeliveryEvidence(current.detail);
     const terminalState =
-      existingIntentId === input.params.intentId &&
-      (existingState === "delivered" ||
-        existingState === "suppressed" ||
-        existingState === "rejected" ||
-        existingState === "unknown")
-        ? existingState
+      existing?.intentId === input.params.intentId && existing.state !== "queued"
+        ? existing.state
         : undefined;
     if (terminalState) {
       return {
@@ -306,11 +340,12 @@ function prepareTaskRecordTransition(
     };
   }
   if (input.kind === "delivery") {
+    const deliveryStatus = deliveryStatusFromCronEvidence(current, input.params.deliveryStatus);
     return {
       ...prepareTaskRecordUpdate(
         current,
         {
-          deliveryStatus: input.params.deliveryStatus,
+          deliveryStatus,
           ...(input.params.error !== undefined ? { error: input.params.error } : {}),
         },
         input.now,

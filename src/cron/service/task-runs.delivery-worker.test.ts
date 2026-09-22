@@ -1,5 +1,8 @@
 import { afterEach, expect, it, vi } from "vitest";
+import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.js";
+import { setTaskCronDeliveryEvidenceById } from "../../tasks/runtime-internal.js";
 import * as taskExecutor from "../../tasks/task-executor.js";
+import { getTaskRegistryStore } from "../../tasks/task-registry.store.js";
 import { listTaskRegistryRecordsByRuntimeSourceIdFromSqlite } from "../../tasks/task-registry.store.sqlite.js";
 import { resetTaskRegistryForTests } from "../../tasks/task-runtime.test-helpers.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -81,6 +84,100 @@ it("projects command delivery status through the task worker", async () => {
         },
         { timeout: 5_000 },
       );
+    },
+  );
+});
+
+it("does not let a delayed command projection overwrite delivered evidence", async () => {
+  await withOpenClawTestState(
+    { layout: "state-only", prefix: "openclaw-cron-command-delivery-race-" },
+    async () => {
+      resetTaskRegistryForTests();
+      const startedAt = 3_000;
+      const job: CronJob = {
+        id: "command-delivery-race",
+        name: "command delivery race",
+        enabled: true,
+        createdAtMs: 100,
+        updatedAtMs: 100,
+        schedule: { kind: "every", everyMs: 60_000, anchorMs: 100 },
+        sessionTarget: "isolated",
+        wakeMode: "next-heartbeat",
+        payload: { kind: "command", argv: ["synthetic-command"] },
+        state: { nextRunAtMs: 60_000 },
+      };
+      const state = createCronServiceState({
+        storePath: "/tmp/jobs.json",
+        cronEnabled: true,
+        defaultAgentId: "main",
+        log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+        nowMs: () => startedAt + 100,
+        enqueueSystemEvent: vi.fn(),
+        requestHeartbeat: vi.fn(),
+        runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+      });
+      const task = tryCreateCronTaskRunHandle({ state, job, startedAt });
+      if (!task.taskId) {
+        throw new Error("expected cron task id");
+      }
+      const intentId = `cron-command-delivery:v1:${task.taskId}`;
+      await setTaskCronDeliveryEvidenceById({
+        taskId: task.taskId,
+        runId: task.runId,
+        intentId,
+        state: "queued",
+      });
+
+      const store = getTaskRegistryStore();
+      const mutate = store.runInitialMutationAsync.bind(store);
+      const projectionEntered = createDeferred();
+      const releaseProjection = createDeferred();
+      vi.spyOn(store, "runInitialMutationAsync").mockImplementation(async (...args) => {
+        if (args[1].type === "tasks.setDeliveryStatus") {
+          projectionEntered.resolve();
+          await releaseProjection.promise;
+        }
+        return mutate(...args);
+      });
+
+      try {
+        tryFinishCronTaskRun(state, {
+          taskRunId: task.runId,
+          job,
+          event: {
+            jobId: job.id,
+            action: "finished",
+            job,
+            status: "ok",
+            completionStatus: "succeeded",
+            delivered: false,
+            deliveryStatus: "unknown",
+            runAtMs: startedAt,
+            durationMs: 100,
+          },
+        });
+        await withTestTimeout(projectionEntered.promise, 5_000, "pending projection entered");
+        await expect(
+          setTaskCronDeliveryEvidenceById({
+            taskId: task.taskId,
+            runId: task.runId,
+            intentId,
+            state: "delivered",
+          }),
+        ).resolves.toMatchObject({ deliveryStatus: "delivered" });
+      } finally {
+        releaseProjection.resolve();
+      }
+      await vi.waitFor(() => {
+        const [row] = listTaskRegistryRecordsByRuntimeSourceIdFromSqlite({
+          runtime: "cron",
+          sourceId: job.id,
+        });
+        expect(row).toMatchObject({
+          deliveryStatus: "delivered",
+          detail: { deliveryEvidence: { intentId, state: "delivered" } },
+        });
+      });
     },
   );
 });
