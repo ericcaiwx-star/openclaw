@@ -1,10 +1,21 @@
+import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { normalizeTaskSummary, resolveTaskTerminalOutcome } from "./task-registry-common.js";
 import { assertParentFlowLinkAllowed } from "./task-registry-flow-link.js";
 import { updateTask } from "./task-registry-mutation.js";
 import { cloneTaskRecord } from "./task-registry-records.js";
-import { withTaskRegistryMutation, ensureTaskRegistryReady, tasks } from "./task-registry-state.js";
+import {
+  ensureTaskRegistryReady,
+  ensureTaskRegistryReadyAsync,
+  runTaskRegistryWorkerMutation,
+  tasks,
+  withTaskRegistryMutation,
+} from "./task-registry-state.js";
 import { transitionTaskRecordsByRunNative } from "./task-registry-transition.native.js";
-import type { TaskRunStateTransitionParams } from "./task-registry-transition.operation.js";
+import type {
+  TaskCronDeliveryEvidenceState,
+  TaskRunStateTransitionParams,
+} from "./task-registry-transition.operation.js";
+import { getTaskRegistryStore } from "./task-registry.store.js";
 import {
   parseTaskNotifyPolicy,
   type JsonValue,
@@ -197,23 +208,59 @@ export function setTaskRunDeliveryStatusByRunId(params: {
   return updateTaskDeliveryByRunId(params);
 }
 
-/** Applies delivery evidence only when the exact runtime-owned task identity still matches. */
-export function setTaskDeliveryEvidenceById(params: {
+/** Commits delivery evidence through the task worker after exact row identity validation. */
+export async function setTaskCronDeliveryEvidenceById(params: {
   taskId: string;
   runId: string;
-  runtime: TaskRuntime;
-  deliveryStatus: TaskDeliveryStatus;
-  detail: JsonValue;
-}): TaskRecord | null {
-  ensureTaskRegistryReady();
-  const current = tasks.get(params.taskId);
-  if (current?.runId !== params.runId || current.runtime !== params.runtime) {
-    return null;
-  }
-  return updateTask(params.taskId, {
-    deliveryStatus: params.deliveryStatus,
-    detail: structuredClone(params.detail),
-  });
+  intentId: string;
+  state: TaskCronDeliveryEvidenceState;
+}): Promise<TaskRecord | null> {
+  const context = captureOpenClawStateWorkerContext();
+  const store = getTaskRegistryStore();
+  await ensureTaskRegistryReadyAsync(context);
+  const assertCurrent = () => {
+    context.admission.assertCurrent();
+    if (getTaskRegistryStore() !== store) {
+      throw new Error("Task delivery evidence lost its selected registry owner");
+    }
+  };
+  assertCurrent();
+  let committed: Awaited<
+    ReturnType<typeof store.runInitialMutationAsync<"tasks.setCronDeliveryEvidence">>
+  > = null;
+  const scope = { taskId: params.taskId, runId: params.runId };
+  const receipt = await runTaskRegistryWorkerMutation(
+    {
+      scope,
+      admission: context.admission,
+      readIdentity: "preserved",
+      taskRowsWritten: () => committed?.persisted ?? false,
+      publicationRecords: () => new Map(committed ? [[committed.task.taskId, committed.task]] : []),
+      forcePublish: () => committed?.task,
+    },
+    async () => {
+      committed = await store.runInitialMutationAsync(
+        context,
+        {
+          type: "tasks.setCronDeliveryEvidence",
+          input: {
+            taskId: params.taskId,
+            params: {
+              runId: params.runId,
+              runtime: "cron",
+              intentId: params.intentId,
+              state: params.state,
+            },
+            now: Date.now(),
+          },
+        },
+        assertCurrent,
+      );
+      return committed;
+    },
+    () => store.loadMutationSnapshotAsync(context, scope),
+  );
+  return receipt ? cloneTaskRecord(receipt.task) : null;
 }
 
 export function updateTaskNotifyPolicyById(params: {

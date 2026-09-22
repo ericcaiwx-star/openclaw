@@ -53,9 +53,24 @@ type TaskRunDeliveryTransitionParams = {
   error?: string;
 };
 
+export type TaskCronDeliveryEvidenceState =
+  | "queued"
+  | "delivered"
+  | "suppressed"
+  | "rejected"
+  | "unknown";
+
+export type TaskCronDeliveryEvidenceTransitionParams = {
+  runId: string;
+  runtime: "cron";
+  intentId: string;
+  state: TaskCronDeliveryEvidenceState;
+};
+
 export type TaskRunTransition =
   | { kind: "state"; params: TaskRunStateTransitionParams }
-  | { kind: "delivery"; params: TaskRunDeliveryTransitionParams };
+  | { kind: "delivery"; params: TaskRunDeliveryTransitionParams }
+  | { kind: "cron-delivery-evidence"; params: TaskCronDeliveryEvidenceTransitionParams };
 
 type TaskRunOwnerTransition = {
   kind: "run-owner";
@@ -227,6 +242,64 @@ function prepareTaskRecordTransition(
             input.now,
           )
         : { previous: current, task: current, persisted: false, becomesTerminal: false }),
+      deliver: false,
+    };
+  }
+  if (input.kind === "cron-delivery-evidence") {
+    if (current.runtime !== "cron" || current.runId !== input.params.runId) {
+      return null;
+    }
+    const detail: { [key: string]: JsonValue } =
+      current.detail && typeof current.detail === "object" && !Array.isArray(current.detail)
+        ? { ...current.detail }
+        : {};
+    const existing = detail.deliveryEvidence;
+    const existingState =
+      existing && typeof existing === "object" && !Array.isArray(existing)
+        ? existing.state
+        : undefined;
+    const existingIntentId =
+      existing && typeof existing === "object" && !Array.isArray(existing)
+        ? existing.intentId
+        : undefined;
+    const terminalState =
+      existingIntentId === input.params.intentId &&
+      (existingState === "delivered" ||
+        existingState === "suppressed" ||
+        existingState === "rejected" ||
+        existingState === "unknown")
+        ? existingState
+        : undefined;
+    if (terminalState) {
+      return {
+        previous: current,
+        task: current,
+        persisted: false,
+        becomesTerminal: false,
+        deliver: false,
+      };
+    }
+    const state = input.params.state;
+    detail.deliveryEvidence = { intentId: input.params.intentId, state };
+    if (detail.kind === "cron-run") {
+      detail.deliveryStatus =
+        state === "delivered"
+          ? "delivered"
+          : state === "unknown"
+            ? "unknown"
+            : state === "queued"
+              ? (detail.deliveryStatus ?? "unknown")
+              : "not-delivered";
+      if (state === "delivered") {
+        detail.delivered = true;
+      } else if (state === "suppressed" || state === "rejected") {
+        detail.delivered = false;
+      }
+    }
+    const deliveryStatus: TaskDeliveryStatus =
+      state === "queued" ? "pending" : state === "delivered" ? "delivered" : "failed";
+    return {
+      ...prepareTaskRecordUpdate(current, { deliveryStatus, detail }, input.now),
       deliver: false,
     };
   }

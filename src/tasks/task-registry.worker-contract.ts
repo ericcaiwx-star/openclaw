@@ -123,6 +123,7 @@ export function isTaskRegistryWorkerCommand(command: {
     case "tasks.createRecord":
     case "tasks.finalizeActive":
     case "tasks.settleUnstarted":
+    case "tasks.setCronDeliveryEvidence":
     case "flows.createForTask":
     case "tasks.linkInitialFlow":
     case "flows.deleteUnlinkedForTask":

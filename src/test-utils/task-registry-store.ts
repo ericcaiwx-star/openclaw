@@ -271,6 +271,8 @@ export function createInMemoryTaskRegistryStore(
             },
           }),
         "tasks.finalizeActive": (input) => transitionRecord({ kind: "state", ...input }),
+        "tasks.setCronDeliveryEvidence": (input) =>
+          transitionRecord({ kind: "cron-delivery-evidence", ...input }),
         "flows.createForTask": unsupported,
         "tasks.settleUnstarted": (input) => {
           const current = this.loadSnapshot().tasks.get(input.taskId);

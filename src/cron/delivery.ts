@@ -128,6 +128,9 @@ export async function sendCronAnnouncePayloadStrict(params: {
     ...(params.deliveryIntentId ? { deliveryIntentId: params.deliveryIntentId } : {}),
     ...(params.deliveryCompletion ? { deliveryCompletion: params.deliveryCompletion } : {}),
     ...(params.completionRetention ? { completionRetention: params.completionRetention } : {}),
+    ...(params.deliveryCompletion?.kind === "cron-task"
+      ? { reusePendingDeliveryIntent: true }
+      : {}),
     deps: createOutboundSendDeps(params.deps),
     signal: params.abortSignal,
     onDeliveryResult: () => {

@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { createRunningTaskRunCore } from "../../tasks/task-executor.js";
 import { getTaskById } from "../../tasks/task-registry.js";
+import { configureTaskRegistryRuntime } from "../../tasks/task-registry.store.js";
 import { resetTaskRegistryForTests } from "../../tasks/task-runtime.test-helpers.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { createInMemoryTaskRegistryStore } from "../../test-utils/task-registry-store.js";
 import {
   completeDurableDelivery,
   createCommandCronDeliveryCustody,
@@ -12,11 +14,18 @@ import {
 } from "./delivery-completion.js";
 
 describe("command cron durable delivery completion", () => {
+  const resetWithMemoryStore = () => {
+    resetTaskRegistryForTests({ persist: false });
+    const store = createInMemoryTaskRegistryStore();
+    configureTaskRegistryRuntime({ store });
+    return store;
+  };
+
   it("settles only the exact task and persists no recipient data", async () => {
     await withOpenClawTestState(
       { layout: "state-only", prefix: "cron-command-delivery-completion-" },
       async () => {
-        resetTaskRegistryForTests({ persist: false });
+        resetWithMemoryStore();
         const runId = "cron:job-a:1000:receipt-a";
         const task = createRunningTaskRunCore({
           runtime: "cron",
@@ -79,7 +88,7 @@ describe("command cron durable delivery completion", () => {
     await withOpenClawTestState(
       { layout: "state-only", prefix: "cron-command-delivery-states-" },
       async () => {
-        resetTaskRegistryForTests({ persist: false });
+        resetWithMemoryStore();
         const create = (suffix: string) => {
           const runId = `cron:job:${suffix}`;
           const task = createRunningTaskRunCore({
@@ -124,7 +133,7 @@ describe("command cron durable delivery completion", () => {
     await withOpenClawTestState(
       { layout: "state-only", prefix: "cron-command-delivery-stale-" },
       async () => {
-        resetTaskRegistryForTests({ persist: false });
+        resetWithMemoryStore();
         const task = createRunningTaskRunCore({
           runtime: "cron",
           sourceId: "job",
@@ -146,6 +155,76 @@ describe("command cron durable delivery completion", () => {
           markDurableDeliveryQueued(custody.deliveryCompletion, custody.deliveryIntentId),
         ).resolves.toEqual({ state: "stale" });
         expect(getTaskById(task.taskId)?.deliveryStatus).toBe("pending");
+        resetTaskRegistryForTests({ persist: false });
+      },
+    );
+  });
+
+  it("preserves a committed terminal outcome when recovery observes the queue again", async () => {
+    await withOpenClawTestState(
+      { layout: "state-only", prefix: "cron-command-delivery-terminal-" },
+      async () => {
+        resetWithMemoryStore();
+        const runId = "cron:job:terminal";
+        const task = createRunningTaskRunCore({
+          runtime: "cron",
+          sourceId: "job",
+          ownerKey: "",
+          scopeKind: "system",
+          agentId: "main",
+          runId,
+          task: "terminal evidence",
+          deliveryStatus: "pending",
+          notifyPolicy: "silent",
+          startedAt: 1_000,
+        })!;
+        const custody = createCommandCronDeliveryCustody({ taskId: task.taskId, runId });
+
+        await completeDurableDelivery(custody.deliveryCompletion, {
+          channel: "matrix",
+          messageId: "synthetic-message",
+        });
+        await expect(
+          markDurableDeliveryQueued(custody.deliveryCompletion, custody.deliveryIntentId),
+        ).resolves.toEqual({ state: "delivered" });
+        expect(getTaskById(task.taskId)).toMatchObject({
+          deliveryStatus: "delivered",
+          detail: { deliveryEvidence: { state: "delivered" } },
+        });
+        resetTaskRegistryForTests({ persist: false });
+      },
+    );
+  });
+
+  it("surfaces task storage failure instead of retiring queue custody as stale", async () => {
+    await withOpenClawTestState(
+      { layout: "state-only", prefix: "cron-command-delivery-storage-failure-" },
+      async () => {
+        const store = resetWithMemoryStore();
+        const runId = "cron:job:storage-failure";
+        const task = createRunningTaskRunCore({
+          runtime: "cron",
+          sourceId: "job",
+          ownerKey: "",
+          scopeKind: "system",
+          agentId: "main",
+          runId,
+          task: "storage failure",
+          deliveryStatus: "pending",
+          notifyPolicy: "silent",
+          startedAt: 1_000,
+        })!;
+        store.runInitialMutationAsync = async () => {
+          throw new Error("synthetic task storage failure");
+        };
+        const custody = createCommandCronDeliveryCustody({ taskId: task.taskId, runId });
+
+        await expect(
+          markDurableDeliveryQueued(custody.deliveryCompletion, custody.deliveryIntentId),
+        ).rejects.toThrow("synthetic task storage failure");
+        expect(getTaskById(task.taskId)?.detail).not.toMatchObject({
+          deliveryEvidence: { state: "queued" },
+        });
         resetTaskRegistryForTests({ persist: false });
       },
     );

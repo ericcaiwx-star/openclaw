@@ -112,6 +112,7 @@ describe("sendCronAnnouncePayloadStrict", () => {
         deliveryIntentId: deliveryCompletion.intentId,
         deliveryCompletion,
         completionRetention,
+        reusePendingDeliveryIntent: true,
         payloads: [{ text: "Automation completed" }],
       }),
       undefined,

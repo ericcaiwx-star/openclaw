@@ -29,8 +29,7 @@ import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.pa
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
 import { getOwedHarnessCompletionTask } from "../../tasks/agent-harness-completion-recovery.js";
-import { getTaskById, setTaskDeliveryEvidenceById } from "../../tasks/task-registry.js";
-import type { JsonValue, TaskDeliveryStatus } from "../../tasks/task-registry.types.js";
+import { setTaskCronDeliveryEvidenceById } from "../../tasks/task-registry.js";
 import {
   resolveDeliveryQueueStateEnv,
   type DeliveryQueueStateContext,
@@ -117,49 +116,42 @@ export function createCommandCronDeliveryCustody(taskIdentity: { taskId: string;
 
 type CronTaskDeliveryState = "queued" | "delivered" | "suppressed" | "rejected" | "unknown";
 
-function cronTaskDeliveryResult(
+async function cronTaskDeliveryResult(
   completion: Extract<DurableDeliveryCompletion, { kind: "cron-task" }>,
   state: CronTaskDeliveryState,
   queueId?: string,
-): DurableDeliveryCompletionResult {
+): Promise<DurableDeliveryCompletionResult> {
   const expectedIntentId = `${COMMAND_CRON_DELIVERY_COMPLETION_RETENTION.idPrefix}${completion.taskId}`;
   if (completion.intentId !== expectedIntentId || (queueId && queueId !== expectedIntentId)) {
     return { state: "stale" };
   }
-  const current = getTaskById(completion.taskId);
-  if (current?.runtime !== "cron" || current.runId !== completion.runId) {
-    return { state: "stale" };
-  }
-  const detail: { [key: string]: JsonValue } =
-    current.detail && typeof current.detail === "object" && !Array.isArray(current.detail)
-      ? { ...current.detail }
-      : {};
-  detail.deliveryEvidence = { intentId: completion.intentId, state };
-  if (detail.kind === "cron-run") {
-    detail.deliveryStatus =
-      state === "delivered"
-        ? "delivered"
-        : state === "unknown"
-          ? "unknown"
-          : state === "queued"
-            ? (detail.deliveryStatus ?? "unknown")
-            : "not-delivered";
-    if (state === "delivered") {
-      detail.delivered = true;
-    } else if (state === "suppressed" || state === "rejected") {
-      detail.delivered = false;
-    }
-  }
-  const deliveryStatus: TaskDeliveryStatus =
-    state === "queued" ? "pending" : state === "delivered" ? "delivered" : "failed";
-  const updated = setTaskDeliveryEvidenceById({
+  const updated = await setTaskCronDeliveryEvidenceById({
     taskId: completion.taskId,
     runId: completion.runId,
-    runtime: "cron",
-    deliveryStatus,
-    detail,
+    intentId: completion.intentId,
+    state,
   });
-  return { state: updated ? state : "stale" };
+  if (!updated) {
+    return { state: "stale" };
+  }
+  const evidence =
+    updated.detail && typeof updated.detail === "object" && !Array.isArray(updated.detail)
+      ? updated.detail.deliveryEvidence
+      : undefined;
+  const settledState =
+    evidence && typeof evidence === "object" && !Array.isArray(evidence)
+      ? evidence.state
+      : undefined;
+  return {
+    state:
+      settledState === "queued" ||
+      settledState === "delivered" ||
+      settledState === "suppressed" ||
+      settledState === "rejected" ||
+      settledState === "unknown"
+        ? settledState
+        : state,
+  };
 }
 
 export function resolveConversationDeliveryScope(
