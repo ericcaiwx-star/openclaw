@@ -7,6 +7,8 @@ import {
   isRetainedExecutionOwnerBinding,
 } from "../../audit/execution-owner-binding.js";
 import { normalizeAgentId, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import { trackAsyncWork } from "../../shared/async-work-scope.js";
+import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { CRON_TASK_KIND } from "../../tasks/cron-task-contract.js";
 import { setTaskDeliveryStatusById } from "../../tasks/runtime-internal.js";
@@ -53,6 +55,32 @@ import type {
 import { normalizeCronRunErrorText } from "./execution-errors.js";
 import type { CronEvent, CronExecutionIdentityAdmission, CronServiceState } from "./state.js";
 import { CRON_TASK_RUNNING_PROGRESS_SUMMARY } from "./task-ledger.js";
+
+const pendingCronTaskDeliveryProjections = resolveGlobalSingleton(
+  Symbol.for("openclaw.cronTaskDeliveryProjections"),
+  () => new Set<Promise<void>>(),
+  async (pending) => {
+    while (pending.size > 0) {
+      await Promise.allSettled(pending);
+    }
+  },
+);
+
+function trackCronTaskDeliveryProjection(run: () => Promise<void>): void {
+  const projection = trackAsyncWork(run);
+  pendingCronTaskDeliveryProjections.add(projection);
+  void projection.then(
+    () => pendingCronTaskDeliveryProjections.delete(projection),
+    () => pendingCronTaskDeliveryProjections.delete(projection),
+  );
+}
+
+/** Joins task-worker projections before a cron finalization or lifecycle boundary completes. */
+export async function drainCronTaskDeliveryProjections(): Promise<void> {
+  while (pendingCronTaskDeliveryProjections.size > 0) {
+    await Promise.allSettled(pendingCronTaskDeliveryProjections);
+  }
+}
 
 function requireCronAgentId(agentId: string | undefined): string {
   if (!agentId?.trim()) {
@@ -573,20 +601,24 @@ export function tryFinishCronTaskRun(
     if (completedJob?.payload.kind === "command" && tasksNeedingDeliveryProjection.length > 0) {
       // Finalization runs on the Gateway thread. Keep the new delivery projection
       // off that thread and publish only after the task worker commits each exact row.
-      void Promise.all(
-        tasksNeedingDeliveryProjection.map((task) =>
-          setTaskDeliveryStatusById({
-            taskId: task.taskId,
-            runId: taskRunId,
-            runtime: "cron",
-            deliveryStatus: taskDeliveryStatus,
-          }),
-        ),
-      ).catch((error: unknown) => {
-        state.deps.log.warn(
-          { runId: taskRunId, jobStatus: entry.status, error },
-          "cron: failed to project task delivery status",
-        );
+      trackCronTaskDeliveryProjection(async () => {
+        try {
+          await Promise.all(
+            tasksNeedingDeliveryProjection.map((task) =>
+              setTaskDeliveryStatusById({
+                taskId: task.taskId,
+                runId: taskRunId,
+                runtime: "cron",
+                deliveryStatus: taskDeliveryStatus,
+              }),
+            ),
+          );
+        } catch (error) {
+          state.deps.log.warn(
+            { runId: taskRunId, jobStatus: entry.status, error },
+            "cron: failed to project task delivery status",
+          );
+        }
       });
     }
   } catch (error) {

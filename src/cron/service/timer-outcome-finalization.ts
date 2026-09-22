@@ -15,7 +15,10 @@ import { applyCronRuntimeRowsToState, commitCronRuntimeRows } from "./runtime-st
 import { recomputeUnownedCronSchedules } from "./schedule-maintenance.js";
 import { emit, type CronServiceState, type DeferredCronNotifications } from "./state.js";
 import { ensureLoaded, runPostPersistCronNotifications } from "./store.js";
-import { tryFinishCronTaskRunWithoutHistory } from "./task-runs.js";
+import {
+  drainCronTaskDeliveryProjections,
+  tryFinishCronTaskRunWithoutHistory,
+} from "./task-runs.js";
 import type { TimedCronRunOutcome } from "./timer-execution-timeout.js";
 import { emitCronOutcomeEventForJob, recordCronOutcomeForJob } from "./timer-outcome-events.js";
 import { applyOutcomeToAuthoritativeJob, applyOutcomeToStoredJob } from "./timer-outcomes.js";
@@ -123,6 +126,7 @@ export async function finalizeCompletedCronRunOutcomes(
           recordCronOutcomeForJob(state, taskJob, outcome);
         }
       }
+      await drainCronTaskDeliveryProjections();
       // Retirement fences publication, not the exact receipt's durable result.
       // The transaction revalidates ownership before touching authoritative rows.
       finalizedOutcomes = outcomes.filter((outcome) => outcome.runReceipt || canPublish(outcome));

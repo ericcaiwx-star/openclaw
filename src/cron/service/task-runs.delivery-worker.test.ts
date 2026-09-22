@@ -8,9 +8,14 @@ import { resetTaskRegistryForTests } from "../../tasks/task-runtime.test-helpers
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import type { CronJob } from "../types.js";
 import { createCronServiceState } from "./state.js";
-import { tryCreateCronTaskRunHandle, tryFinishCronTaskRun } from "./task-runs.js";
+import {
+  drainCronTaskDeliveryProjections,
+  tryCreateCronTaskRunHandle,
+  tryFinishCronTaskRun,
+} from "./task-runs.js";
 
-afterEach(() => {
+afterEach(async () => {
+  await drainCronTaskDeliveryProjections();
   vi.restoreAllMocks();
   resetTaskRegistryForTests({ persist: false });
 });
@@ -70,20 +75,20 @@ it("projects command delivery status through the task worker", async () => {
       });
 
       expect(nativeDeliveryWrite).not.toHaveBeenCalled();
-      await vi.waitFor(
-        () => {
-          const [row] = listTaskRegistryRecordsByRuntimeSourceIdFromSqlite({
-            runtime: "cron",
-            sourceId: job.id,
-          });
-          expect(row).toMatchObject({
-            status: "failed",
-            deliveryStatus: "failed",
-            detail: { kind: "cron-run", deliveryStatus: "not-delivered" },
-          });
-        },
-        { timeout: 5_000 },
+      await withTestTimeout(
+        drainCronTaskDeliveryProjections(),
+        5_000,
+        "command delivery projection drained",
       );
+      const [row] = listTaskRegistryRecordsByRuntimeSourceIdFromSqlite({
+        runtime: "cron",
+        sourceId: job.id,
+      });
+      expect(row).toMatchObject({
+        status: "failed",
+        deliveryStatus: "failed",
+        detail: { kind: "cron-run", deliveryStatus: "not-delivered" },
+      });
     },
   );
 });
@@ -176,6 +181,11 @@ it("does not let a delayed command projection overwrite delivered evidence", asy
       } finally {
         releaseProjection.resolve();
       }
+      await withTestTimeout(
+        drainCronTaskDeliveryProjections(),
+        5_000,
+        "delayed command projection drained",
+      );
       await withTestTimeout(projectionFinished.promise, 5_000, "delayed projection finished");
       await vi.waitFor(() => {
         const [row] = listTaskRegistryRecordsByRuntimeSourceIdFromSqlite({
