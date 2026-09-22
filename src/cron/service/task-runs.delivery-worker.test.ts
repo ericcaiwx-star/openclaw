@@ -126,12 +126,25 @@ it("does not let a delayed command projection overwrite delivered evidence", asy
       const mutate = store.runInitialMutationAsync.bind(store);
       const projectionEntered = createDeferred();
       const releaseProjection = createDeferred();
+      const projectionFinished = createDeferred();
       vi.spyOn(store, "runInitialMutationAsync").mockImplementation(async (...args) => {
-        if (args[1].type === "tasks.setDeliveryStatus") {
+        const delayedProjection = args[1].type === "tasks.setDeliveryStatus";
+        if (delayedProjection) {
           projectionEntered.resolve();
           await releaseProjection.promise;
         }
-        return mutate(...args);
+        try {
+          const result = await mutate(...args);
+          if (delayedProjection) {
+            projectionFinished.resolve();
+          }
+          return result;
+        } catch (error) {
+          if (delayedProjection) {
+            projectionFinished.reject(error);
+          }
+          throw error;
+        }
       });
 
       try {
@@ -163,6 +176,7 @@ it("does not let a delayed command projection overwrite delivered evidence", asy
       } finally {
         releaseProjection.resolve();
       }
+      await withTestTimeout(projectionFinished.promise, 5_000, "delayed projection finished");
       await vi.waitFor(() => {
         const [row] = listTaskRegistryRecordsByRuntimeSourceIdFromSqlite({
           runtime: "cron",
