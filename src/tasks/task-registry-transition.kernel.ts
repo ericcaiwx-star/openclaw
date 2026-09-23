@@ -30,7 +30,7 @@ type TaskWorkerTransitionInput =
       selection?: never;
     })
   | (Extract<TaskRecordTransitionInput, { kind: "delivery" }> & {
-      expectedTask?: never;
+      expectedTask: TaskPersistenceReceipt;
       selection?: never;
     });
 

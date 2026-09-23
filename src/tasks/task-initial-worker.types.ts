@@ -78,6 +78,7 @@ export type TaskInitialWorkerOperations = {
   "tasks.setDeliveryStatus": {
     input: {
       taskId: string;
+      expectedTask: TaskPersistenceReceipt;
       params: TaskRunDeliveryTransitionParams;
       now: number;
     };

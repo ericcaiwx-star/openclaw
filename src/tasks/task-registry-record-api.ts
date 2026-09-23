@@ -24,6 +24,7 @@ import {
   type JsonValue,
   type TaskDeliveryStatus,
   type TaskNotifyPolicy,
+  type TaskPersistenceReceipt,
   type TaskRecord,
   type TaskRuntime,
   type TaskStatus,
@@ -214,6 +215,7 @@ export function setTaskRunDeliveryStatusByRunId(params: {
 /** Commits one exact task's delivery projection through the task worker. */
 export async function setTaskDeliveryStatusById(params: {
   taskId: string;
+  expectedTask: TaskPersistenceReceipt;
   runId: string;
   runtime: TaskRuntime;
   deliveryStatus: TaskDeliveryStatus;
@@ -232,6 +234,7 @@ export async function setTaskDeliveryStatusById(params: {
     type: "tasks.setDeliveryStatus" as const,
     input: {
       taskId: params.taskId,
+      expectedTask: params.expectedTask,
       params: {
         runId: params.runId,
         runtime: params.runtime,
