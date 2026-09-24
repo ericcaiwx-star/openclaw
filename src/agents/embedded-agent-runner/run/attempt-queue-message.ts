@@ -428,6 +428,7 @@ export async function claimEmbeddedPendingUserInputAnswer(
       creatorFingerprint: creatorToolAuthorityFingerprint,
       assertSourceCurrent: authority.assertCurrent,
       assertPreparedCurrent,
+      sourceBindingRoutes: options.questionSourceBindingRoutes,
     });
   }
   const claimed = await claimPendingAgentQuestionAnswer({

@@ -15,6 +15,7 @@ import { resolveReplyOperationRunState } from "./reply-operation-run-state.js";
 import type { ReplyToolAuthorityOverlay } from "./reply-run-registry.contracts.js";
 import { claimPendingReplyMessageInjectionTarget, replyRunRegistry } from "./reply-run-registry.js";
 import { resolveInboundReplyToolAuthorityOverlay } from "./reply-tool-authority.js";
+import { readPreparedConversationBindingSourceRoutes } from "./session-conversation-binding.js";
 
 type ReplyQuestionInputParams = Pick<
   RunReplyAgentParams,
@@ -39,6 +40,9 @@ export async function claimPendingReplyQuestionInput(params: {
   caller: ReplyToolAuthorityOverlay;
   assertSourceCurrent: () => void;
   assertPreparedCurrent?: () => Promise<void>;
+  sourceBindingRoutes?: Parameters<
+    typeof claimPendingAgentQuestionAnswerFromCaller
+  >[0]["sourceBindingRoutes"];
   onAnswerProcessed?: () => void;
   sourceRecorder?: Parameters<
     typeof claimPendingAgentQuestionAnswerFromCaller
@@ -50,6 +54,7 @@ export async function claimPendingReplyQuestionInput(params: {
     caller: params.caller,
     assertSourceCurrent: params.assertSourceCurrent,
     assertPreparedCurrent: params.assertPreparedCurrent,
+    sourceBindingRoutes: params.sourceBindingRoutes,
     onAnswerProcessed: params.onAnswerProcessed,
     sourceRecorder: params.sourceRecorder,
   });
@@ -67,6 +72,7 @@ export async function claimPendingReplyQuestionInput(params: {
       isInboundUserMessage: true,
       toolAuthorityOverlay: params.caller,
       userTurnTranscriptRecorder: params.sourceRecorder,
+      questionSourceBindingRoutes: params.sourceBindingRoutes,
     },
     assertSourceCurrent: params.assertSourceCurrent,
     assertPreparedCurrent: params.assertPreparedCurrent,
@@ -123,6 +129,7 @@ export async function runReplyQuestionInput(
       text,
       caller,
       assertSourceCurrent,
+      sourceBindingRoutes: readPreparedConversationBindingSourceRoutes(params.sessionCtx),
       sourceRecorder: followupRun.userTurnTranscriptRecorder,
       onAnswerProcessed: () => {
         if (state) {

@@ -2,6 +2,7 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import type { QuestionSourceBindingRoute } from "../../../packages/gateway-protocol/src/schema/questions.js";
 import {
   matchesConversationBindingRouteFacts,
   readConversationBindingRouteFacts,
@@ -12,7 +13,6 @@ import { SessionWorkStartChangedError } from "../../config/sessions/lifecycle.js
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   getSessionBindingService,
-  inspectSessionBindingByConversationNow,
   isSessionBindingError,
   readSessionBindingSelectionCurrent,
   type SessionBindingRecord,
@@ -162,29 +162,36 @@ export async function assertPreparedConversationBindingRouteCurrent(
   }
 }
 
-/** Synchronous owner view for the Gateway send that cannot await before the frame. */
-export function assertPreparedConversationBindingRouteNow(ctx: MsgContext): void {
+/** Carries the prepared durable owner identity to the Gateway commit boundary. */
+export function readPreparedConversationBindingSourceRoutes(
+  ctx: MsgContext,
+): QuestionSourceBindingRoute[] | undefined {
   if (resolveCommandTurnTargetSessionKey(ctx)) {
-    return;
+    return undefined;
   }
-  for (const expected of readConversationBindingRouteObservations(ctx)) {
-    const inspection = inspectSessionBindingByConversationNow(expected.conversation);
-    if (inspection.status === "cold") {
-      throw new SessionWorkStartChangedError(
-        "Conversation binding owner changed while preparing the reply. Retry the message.",
-      );
-    }
-    if (inspection.status === "unavailable") {
-      throw new SessionWorkStartChangedError(
-        "Conversation binding owner changed while preparing the reply. Retry the message.",
-      );
-    }
-    if (!matchesConversationBindingRouteFacts(expected, inspection.binding)) {
-      throw new SessionWorkStartChangedError(
-        "Conversation binding changed while preparing the reply. Retry the message.",
-      );
-    }
+  const observations = readConversationBindingRouteObservations(ctx);
+  if (observations.length === 0) {
+    return undefined;
   }
+  return observations.map((expected): QuestionSourceBindingRoute => {
+    if (!("bindingId" in expected)) {
+      return {
+        conversation: { ...expected.conversation },
+        selection: { kind: expected.kind },
+      };
+    }
+    return {
+      conversation: { ...expected.conversation },
+      selection: {
+        kind: "binding",
+        bindingId: expected.bindingId,
+        boundAt: expected.boundAt,
+        targetSessionKey: expected.targetSessionKey,
+        targetKind: expected.targetKind,
+        conversation: { ...expected.bindingConversation },
+      },
+    };
+  });
 }
 
 export async function resolveSessionConversationBinding(params: {

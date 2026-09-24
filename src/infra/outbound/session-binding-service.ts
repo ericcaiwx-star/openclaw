@@ -13,7 +13,6 @@ import {
   resolveGenericCurrentConversationBinding,
   inspectGenericCurrentConversationBinding,
   inspectGenericCurrentConversationBindingAsync,
-  readPublishedGenericCurrentConversationBinding,
   resolveGenericCurrentConversationBindingAsync,
   readGenericCurrentConversationBindingSelectionAsync,
   touchGenericCurrentConversationBinding,
@@ -344,36 +343,6 @@ export function inspectSessionBindingByConversation(
     normalized,
     inspectGenericCurrentConversationBinding(normalized),
   );
-}
-
-/** Final Gateway send view. Generic rows come from the worker publication, never a sync query. */
-export function inspectSessionBindingByConversationNow(
-  ref: ConversationRef,
-):
-  | { status: "available"; binding: SessionBindingRecord | null }
-  | { status: "unavailable" }
-  | { status: "cold" } {
-  const normalized = captureConversationRef(ref);
-  if (!normalized.channel || !normalized.conversationId) {
-    return { status: "available", binding: null };
-  }
-  const adapter = resolveAdapterForChannelAccount(normalized);
-  if (adapter) {
-    return availableBindingInspection(
-      normalized,
-      adapter.inspectByConversation
-        ? adapter.inspectByConversation(normalized)
-        : adapter.resolveByConversation(normalized),
-    );
-  }
-  if (requiresRegisteredSessionBindingAdapter(normalized)) {
-    return withSessionBindingInspectionConversation({ status: "unavailable" as const }, normalized);
-  }
-  const published = readPublishedGenericCurrentConversationBinding(normalized);
-  if (published === undefined) {
-    return { status: "cold" };
-  }
-  return availableBindingInspection(normalized, published);
 }
 
 function availableBindingInspection(

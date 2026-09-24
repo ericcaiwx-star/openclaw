@@ -47,7 +47,7 @@ import { resolveInboundReplyToolAuthorityOverlay } from "./reply-tool-authority.
 import { extractShortModelName } from "./response-prefix-template.js";
 import {
   assertPreparedConversationBindingRouteCurrent,
-  assertPreparedConversationBindingRouteNow,
+  readPreparedConversationBindingSourceRoutes,
 } from "./session-conversation-binding.js";
 
 export async function prepareDispatchOperation(state: PrepareDispatchOperationContextReadyState) {
@@ -230,7 +230,6 @@ export async function prepareDispatchOperation(state: PrepareDispatchOperationCo
     });
     const assertSourceCurrent = () => {
       params.replyOptions?.abortSignal?.throwIfAborted();
-      assertPreparedConversationBindingRouteNow(ctx);
     };
     const adoptClaimedQuestionAnswer = async () => {
       try {
@@ -252,6 +251,7 @@ export async function prepareDispatchOperation(state: PrepareDispatchOperationCo
         }),
         assertSourceCurrent,
         assertPreparedCurrent: assertCurrentBindingRoute,
+        sourceBindingRoutes: readPreparedConversationBindingSourceRoutes(ctx),
         sourceRecorder: params.replyOptions.userTurnTranscriptRecorder,
       });
       if (claimed) {

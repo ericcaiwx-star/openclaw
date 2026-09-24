@@ -367,6 +367,56 @@ describe("gateway harness questions", () => {
     expect(persist).not.toHaveBeenCalled();
   });
 
+  it("carries source binding identity to the gateway resolution boundary", async () => {
+    const sessionKey = "agent:main:source-binding-route";
+    const gatewayCall = vi.fn().mockResolvedValue(undefined);
+    const question = registerPendingAgentQuestion({
+      questionId: "ask_source_binding_route",
+      sessionKey,
+      questions,
+      gatewayCall: { version: 2, call: gatewayCall },
+    });
+    question.attachRegistration(Promise.resolve());
+    const conversation = {
+      channel: "webchat",
+      accountId: "default",
+      conversationId: "source-binding-route",
+    };
+    const sourceBindingRoutes = [
+      {
+        conversation,
+        selection: {
+          kind: "binding" as const,
+          bindingId: "binding-source",
+          boundAt: 1,
+          targetSessionKey: sessionKey,
+          targetKind: "session" as const,
+          conversation,
+        },
+      },
+    ];
+    try {
+      await expect(
+        claimPendingAgentQuestionAnswerFromCaller({
+          sessionKey,
+          text: "Continue",
+          callerFingerprint: "source-binding-policy",
+          creatorFingerprint: "source-binding-policy",
+          assertSourceCurrent: () => {},
+          sourceBindingRoutes,
+        }),
+      ).resolves.toBe(true);
+      expect(gatewayCall).toHaveBeenCalledWith(
+        expect.objectContaining({
+          method: "question.resolve",
+          params: expect.objectContaining({ sourceBindingRoutes }),
+        }),
+      );
+    } finally {
+      question.dispose();
+    }
+  });
+
   it.each([
     {
       label: "matching",

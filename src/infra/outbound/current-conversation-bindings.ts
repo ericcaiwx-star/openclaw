@@ -24,7 +24,6 @@ import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-wo
 import { runOpenClawStateWorkerOperation } from "../../state/openclaw-state-worker-store.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel-constants.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../kysely-sync.js";
-import { pruneMapToMaxSize } from "../map-size.js";
 import { createSqliteWorkerWriteAdmission } from "../sqlite-worker-store.js";
 import {
   CURRENT_BINDINGS_ID_PREFIX,
@@ -55,86 +54,15 @@ import type {
   SessionBindingUnbindInput,
 } from "./session-binding.types.js";
 
-type PublishedGenericBinding = { epoch: number; binding: SessionBindingRecord | null };
-type GenericPublicationSnapshot = { epoch: number; mutationRevision: number };
-
-const MAX_PUBLISHED_GENERIC_BINDINGS = 1_024;
-const publishedGenericBindings = new Map<string, PublishedGenericBinding>();
-let genericPublicationMutationRevision = 0;
-
-function publishedGenericBindingKey(ref: ConversationRef): string {
-  const conversation = normalizeConversationRef(ref);
-  return JSON.stringify([
-    conversation.channel,
-    conversation.accountId,
-    conversation.conversationId,
-    conversation.parentConversationId ?? null,
-  ]);
-}
-
-function genericPublicationSnapshot(ref: ConversationRef): GenericPublicationSnapshot {
-  return {
-    epoch: publishedGenericBindings.get(publishedGenericBindingKey(ref))?.epoch ?? 0,
-    mutationRevision: genericPublicationMutationRevision,
-  };
-}
-
-/** Remembers a worker or write result so Gateway sends can recheck without opening SQLite. */
-function publishGenericCurrentConversationBinding(
-  ref: ConversationRef,
-  binding: SessionBindingRecord | null,
-  source: "mutation" | "observation" = "mutation",
-): void {
-  if (source === "mutation") {
-    genericPublicationMutationRevision += 1;
-  }
-  const key = publishedGenericBindingKey(ref);
-  const epoch = (publishedGenericBindings.get(key)?.epoch ?? 0) + 1;
-  publishedGenericBindings.delete(key);
-  publishedGenericBindings.set(key, { epoch, binding });
-  pruneMapToMaxSize(publishedGenericBindings, MAX_PUBLISHED_GENERIC_BINDINGS);
-}
-
-function publishGenericBindingIfUnchanged(
-  ref: ConversationRef,
-  snapshot: GenericPublicationSnapshot,
-  binding: SessionBindingRecord | null,
-): void {
-  const current = genericPublicationSnapshot(ref);
-  if (current.epoch === snapshot.epoch && current.mutationRevision === snapshot.mutationRevision) {
-    publishGenericCurrentConversationBinding(ref, binding, "observation");
-  }
-}
-
-/** Synchronous view of the last worker-owned generic binding. Missing means not loaded yet. */
-export function readPublishedGenericCurrentConversationBinding(
-  ref: ConversationRef,
-): SessionBindingRecord | null | undefined {
-  const key = publishedGenericBindingKey(ref);
-  const published = publishedGenericBindings.get(key);
-  if (!published) {
-    return undefined;
-  }
-  if (published.binding && isBindingExpired(published.binding)) {
-    publishGenericCurrentConversationBinding(ref, null);
-    return null;
-  }
-  publishedGenericBindings.delete(key);
-  publishedGenericBindings.set(key, published);
-  return published.binding;
-}
-
 /** Updates one binding from its currently committed row in one synchronous transaction. */
 export function updateCurrentConversationBindingRecord(
   ref: ConversationRef,
   update: (current: SessionBindingRecord | null) => SessionBindingRecord | null,
 ): { previous: SessionBindingRecord | null; current: SessionBindingRecord | null } {
   const conversation = normalizeConversationRef(ref);
-  const result = runOpenClawStateWriteTransaction(({ db }) =>
+  return runOpenClawStateWriteTransaction(({ db }) =>
     updateCurrentConversationBindingRecordInDatabase(db, conversation, update),
   );
-  publishGenericCurrentConversationBinding(conversation, result.current);
-  return result;
 }
 
 /** Selects the current row without pruning expiry or rewriting legacy keys. */
@@ -210,7 +138,7 @@ export function deleteCurrentConversationBindingRecordsBySession(
   scope?: CurrentConversationBindingScope,
   genericOnly = !scope,
 ): SessionBindingRecord[] {
-  const deletion = runOpenClawStateWriteTransaction(({ db }) => {
+  return runOpenClawStateWriteTransaction(({ db }) => {
     const rows = listCurrentConversationBindingRowsBySession(
       db,
       targetSessionKey,
@@ -218,26 +146,18 @@ export function deleteCurrentConversationBindingRecordsBySession(
       genericOnly,
     );
     const removed: SessionBindingRecord[] = [];
-    const removedGenericConversations: ConversationRef[] = [];
     for (const row of rows) {
       const record = bindingRowsToRecords([row])[0];
       if (genericOnly && !record?.bindingId.startsWith(CURRENT_BINDINGS_ID_PREFIX)) {
         continue;
       }
       deleteCurrentConversationBindingRow(db, row.binding_key);
-      if (record?.bindingId.startsWith(CURRENT_BINDINGS_ID_PREFIX)) {
-        removedGenericConversations.push(record.conversation);
-      }
       if (record && !isBindingExpired(record)) {
         removed.push(record);
       }
     }
-    return { removed, removedGenericConversations };
+    return removed;
   });
-  for (const conversation of deletion.removedGenericConversations) {
-    publishGenericCurrentConversationBinding(conversation, null);
-  }
-  return deletion.removed;
 }
 
 function resolveChannelConversationBindingSupport(params: { channel: string; accountId: string }) {
@@ -633,13 +553,10 @@ export async function inspectGenericCurrentConversationBindingAsync(
     return null;
   }
   options?.assertCurrent?.();
-  const snapshot = genericPublicationSnapshot(conversation);
   const record = await inspectCurrentConversationBindingRecordAsync(conversation);
   options?.assertCurrent?.();
   captured.assertCurrent();
-  const binding = record?.bindingId.startsWith(CURRENT_BINDINGS_ID_PREFIX) ? record : null;
-  publishGenericBindingIfUnchanged(conversation, snapshot, binding);
-  return binding;
+  return record?.bindingId.startsWith(CURRENT_BINDINGS_ID_PREFIX) ? record : null;
 }
 
 export async function resolveGenericCurrentConversationBindingAsync(
@@ -651,14 +568,11 @@ export async function resolveGenericCurrentConversationBindingAsync(
   if (!captured.supported) {
     return null;
   }
-  const snapshot = genericPublicationSnapshot(conversation);
   const record = await resolveCurrentConversationBindingRecordAsync(conversation, () => {
     options?.assertCurrent?.();
     captured.assertCurrent();
   });
-  const binding = record?.bindingId.startsWith(CURRENT_BINDINGS_ID_PREFIX) ? record : null;
-  publishGenericBindingIfUnchanged(conversation, snapshot, binding);
-  return binding;
+  return record?.bindingId.startsWith(CURRENT_BINDINGS_ID_PREFIX) ? record : null;
 }
 
 export async function readGenericCurrentConversationBindingSelectionAsync(
@@ -674,20 +588,13 @@ export async function readGenericCurrentConversationBindingSelectionAsync(
     }
   };
   const eligible = conversations.filter((_, index) => captured[index]?.supported);
-  const snapshots = conversations.map((conversation) => genericPublicationSnapshot(conversation));
   assertCurrent();
   const records = await readCurrentConversationBindingSelectionAsync(eligible, assertCurrent);
   assertCurrent();
   let index = 0;
-  return captured.map((support, conversationIndex) => {
+  return captured.map((support) => {
     const record = support.supported ? records[index++] : null;
-    const binding = record?.bindingId.startsWith(CURRENT_BINDINGS_ID_PREFIX) ? record : null;
-    const conversation = conversations[conversationIndex];
-    const snapshot = snapshots[conversationIndex];
-    if (support.supported && conversation && snapshot) {
-      publishGenericBindingIfUnchanged(conversation, snapshot, binding);
-    }
-    return binding;
+    return record?.bindingId.startsWith(CURRENT_BINDINGS_ID_PREFIX) ? record : null;
   });
 }
 
@@ -752,23 +659,7 @@ export async function touchGenericCurrentConversationBindingAsync(
 }
 
 export const testing = {
-  maxPublishedGenericCurrentConversationBindings: MAX_PUBLISHED_GENERIC_BINDINGS,
-  publishedGenericCurrentConversationBindingCount() {
-    return publishedGenericBindings.size;
-  },
-  clearPublishedGenericCurrentConversationBindingsForTests() {
-    publishedGenericBindings.clear();
-    genericPublicationMutationRevision = 0;
-  },
-  rememberPublishedGenericCurrentConversationBinding(
-    ref: ConversationRef,
-    binding: SessionBindingRecord | null,
-  ) {
-    publishGenericCurrentConversationBinding(ref, binding);
-  },
   clearPersistedCurrentConversationBindingsForTests() {
-    publishedGenericBindings.clear();
-    genericPublicationMutationRevision = 0;
     runOpenClawStateWriteTransaction(({ db }) => {
       const bindingDb =
         getNodeSqliteKysely<Pick<OpenClawStateKyselyDatabase, "current_conversation_bindings">>(db);

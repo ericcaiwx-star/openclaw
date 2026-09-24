@@ -21,7 +21,7 @@ import {
   type AgentHarnessQuestionGatewayCall,
   type AgentQuestionDispatcher,
 } from "./gateway-question-dispatch.js";
-import { createSourceBoundCallerAuthority } from "./gateway-question.caller.js";
+import * as questionCaller from "./gateway-question.caller.js";
 import type { AgentHarnessHostCapabilities } from "./host-capability-types.js";
 import {
   captureAgentQuestionAnswerAuthority,
@@ -83,10 +83,11 @@ const pendingAgentQuestions = resolveGlobalMap<string, PendingAgentQuestion>(
   },
 );
 
-type QuestionInputAuthority = { kind: "run" | "source-bound"; assertCurrent: () => void };
-
 /** One reservation owns both dispatch refusal and the prompt's release notification. */
-function reserveQuestionInput(state: PendingAgentQuestion, authority?: QuestionInputAuthority) {
+function reserveQuestionInput(
+  state: PendingAgentQuestion,
+  authority?: questionCaller.QuestionInputAuthority,
+) {
   let refused = false;
   const assertCurrent = () => {
     try {
@@ -234,6 +235,7 @@ export async function claimPendingAgentQuestionAnswerFromCaller(params: {
   creatorFingerprint?: string;
   assertSourceCurrent: () => void;
   assertPreparedCurrent?: () => Promise<void>;
+  sourceBindingRoutes?: questionCaller.QuestionInputAuthority["sourceBindingRoutes"];
   onAnswerProcessed?: () => void;
 }): Promise<boolean> {
   const normalized = params.sessionKey?.trim();
@@ -244,7 +246,7 @@ export async function claimPendingAgentQuestionAnswerFromCaller(params: {
       text: params.text,
       persist: params.persist,
       sourceRecorder: params.sourceRecorder,
-      authority: createSourceBoundCallerAuthority(params, state, () =>
+      authority: questionCaller.createSourceBoundCallerAuthority(params, state, () =>
         Boolean(state && pendingAgentQuestions.get(state.sessionKey) === state),
       ),
     },
@@ -259,7 +261,7 @@ export async function claimPendingAgentQuestionAnswer(params: {
   text: string;
   persist?: () => Promise<void>;
   sourceRecorder?: UserTurnTranscriptRecorder;
-  authority?: QuestionInputAuthority;
+  authority?: questionCaller.QuestionInputAuthority;
 }): Promise<boolean> {
   return claimQuestionAnswer(params);
 }
@@ -345,7 +347,15 @@ async function claimQuestionAnswer(
       await state.gatewayCall(
         "question.resolve",
         {},
-        { id: state.questionId, answers, resolvedBy: "plain-text", resolutionId },
+        questionCaller.withQuestionSourceBindingRoutes(
+          {
+            id: state.questionId,
+            answers,
+            resolvedBy: "plain-text",
+            resolutionId,
+          },
+          params.authority,
+        ),
         ...(reservation.extra ? ([reservation.extra] as const) : []),
       );
       consumed = true;
@@ -361,6 +371,7 @@ async function claimQuestionAnswer(
       // These resolve rejections precede commitment. UNAVAILABLE can follow a
       // saved secret, and waiter rejection can follow commitment, so neither qualifies.
       if (rejection?.code === "INVALID_REQUEST" || rejection?.code === "FORBIDDEN") {
+        questionCaller.refuseQuestionSourceBindingRejection(rejection, error);
         if (
           rejection.code === "INVALID_REQUEST" &&
           rejection.reason === "QUESTION_INVALID_ANSWER"
@@ -395,7 +406,7 @@ async function claimQuestionAnswer(
 export async function cancelPendingAgentQuestionForSession(params: {
   sessionKey?: string;
   resolvedBy: string;
-  authority?: QuestionInputAuthority;
+  authority?: questionCaller.QuestionInputAuthority;
 }): Promise<boolean> {
   params.authority?.assertCurrent();
   const sessionKey = params.sessionKey?.trim();
@@ -428,7 +439,14 @@ export async function cancelPendingAgentQuestionForSession(params: {
       await state.gatewayCall(
         "question.resolve",
         { timeoutMs: QUESTION_RPC_GRACE_MS },
-        { id: state.questionId, cancel: true, resolvedBy: params.resolvedBy },
+        questionCaller.withQuestionSourceBindingRoutes(
+          {
+            id: state.questionId,
+            cancel: true,
+            resolvedBy: params.resolvedBy,
+          },
+          params.authority,
+        ),
         ...(reservation.extra ? ([reservation.extra] as const) : []),
       );
     } catch (error) {

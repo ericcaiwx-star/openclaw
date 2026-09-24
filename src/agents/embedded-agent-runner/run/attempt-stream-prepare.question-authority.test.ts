@@ -10,7 +10,7 @@ import {
 } from "../../../auto-reply/reply/reply-run-registry.js";
 import {
   assertPreparedConversationBindingRouteCurrent,
-  assertPreparedConversationBindingRouteNow,
+  readPreparedConversationBindingSourceRoutes,
 } from "../../../auto-reply/reply/session-conversation-binding.js";
 import { buildTestCtx } from "../../../auto-reply/reply/test-ctx.js";
 import {
@@ -18,10 +18,7 @@ import {
   withConversationBindingRouteFacts,
 } from "../../../channels/conversation-binding-route-facts.js";
 import { replaceSessionEntry } from "../../../config/sessions/session-accessor.js";
-import {
-  unbindGenericCurrentConversationBindings,
-  updateCurrentConversationBindingRecord,
-} from "../../../infra/outbound/current-conversation-bindings.js";
+import { inspectQuestionSourceBindingRoutes } from "../../../gateway/question-source-binding.js";
 import {
   registerSessionBindingAdapter,
   unregisterSessionBindingAdapter,
@@ -425,11 +422,7 @@ describe("prepareEmbeddedAttemptStream", () => {
                 conversationId: sessionId,
               };
               const observedBinding: SessionBindingRecord = {
-                bindingId:
-                  change === "binding-unbound-during-hello" ||
-                  change === "binding-expired-during-hello"
-                    ? `generic:webchat␟default␟␟${sessionId}`
-                    : "binding-observed",
+                bindingId: `generic:webchat␟default␟␟${sessionId}`,
                 boundAt: 1,
                 targetKind: "session",
                 targetSessionKey: sessionKey,
@@ -445,42 +438,39 @@ describe("prepareEmbeddedAttemptStream", () => {
                 bindingId: "binding-reassigned",
                 boundAt: 2,
               };
-              let liveBinding = observedBinding;
+              let liveBinding: SessionBindingRecord | null = observedBinding;
               const checksBinding =
                 change === "binding-reassigned" || change === "binding-during-hello";
-              if (
-                change === "binding-unbound-during-hello" ||
-                change === "binding-expired-during-hello"
-              ) {
-                updateCurrentConversationBindingRecord(conversation, () =>
-                  change === "binding-expired-during-hello" ? expiringBinding : observedBinding,
-                );
+              if (change === "binding-expired-during-hello") {
+                liveBinding = expiringBinding;
               }
               let bindingInspectWaits = change === "binding-reassigned";
               const bindingInspectEntered = createDeferredCore();
               let releaseBindingInspect = () => {};
-              if (checksBinding) {
-                bindingAdapter = {
-                  channel: conversation.channel,
-                  accountId: conversation.accountId,
-                  listBySession: () => [liveBinding],
-                  inspectByConversation: () => liveBinding,
-                  inspectByConversationAsync: async () => {
-                    if (bindingInspectWaits) {
-                      bindingInspectWaits = false;
-                      bindingInspectEntered.resolve();
-                      await new Promise<void>((resolve) => {
-                        releaseBindingInspect = resolve;
-                      });
-                    }
-                    return liveBinding;
-                  },
-                  resolveByConversation: () => liveBinding,
-                  resolveByConversationAsync: async () => liveBinding,
-                  touchAsync: async () => undefined,
-                };
-                registerSessionBindingAdapter(bindingAdapter);
-              }
+              const inspectLiveBinding = () =>
+                liveBinding?.expiresAt !== undefined && liveBinding.expiresAt <= Date.now()
+                  ? null
+                  : liveBinding;
+              bindingAdapter = {
+                channel: conversation.channel,
+                accountId: conversation.accountId,
+                listBySession: () => (inspectLiveBinding() ? [inspectLiveBinding()!] : []),
+                inspectByConversation: inspectLiveBinding,
+                inspectByConversationAsync: async () => {
+                  if (bindingInspectWaits) {
+                    bindingInspectWaits = false;
+                    bindingInspectEntered.resolve();
+                    await new Promise<void>((resolve) => {
+                      releaseBindingInspect = resolve;
+                    });
+                  }
+                  return inspectLiveBinding();
+                },
+                resolveByConversation: inspectLiveBinding,
+                resolveByConversationAsync: async () => inspectLiveBinding(),
+                touchAsync: async () => undefined,
+              };
+              registerSessionBindingAdapter(bindingAdapter);
               const bindingCtx = buildTestCtx({
                 Provider: "webchat",
                 Surface: "webchat",
@@ -512,13 +502,6 @@ describe("prepareEmbeddedAttemptStream", () => {
                   : undefined;
               const assertSourceCurrent = () => {
                 source.signal.throwIfAborted();
-                if (
-                  change === "binding-during-hello" ||
-                  change === "binding-unbound-during-hello" ||
-                  change === "binding-expired-during-hello"
-                ) {
-                  assertPreparedConversationBindingRouteNow(bindingCtx);
-                }
               };
               const claimQuestion = (
                 owner: ReplyOperation,
@@ -531,6 +514,8 @@ describe("prepareEmbeddedAttemptStream", () => {
                   text,
                   options: {
                     isInboundUserMessage: true,
+                    questionSourceBindingRoutes:
+                      readPreparedConversationBindingSourceRoutes(bindingCtx),
                     userTurnTranscriptRecorder: sourceRecorder,
                     toolAuthorityOverlay: {
                       senderIsOwner: true,
@@ -541,6 +526,11 @@ describe("prepareEmbeddedAttemptStream", () => {
                   assertSourceCurrent: sourceAssertion,
                   assertPreparedCurrent,
                 });
+              const sourceBindingRoutes = readPreparedConversationBindingSourceRoutes(bindingCtx);
+              expect(sourceBindingRoutes).toBeDefined();
+              expect(await inspectQuestionSourceBindingRoutes(sourceBindingRoutes!)).toBe(
+                "current",
+              );
               const promptDelivered = createDeferredCore();
               question = runAgentHarnessGatewayQuestion({
                 questionId,
@@ -574,10 +564,7 @@ describe("prepareEmbeddedAttemptStream", () => {
                 } else if (change === "binding-during-hello") {
                   liveBinding = reassignedBinding;
                 } else if (change === "binding-unbound-during-hello") {
-                  await unbindGenericCurrentConversationBindings({
-                    targetSessionKey: sessionKey,
-                    reason: "session reset during Gateway hello",
-                  });
+                  liveBinding = null;
                 } else if (change === "binding-expired-during-hello") {
                   vi.useFakeTimers({ toFake: ["Date"] });
                   vi.setSystemTime(expiringBinding.expiresAt! + 1);
@@ -611,7 +598,11 @@ describe("prepareEmbeddedAttemptStream", () => {
                   ? PreparedQuestionAnswerRefusedError
                   : QuestionDispatchRefusedError,
               );
-              expect(resolveRequests()).toEqual([]);
+              const gatewayRejectedBinding =
+                change === "binding-during-hello" ||
+                change === "binding-unbound-during-hello" ||
+                change === "binding-expired-during-hello";
+              expect(resolveRequests()).toHaveLength(gatewayRejectedBinding ? 1 : 0);
               expect(gateway.manager.get(questionId)?.status).toBe("pending");
               callerMatches = true;
               if (checksBinding) {
@@ -620,7 +611,7 @@ describe("prepareEmbeddedAttemptStream", () => {
                 change === "binding-unbound-during-hello" ||
                 change === "binding-expired-during-hello"
               ) {
-                updateCurrentConversationBindingRecord(conversation, () => observedBinding);
+                liveBinding = observedBinding;
               }
               recorder.finishPendingInput?.("interrupted");
               const currentOperation = replacement ?? operation;
@@ -637,7 +628,7 @@ describe("prepareEmbeddedAttemptStream", () => {
                 ),
               ).resolves.toBe(true);
               await expect(question).resolves.toMatchObject({ status: "answered" });
-              expect(resolveRequests()).toHaveLength(1);
+              expect(resolveRequests()).toHaveLength(gatewayRejectedBinding ? 2 : 1);
             },
           );
         } finally {

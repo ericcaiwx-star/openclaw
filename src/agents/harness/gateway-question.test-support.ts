@@ -12,6 +12,7 @@ import {
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
 import { QuestionManager, QuestionManagerError } from "../../gateway/question-manager.js";
+import { inspectQuestionSourceBindingRoutes } from "../../gateway/question-source-binding.js";
 import { createDeferredCore as deferred, type Deferred } from "../../shared/deferred.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 // Collect the real transport before test deadlines; production still imports it lazily.
@@ -74,7 +75,7 @@ export async function withQuestionGateway(
             payload: { nonce: "synthetic-question-nonce", ts: Date.now() },
           }),
         );
-        socket.on("message", (raw) => {
+        socket.on("message", async (raw) => {
           const frame = JSON.parse(rawDataToString(raw)) as RequestFrame;
           const respond = (payload: unknown) => {
             if (socket.readyState === WebSocket.OPEN) {
@@ -122,6 +123,26 @@ export async function withQuestionGateway(
               waitStarted.resolve();
             } else if (frame.method === "question.resolve") {
               const request = frame.params as QuestionResolveParams;
+              if (request.sourceBindingRoutes) {
+                const status = await inspectQuestionSourceBindingRoutes(
+                  request.sourceBindingRoutes,
+                );
+                if (status !== "current") {
+                  socket.send(
+                    JSON.stringify({
+                      type: "res",
+                      id: frame.id,
+                      ok: false,
+                      error: {
+                        code: "FORBIDDEN",
+                        message: "Question source binding changed before resolution.",
+                        details: { reason: "QUESTION_SOURCE_BINDING_CHANGED" },
+                      },
+                    }),
+                  );
+                  return;
+                }
+              }
               const result =
                 "cancel" in request
                   ? manager.cancel(request.id, request.resolvedBy)
