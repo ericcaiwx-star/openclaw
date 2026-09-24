@@ -21,6 +21,7 @@ import {
   type AgentHarnessQuestionGatewayCall,
   type AgentQuestionDispatcher,
 } from "./gateway-question-dispatch.js";
+import { createSourceBoundCallerAuthority } from "./gateway-question.caller.js";
 import type { AgentHarnessHostCapabilities } from "./host-capability-types.js";
 import {
   captureAgentQuestionAnswerAuthority,
@@ -235,41 +236,17 @@ export async function claimPendingAgentQuestionAnswerFromCaller(params: {
   assertPreparedCurrent?: () => Promise<void>;
   onAnswerProcessed?: () => void;
 }): Promise<boolean> {
-  const state = params.sessionKey ? pendingAgentQuestions.get(params.sessionKey.trim()) : undefined;
+  const normalized = params.sessionKey?.trim();
+  const state = normalized ? pendingAgentQuestions.get(normalized) : undefined;
   return claimQuestionAnswer(
     {
       sessionKey: params.sessionKey,
       text: params.text,
       persist: params.persist,
       sourceRecorder: params.sourceRecorder,
-      authority: {
-        kind: "source-bound",
-        assertCurrent: () => {
-          try {
-            params.assertSourceCurrent();
-            if (state && params.caller) {
-              if (!state.answerAuthority) {
-                throw new Error("pending question has no prepared creator authority");
-              }
-              state.answerAuthority.assertCaller(params.caller);
-            } else if (
-              state &&
-              (!params.creatorFingerprint || params.callerFingerprint !== params.creatorFingerprint)
-            ) {
-              throw new Error("question answer caller policy does not match its creator");
-            }
-            if (state && pendingAgentQuestions.get(state.sessionKey) !== state) {
-              throw new Error("pending question is no longer current");
-            }
-            params.assertSourceCurrent();
-          } catch (error) {
-            throw new QuestionDispatchRefusedError(
-              error instanceof Error ? error.message : "question answer authority refused",
-              { cause: error },
-            );
-          }
-        },
-      },
+      authority: createSourceBoundCallerAuthority(params, state, () =>
+        Boolean(state && pendingAgentQuestions.get(state.sessionKey) === state),
+      ),
     },
     params.onAnswerProcessed,
     params.assertPreparedCurrent,

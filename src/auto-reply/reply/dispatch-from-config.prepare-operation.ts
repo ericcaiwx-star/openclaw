@@ -263,7 +263,10 @@ export async function prepareDispatchOperation(state: PrepareDispatchOperationCo
       }
     } catch (error) {
       if (error instanceof PreparedQuestionAnswerRefusedError) {
-        throw error.cause ?? error;
+        if (error.cause instanceof Error) {
+          throw error.cause;
+        }
+        throw error;
       }
       if (error instanceof QuestionDispatchRefusedError) {
         return await finishFastCommand({

@@ -351,7 +351,10 @@ describe("dispatch input custody after a question response", () => {
       CommandAuthorized: true,
     });
     copyConversationBindingRouteFacts(route, ctx);
-    expect(readConversationBindingRouteFacts(ctx)?.bindingId).toBe("binding-observed");
+    const routeFacts = readConversationBindingRouteFacts(ctx);
+    expect(routeFacts?.kind === "agent" ? routeFacts.bindingId : undefined).toBe(
+      "binding-observed",
+    );
     const replyResolver = vi.fn(async () => ({ text: "should not start a turn" }));
     const pending = dispatchReplyFromConfig({
       ctx,

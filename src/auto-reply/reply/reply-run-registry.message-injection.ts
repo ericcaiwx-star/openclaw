@@ -511,13 +511,22 @@ export async function claimPendingReplyMessageInjectionTarget(params: {
   // An absent question must fall through as an ordinary message. V2 sinks call
   // this assertion only after they find and reserve a real pending input, then
   // again at final I/O; projection itself still receives an immediate liveness check.
+  const claimOptions = {
+    ...backendOptions,
+    toolAuthorityFingerprint: projectedToolAuthorityFingerprint,
+  };
   assertTargetCurrent();
+  if (!params.assertPreparedCurrent) {
+    return guarded.claimPendingUserInputAnswer(
+      params.text,
+      claimOptions,
+      assertClaimCurrent,
+      "source-bound",
+    );
+  }
   return guarded.claimPendingUserInputAnswer(
     params.text,
-    {
-      ...backendOptions,
-      toolAuthorityFingerprint: projectedToolAuthorityFingerprint,
-    },
+    claimOptions,
     assertClaimCurrent,
     "source-bound",
     params.assertPreparedCurrent,

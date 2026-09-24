@@ -12,7 +12,7 @@ import { SessionWorkStartChangedError } from "../../config/sessions/lifecycle.js
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   getSessionBindingService,
-  inspectSessionBindingByConversation,
+  inspectSessionBindingByConversationNow,
   isSessionBindingError,
   readSessionBindingSelectionCurrent,
   type SessionBindingRecord,
@@ -168,7 +168,10 @@ export function assertPreparedConversationBindingRouteNow(ctx: MsgContext): void
     return;
   }
   for (const expected of readConversationBindingRouteObservations(ctx)) {
-    const inspection = inspectSessionBindingByConversation(expected.conversation);
+    const inspection = inspectSessionBindingByConversationNow(expected.conversation);
+    if (inspection.status === "cold") {
+      continue;
+    }
     if (inspection.status === "unavailable") {
       throw new SessionWorkStartChangedError(
         "Conversation binding owner changed while preparing the reply. Retry the message.",

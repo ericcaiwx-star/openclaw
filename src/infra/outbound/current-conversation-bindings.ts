@@ -54,15 +54,63 @@ import type {
   SessionBindingUnbindInput,
 } from "./session-binding.types.js";
 
+type PublishedGenericBinding = { epoch: number; binding: SessionBindingRecord | null };
+
+const publishedGenericBindings = new Map<string, PublishedGenericBinding>();
+
+function publishedGenericBindingKey(ref: ConversationRef): string {
+  const conversation = normalizeConversationRef(ref);
+  return JSON.stringify([
+    conversation.channel,
+    conversation.accountId,
+    conversation.conversationId,
+    conversation.parentConversationId ?? null,
+  ]);
+}
+
+function genericPublicationEpoch(ref: ConversationRef): number {
+  return publishedGenericBindings.get(publishedGenericBindingKey(ref))?.epoch ?? 0;
+}
+
+/** Remembers a worker or write result so Gateway sends can recheck without opening SQLite. */
+function publishGenericCurrentConversationBinding(
+  ref: ConversationRef,
+  binding: SessionBindingRecord | null,
+): void {
+  const key = publishedGenericBindingKey(ref);
+  const epoch = (publishedGenericBindings.get(key)?.epoch ?? 0) + 1;
+  publishedGenericBindings.set(key, { epoch, binding });
+}
+
+function publishGenericBindingIfUnchanged(
+  ref: ConversationRef,
+  epoch: number,
+  binding: SessionBindingRecord | null,
+): void {
+  if (genericPublicationEpoch(ref) === epoch) {
+    publishGenericCurrentConversationBinding(ref, binding);
+  }
+}
+
+/** Synchronous view of the last worker-owned generic binding. Missing means not loaded yet. */
+export function readPublishedGenericCurrentConversationBinding(
+  ref: ConversationRef,
+): SessionBindingRecord | null | undefined {
+  const published = publishedGenericBindings.get(publishedGenericBindingKey(ref));
+  return published ? published.binding : undefined;
+}
+
 /** Updates one binding from its currently committed row in one synchronous transaction. */
 export function updateCurrentConversationBindingRecord(
   ref: ConversationRef,
   update: (current: SessionBindingRecord | null) => SessionBindingRecord | null,
 ): { previous: SessionBindingRecord | null; current: SessionBindingRecord | null } {
   const conversation = normalizeConversationRef(ref);
-  return runOpenClawStateWriteTransaction(({ db }) =>
+  const result = runOpenClawStateWriteTransaction(({ db }) =>
     updateCurrentConversationBindingRecordInDatabase(db, conversation, update),
   );
+  publishGenericCurrentConversationBinding(conversation, result.current);
+  return result;
 }
 
 /** Selects the current row without pruning expiry or rewriting legacy keys. */
@@ -553,10 +601,13 @@ export async function inspectGenericCurrentConversationBindingAsync(
     return null;
   }
   options?.assertCurrent?.();
+  const epoch = genericPublicationEpoch(conversation);
   const record = await inspectCurrentConversationBindingRecordAsync(conversation);
   options?.assertCurrent?.();
   captured.assertCurrent();
-  return record?.bindingId.startsWith(CURRENT_BINDINGS_ID_PREFIX) ? record : null;
+  const binding = record?.bindingId.startsWith(CURRENT_BINDINGS_ID_PREFIX) ? record : null;
+  publishGenericBindingIfUnchanged(conversation, epoch, binding);
+  return binding;
 }
 
 export async function resolveGenericCurrentConversationBindingAsync(
@@ -568,11 +619,14 @@ export async function resolveGenericCurrentConversationBindingAsync(
   if (!captured.supported) {
     return null;
   }
+  const epoch = genericPublicationEpoch(conversation);
   const record = await resolveCurrentConversationBindingRecordAsync(conversation, () => {
     options?.assertCurrent?.();
     captured.assertCurrent();
   });
-  return record?.bindingId.startsWith(CURRENT_BINDINGS_ID_PREFIX) ? record : null;
+  const binding = record?.bindingId.startsWith(CURRENT_BINDINGS_ID_PREFIX) ? record : null;
+  publishGenericBindingIfUnchanged(conversation, epoch, binding);
+  return binding;
 }
 
 export async function readGenericCurrentConversationBindingSelectionAsync(
@@ -588,13 +642,23 @@ export async function readGenericCurrentConversationBindingSelectionAsync(
     }
   };
   const eligible = conversations.filter((_, index) => captured[index]?.supported);
+  const epochs = conversations.map((conversation) => genericPublicationEpoch(conversation));
   assertCurrent();
   const records = await readCurrentConversationBindingSelectionAsync(eligible, assertCurrent);
   assertCurrent();
   let index = 0;
-  return captured.map((support) => {
+  return captured.map((support, conversationIndex) => {
     const record = support.supported ? records[index++] : null;
-    return record?.bindingId.startsWith(CURRENT_BINDINGS_ID_PREFIX) ? record : null;
+    const binding = record?.bindingId.startsWith(CURRENT_BINDINGS_ID_PREFIX) ? record : null;
+    const conversation = conversations[conversationIndex];
+    if (
+      support.supported &&
+      conversation &&
+      epochs[conversationIndex] === genericPublicationEpoch(conversation)
+    ) {
+      publishGenericCurrentConversationBinding(conversation, binding);
+    }
+    return binding;
   });
 }
 
@@ -659,7 +723,17 @@ export async function touchGenericCurrentConversationBindingAsync(
 }
 
 export const testing = {
+  clearPublishedGenericCurrentConversationBindingsForTests() {
+    publishedGenericBindings.clear();
+  },
+  rememberPublishedGenericCurrentConversationBinding(
+    ref: ConversationRef,
+    binding: SessionBindingRecord | null,
+  ) {
+    publishGenericCurrentConversationBinding(ref, binding);
+  },
   clearPersistedCurrentConversationBindingsForTests() {
+    publishedGenericBindings.clear();
     runOpenClawStateWriteTransaction(({ db }) => {
       const bindingDb =
         getNodeSqliteKysely<Pick<OpenClawStateKyselyDatabase, "current_conversation_bindings">>(db);
