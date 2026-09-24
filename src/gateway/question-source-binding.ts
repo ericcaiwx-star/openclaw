@@ -3,6 +3,7 @@ import {
   errorShape,
   type QuestionSourceBindingRoute,
 } from "../../packages/gateway-protocol/src/index.js";
+import { resolveConversationBindingSelection } from "../channels/conversation-binding-route-facts.js";
 import { readSessionBindingSelectionCurrent } from "../infra/outbound/session-binding-service.js";
 import type { RespondFn } from "./server-methods/types.js";
 
@@ -28,13 +29,14 @@ async function inspectQuestionSourceBindingRoutes(
     );
     const changed = routes.some((route, index) => {
       const expected = route.selection;
-      const binding = current[index] ?? null;
+      const selection = resolveConversationBindingSelection(current[index] ?? null);
       if (expected.kind === "unavailable") {
         return true;
       }
       if (expected.kind === "none") {
-        return binding !== null;
+        return selection.kind !== "none";
       }
+      const binding = selection.kind === "none" ? null : selection.binding;
       return (
         !binding ||
         binding.bindingId !== expected.bindingId ||

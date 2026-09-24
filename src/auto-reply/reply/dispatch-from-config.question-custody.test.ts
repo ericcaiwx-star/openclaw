@@ -395,6 +395,17 @@ describe("dispatch input custody after a question response", () => {
     sessionStoreMocks.currentEntry = { sessionId, updatedAt: Date.now() };
     const order: string[] = [];
     const resolved = vi.fn();
+    const adapter: SessionBindingAdapter = {
+      channel: "webchat",
+      accountId: "default",
+      listBySession: () => [],
+      inspectByConversation: () => null,
+      inspectByConversationAsync: async () => null,
+      resolveByConversation: () => null,
+      resolveByConversationAsync: async () => null,
+      touchAsync: async () => undefined,
+    };
+    registerSessionBindingAdapter(adapter);
     try {
       await replaceSessionEntry(target, { sessionId, updatedAt: Date.now() });
       const recorder = createUserTurnTranscriptRecorder({
@@ -472,6 +483,11 @@ describe("dispatch input custody after a question response", () => {
         expect(resolved).toHaveBeenCalledOnce();
         expect(replyResolver).not.toHaveBeenCalled();
       } finally {
+        unregisterSessionBindingAdapter({
+          channel: adapter.channel,
+          accountId: adapter.accountId,
+          adapter,
+        });
         question.dispose();
       }
     } finally {
