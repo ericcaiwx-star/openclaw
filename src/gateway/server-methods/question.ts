@@ -505,7 +505,9 @@ export function createQuestionHandlers(
               respond(false, undefined, authorizationError);
               return;
             }
-            if (!sourceBinding.authorize(respond)) return;
+            if (!sourceBinding.authorize(respond)) {
+              return;
+            }
             if ("cancel" in request) {
               respond(true, manager.cancel(request.id, request.resolvedBy), undefined);
               return;

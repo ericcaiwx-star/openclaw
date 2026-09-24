@@ -440,7 +440,7 @@ export async function withSessionEntriesFromStoresInWorker<T>(
         void Promise.resolve(result).catch(() => {});
         throw new Error("Session entry read consumers must remain synchronous");
       }
-      return Promise.resolve(result);
+      return result;
     } finally {
       active = false;
     }

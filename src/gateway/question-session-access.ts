@@ -167,8 +167,10 @@ export async function withPreparedQuestionSessions<T>(
       }
     });
     try {
-      const readPrepared = <T>(consume: (reads: readonly PreparedSessionEntryWorkerRead[]) => T) =>
-        withSessionEntriesFromStoresInWorker([...groups.values()], consume, {
+      const readPrepared = <TResult>(
+        readConsumer: (reads: readonly PreparedSessionEntryWorkerRead[]) => TResult,
+      ) =>
+        withSessionEntriesFromStoresInWorker([...groups.values()], readConsumer, {
           beforeConsume: operation.beforeConsume,
         });
       const outcome = await readPrepared((reads) => {

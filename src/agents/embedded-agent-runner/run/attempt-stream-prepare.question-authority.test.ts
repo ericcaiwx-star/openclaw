@@ -18,7 +18,6 @@ import {
   withConversationBindingRouteFacts,
 } from "../../../channels/conversation-binding-route-facts.js";
 import { replaceSessionEntry } from "../../../config/sessions/session-accessor.js";
-import { inspectQuestionSourceBindingRoutes } from "../../../gateway/question-source-binding.js";
 import {
   registerSessionBindingAdapter,
   unregisterSessionBindingAdapter,
@@ -528,9 +527,6 @@ describe("prepareEmbeddedAttemptStream", () => {
                 });
               const sourceBindingRoutes = readPreparedConversationBindingSourceRoutes(bindingCtx);
               expect(sourceBindingRoutes).toBeDefined();
-              expect(await inspectQuestionSourceBindingRoutes(sourceBindingRoutes!)).toBe(
-                "current",
-              );
               const promptDelivered = createDeferredCore();
               question = runAgentHarnessGatewayQuestion({
                 questionId,

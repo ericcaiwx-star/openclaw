@@ -19,7 +19,7 @@ function sameConversation(
 }
 
 /** Reads shared binding ownership immediately before a question resolution commits. */
-export async function inspectQuestionSourceBindingRoutes(
+async function inspectQuestionSourceBindingRoutes(
   routes: readonly QuestionSourceBindingRoute[],
 ): Promise<"current" | "changed" | "unavailable"> {
   try {
