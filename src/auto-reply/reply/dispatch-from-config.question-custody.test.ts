@@ -5,10 +5,25 @@ import {
   claimPendingAgentQuestionAnswer,
   registerPendingAgentQuestion,
 } from "../../agents/harness/gateway-question.js";
+import {
+  createAgentQuestionAnswerAuthority,
+  withAgentQuestionAnswerAuthority,
+} from "../../agents/harness/host-private-capabilities.js";
 import { clearAgentHarnesses } from "../../agents/harness/registry.js";
 import { resolveReplyCompletion } from "../../agents/reply-completion.js";
+import {
+  copyConversationBindingRouteFacts,
+  readConversationBindingRouteFacts,
+  withConversationBindingRouteFacts,
+} from "../../channels/conversation-binding-route-facts.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { EmbeddedQuestionBroker } from "../../infra/embedded-question-broker.js";
+import {
+  registerSessionBindingAdapter,
+  unregisterSessionBindingAdapter,
+  type SessionBindingAdapter,
+  type SessionBindingRecord,
+} from "../../infra/outbound/session-binding-service.js";
 import { registerPluginCommand } from "../../plugins/commands.js";
 import type { MsgContext } from "../templating.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
@@ -220,6 +235,109 @@ describe("dispatch input custody after a question response", () => {
       );
       expect(resolved).toHaveBeenCalledOnce();
     } finally {
+      question.dispose();
+    }
+  });
+
+  it("refuses a reassigned conversation binding before question resolution", async () => {
+    const sessionKey = "agent:main:webchat:direct:stale-binding-question";
+    const conversation = {
+      channel: "webchat",
+      accountId: "default",
+      conversationId: "stale-binding-room",
+    };
+    const observed: SessionBindingRecord = {
+      bindingId: "binding-observed",
+      boundAt: 1,
+      targetKind: "session",
+      targetSessionKey: sessionKey,
+      conversation,
+      status: "active",
+    };
+    const reassigned: SessionBindingRecord = {
+      ...observed,
+      bindingId: "binding-reassigned",
+      boundAt: 2,
+    };
+    sessionStoreMocks.currentEntry = {
+      sessionId: "stale-binding-question",
+      updatedAt: Date.now(),
+    };
+    const resolved = vi.fn();
+    const gatewayCall: AgentQuestionDispatcher = {
+      version: 2,
+      call: async (request) => {
+        if (request.method === "question.resolve") {
+          resolved();
+        }
+        return {};
+      },
+    };
+    const question = registerPendingAgentQuestion({
+      sessionKey,
+      questionId: "ask_stale_binding",
+      questions: [{ id: "answer", header: "Answer", question: "Continue?" }],
+      gatewayCall,
+    });
+    question.attachRegistration(Promise.resolve());
+    const adapter: SessionBindingAdapter = {
+      channel: conversation.channel,
+      accountId: conversation.accountId,
+      listBySession: () => [reassigned],
+      inspectByConversation: () => reassigned,
+      inspectByConversationAsync: async () => reassigned,
+      resolveByConversation: () => reassigned,
+      resolveByConversationAsync: async () => reassigned,
+      touchAsync: async () => undefined,
+    };
+    registerSessionBindingAdapter(adapter);
+    const route = withConversationBindingRouteFacts(
+      { sessionKey, agentId: "main" },
+      { kind: "agent", binding: observed, sessionKey },
+      "main",
+      conversation,
+    );
+    const answer = "Continue";
+    const ctx = buildTestCtx({
+      Provider: "webchat",
+      Surface: "webchat",
+      ChatType: "direct",
+      From: "user:stale-binding",
+      To: "channel:stale-binding",
+      AgentId: "main",
+      SessionKey: sessionKey,
+      MessageSid: "stale-binding-answer",
+      Body: answer,
+      RawBody: answer,
+      BodyForAgent: answer,
+      BodyForCommands: answer,
+      CommandBody: answer,
+      CommandSource: "text",
+      CommandAuthorized: true,
+    });
+    copyConversationBindingRouteFacts(route, ctx);
+    expect(readConversationBindingRouteFacts(ctx)?.bindingId).toBe("binding-observed");
+    const replyResolver = vi.fn(async () => ({ text: "should not start a turn" }));
+    try {
+      await expect(
+        dispatchReplyFromConfig({
+          ctx,
+          cfg: automaticDirectReplyConfig,
+          dispatcher: createDispatcher(),
+          replyResolver,
+        }),
+      ).rejects.toMatchObject({
+        code: "SESSION_WORK_START_CHANGED",
+        message: expect.stringContaining("Conversation binding changed"),
+      });
+      expect(resolved).not.toHaveBeenCalled();
+      expect(replyResolver).not.toHaveBeenCalled();
+    } finally {
+      unregisterSessionBindingAdapter({
+        channel: adapter.channel,
+        accountId: adapter.accountId,
+        adapter,
+      });
       question.dispose();
     }
   });
