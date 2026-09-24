@@ -45,9 +45,11 @@ describe("assertPreparedConversationBindingRouteNow", () => {
     return ctx;
   }
 
-  it("does not query SQLite before a generic binding is published", () => {
+  it("refuses a cold generic binding view without a synchronous SQLite read", () => {
     genericBindingTesting.clearPublishedGenericCurrentConversationBindingsForTests();
-    expect(() => assertPreparedConversationBindingRouteNow(ctxFor(observed))).not.toThrow();
+    expect(() => assertPreparedConversationBindingRouteNow(ctxFor(observed))).toThrow(
+      SessionWorkStartChangedError,
+    );
   });
 
   it("refuses a published generic binding change without a synchronous SQLite read", () => {
@@ -61,6 +63,28 @@ describe("assertPreparedConversationBindingRouteNow", () => {
       bindingId: "binding-reassigned",
       boundAt: 2,
     });
+    expect(() => assertPreparedConversationBindingRouteNow(ctxFor(observed))).toThrow(
+      SessionWorkStartChangedError,
+    );
+    genericBindingTesting.clearPublishedGenericCurrentConversationBindingsForTests();
+  });
+
+  it("bounds published generic bindings and fails closed after eviction", () => {
+    genericBindingTesting.clearPublishedGenericCurrentConversationBindingsForTests();
+    genericBindingTesting.rememberPublishedGenericCurrentConversationBinding(
+      conversation,
+      observed,
+    );
+    const maxEntries = genericBindingTesting.maxPublishedGenericCurrentConversationBindings;
+    for (let index = 0; index < maxEntries; index += 1) {
+      genericBindingTesting.rememberPublishedGenericCurrentConversationBinding(
+        { ...conversation, conversationId: `bounded-${index}` },
+        null,
+      );
+    }
+    expect(genericBindingTesting.publishedGenericCurrentConversationBindingCount()).toBe(
+      maxEntries,
+    );
     expect(() => assertPreparedConversationBindingRouteNow(ctxFor(observed))).toThrow(
       SessionWorkStartChangedError,
     );

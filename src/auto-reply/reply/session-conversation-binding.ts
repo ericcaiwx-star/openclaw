@@ -170,7 +170,9 @@ export function assertPreparedConversationBindingRouteNow(ctx: MsgContext): void
   for (const expected of readConversationBindingRouteObservations(ctx)) {
     const inspection = inspectSessionBindingByConversationNow(expected.conversation);
     if (inspection.status === "cold") {
-      continue;
+      throw new SessionWorkStartChangedError(
+        "Conversation binding owner changed while preparing the reply. Retry the message.",
+      );
     }
     if (inspection.status === "unavailable") {
       throw new SessionWorkStartChangedError(

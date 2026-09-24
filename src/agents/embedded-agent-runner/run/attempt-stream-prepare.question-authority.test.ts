@@ -338,6 +338,7 @@ describe("prepareEmbeddedAttemptStream", () => {
     "binding-reassigned",
     "binding-during-hello",
     "binding-unbound-during-hello",
+    "binding-expired-during-hello",
   ] as const)(
     "carries %s authority through the production V2 backend and Gateway transport",
     async (change) => {
@@ -425,7 +426,8 @@ describe("prepareEmbeddedAttemptStream", () => {
               };
               const observedBinding: SessionBindingRecord = {
                 bindingId:
-                  change === "binding-unbound-during-hello"
+                  change === "binding-unbound-during-hello" ||
+                  change === "binding-expired-during-hello"
                     ? `generic:webchat␟default␟␟${sessionId}`
                     : "binding-observed",
                 boundAt: 1,
@@ -433,6 +435,10 @@ describe("prepareEmbeddedAttemptStream", () => {
                 targetSessionKey: sessionKey,
                 conversation,
                 status: "active",
+              };
+              const expiringBinding: SessionBindingRecord = {
+                ...observedBinding,
+                expiresAt: Date.now() + 60_000,
               };
               const reassignedBinding: SessionBindingRecord = {
                 ...observedBinding,
@@ -442,8 +448,13 @@ describe("prepareEmbeddedAttemptStream", () => {
               let liveBinding = observedBinding;
               const checksBinding =
                 change === "binding-reassigned" || change === "binding-during-hello";
-              if (change === "binding-unbound-during-hello") {
-                updateCurrentConversationBindingRecord(conversation, () => observedBinding);
+              if (
+                change === "binding-unbound-during-hello" ||
+                change === "binding-expired-during-hello"
+              ) {
+                updateCurrentConversationBindingRecord(conversation, () =>
+                  change === "binding-expired-during-hello" ? expiringBinding : observedBinding,
+                );
               }
               let bindingInspectWaits = change === "binding-reassigned";
               const bindingInspectEntered = createDeferredCore();
@@ -503,7 +514,8 @@ describe("prepareEmbeddedAttemptStream", () => {
                 source.signal.throwIfAborted();
                 if (
                   change === "binding-during-hello" ||
-                  change === "binding-unbound-during-hello"
+                  change === "binding-unbound-during-hello" ||
+                  change === "binding-expired-during-hello"
                 ) {
                   assertPreparedConversationBindingRouteNow(bindingCtx);
                 }
@@ -566,6 +578,9 @@ describe("prepareEmbeddedAttemptStream", () => {
                     targetSessionKey: sessionKey,
                     reason: "session reset during Gateway hello",
                   });
+                } else if (change === "binding-expired-during-hello") {
+                  vi.useFakeTimers({ toFake: ["Date"] });
+                  vi.setSystemTime(expiringBinding.expiresAt! + 1);
                 } else if (change === "operation-reassigned") {
                   operation.complete();
                   replacement = createReplyOperation({
@@ -601,7 +616,10 @@ describe("prepareEmbeddedAttemptStream", () => {
               callerMatches = true;
               if (checksBinding) {
                 liveBinding = observedBinding;
-              } else if (change === "binding-unbound-during-hello") {
+              } else if (
+                change === "binding-unbound-during-hello" ||
+                change === "binding-expired-during-hello"
+              ) {
                 updateCurrentConversationBindingRecord(conversation, () => observedBinding);
               }
               recorder.finishPendingInput?.("interrupted");
@@ -611,7 +629,9 @@ describe("prepareEmbeddedAttemptStream", () => {
                   currentOperation,
                   "Current source answer",
                   undefined,
-                  change === "binding-during-hello" || change === "binding-unbound-during-hello"
+                  change === "binding-during-hello" ||
+                    change === "binding-unbound-during-hello" ||
+                    change === "binding-expired-during-hello"
                     ? assertSourceCurrent
                     : () => {},
                 ),
@@ -629,6 +649,9 @@ describe("prepareEmbeddedAttemptStream", () => {
             });
           }
           source.abort();
+          if (change === "binding-expired-during-hello") {
+            vi.useRealTimers();
+          }
           gateway.backingRun.abort();
           await question;
           recorder.finishPendingInput?.("interrupted");
