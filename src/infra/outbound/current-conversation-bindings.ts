@@ -186,7 +186,7 @@ export function deleteCurrentConversationBindingRecordsBySession(
   scope?: CurrentConversationBindingScope,
   genericOnly = !scope,
 ): SessionBindingRecord[] {
-  return runOpenClawStateWriteTransaction(({ db }) => {
+  const deletion = runOpenClawStateWriteTransaction(({ db }) => {
     const rows = listCurrentConversationBindingRowsBySession(
       db,
       targetSessionKey,
@@ -194,18 +194,26 @@ export function deleteCurrentConversationBindingRecordsBySession(
       genericOnly,
     );
     const removed: SessionBindingRecord[] = [];
+    const removedGenericConversations: ConversationRef[] = [];
     for (const row of rows) {
       const record = bindingRowsToRecords([row])[0];
       if (genericOnly && !record?.bindingId.startsWith(CURRENT_BINDINGS_ID_PREFIX)) {
         continue;
       }
       deleteCurrentConversationBindingRow(db, row.binding_key);
+      if (record?.bindingId.startsWith(CURRENT_BINDINGS_ID_PREFIX)) {
+        removedGenericConversations.push(record.conversation);
+      }
       if (record && !isBindingExpired(record)) {
         removed.push(record);
       }
     }
-    return removed;
+    return { removed, removedGenericConversations };
   });
+  for (const conversation of deletion.removedGenericConversations) {
+    publishGenericCurrentConversationBinding(conversation, null);
+  }
+  return deletion.removed;
 }
 
 function resolveChannelConversationBindingSupport(params: { channel: string; accountId: string }) {
