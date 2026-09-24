@@ -9,6 +9,12 @@ import {
   replyRunRegistry,
 } from "../../../auto-reply/reply/reply-run-registry.js";
 import { expireStaleReplyOperation } from "../../../auto-reply/reply/reply-run-registry.state.js";
+import { assertPreparedConversationBindingRouteCurrent } from "../../../auto-reply/reply/session-conversation-binding.js";
+import { buildTestCtx } from "../../../auto-reply/reply/test-ctx.js";
+import {
+  copyConversationBindingRouteFacts,
+  withConversationBindingRouteFacts,
+} from "../../../channels/conversation-binding-route-facts.js";
 import { CliPluginInvocationResources } from "../../../cli/plugin-invocation-resources.js";
 import { resolveDefaultSessionStorePath } from "../../../config/sessions/paths.js";
 import { replaceSessionEntry } from "../../../config/sessions/session-accessor.js";
@@ -16,6 +22,12 @@ import {
   resolveSqliteReadScope,
   toDatabaseOptions,
 } from "../../../config/sessions/session-accessor.sqlite-scope.js";
+import {
+  registerSessionBindingAdapter,
+  unregisterSessionBindingAdapter,
+  type SessionBindingAdapter,
+  type SessionBindingRecord,
+} from "../../../infra/outbound/session-binding-service.js";
 import type { Context } from "../../../llm/types.js";
 import {
   projectNestedToolActivityForHooks,
@@ -34,7 +46,10 @@ import {
   createOperationalRunInstanceRef,
 } from "../../admitted-run-context.js";
 import { buildToolLifecycleErrorResult } from "../../embedded-agent-tool-results.js";
-import { QuestionDispatchRefusedError } from "../../harness/gateway-question-dispatch.js";
+import {
+  PreparedQuestionAnswerRefusedError,
+  QuestionDispatchRefusedError,
+} from "../../harness/gateway-question-dispatch.js";
 import {
   registerPendingAgentQuestion,
   runAgentHarnessGatewayQuestion,
@@ -435,7 +450,13 @@ describe("prepareEmbeddedAttemptStream", () => {
     },
   );
 
-  it.each(["allowed", "caller-mismatch", "source-revoked", "operation-reassigned"] as const)(
+  it.each([
+    "allowed",
+    "caller-mismatch",
+    "source-revoked",
+    "operation-reassigned",
+    "binding-reassigned",
+  ] as const)(
     "carries %s authority through the production V2 backend and Gateway transport",
     async (change) => {
       await withQuestionGateway(async (gateway) => {
@@ -460,6 +481,7 @@ describe("prepareEmbeddedAttemptStream", () => {
         let replacement: ReplyOperation | undefined;
         let question: ReturnType<typeof runAgentHarnessGatewayQuestion> | undefined;
         let prepared: ReturnType<typeof prepareCatalogExecutor> | undefined;
+        let bindingAdapter: SessionBindingAdapter | undefined;
         let callerMatches = change !== "caller-mismatch";
         const source = new AbortController();
         const target = createTestUserTurnTranscriptTarget({
@@ -514,6 +536,79 @@ describe("prepareEmbeddedAttemptStream", () => {
                 attempt: { ...preparedAttempt, replyOperation: operation },
               });
               operation.setPhase("running");
+              const conversation = {
+                channel: "webchat",
+                accountId: "default",
+                conversationId: sessionId,
+              };
+              const observedBinding: SessionBindingRecord = {
+                bindingId: "binding-observed",
+                boundAt: 1,
+                targetKind: "session",
+                targetSessionKey: sessionKey,
+                conversation,
+                status: "active",
+              };
+              const reassignedBinding: SessionBindingRecord = {
+                ...observedBinding,
+                bindingId: "binding-reassigned",
+                boundAt: 2,
+              };
+              let liveBinding = observedBinding;
+              let bindingInspectWaits = change === "binding-reassigned";
+              const bindingInspectEntered = createDeferredCore();
+              let releaseBindingInspect = () => {};
+              if (change === "binding-reassigned") {
+                bindingAdapter = {
+                  channel: conversation.channel,
+                  accountId: conversation.accountId,
+                  listBySession: () => [liveBinding],
+                  inspectByConversation: () => liveBinding,
+                  inspectByConversationAsync: async () => {
+                    if (bindingInspectWaits) {
+                      bindingInspectWaits = false;
+                      bindingInspectEntered.resolve();
+                      await new Promise<void>((resolve) => {
+                        releaseBindingInspect = resolve;
+                      });
+                    }
+                    return liveBinding;
+                  },
+                  resolveByConversation: () => liveBinding,
+                  resolveByConversationAsync: async () => liveBinding,
+                  touchAsync: async () => undefined,
+                };
+                registerSessionBindingAdapter(bindingAdapter);
+              }
+              const bindingCtx = buildTestCtx({
+                Provider: "webchat",
+                Surface: "webchat",
+                ChatType: "direct",
+                From: "user:production-question",
+                To: "channel:production-question",
+                AgentId: "main",
+                SessionKey: sessionKey,
+                Body: "Old source answer",
+                RawBody: "Old source answer",
+                BodyForAgent: "Old source answer",
+                BodyForCommands: "Old source answer",
+                CommandBody: "Old source answer",
+                CommandSource: "text",
+                CommandAuthorized: true,
+              });
+              copyConversationBindingRouteFacts(
+                withConversationBindingRouteFacts(
+                  { sessionKey, agentId: "main" },
+                  { kind: "agent", binding: observedBinding, sessionKey },
+                  "main",
+                  conversation,
+                ),
+                bindingCtx,
+              );
+              const assertPreparedCurrent =
+                change === "binding-reassigned"
+                  ? () => assertPreparedConversationBindingRouteCurrent(bindingCtx)
+                  : undefined;
               const claimQuestion = (
                 owner: ReplyOperation,
                 text: string,
@@ -533,6 +628,7 @@ describe("prepareEmbeddedAttemptStream", () => {
                     },
                   },
                   assertSourceCurrent,
+                  assertPreparedCurrent,
                 });
               const promptDelivered = createDeferredCore();
               question = runAgentHarnessGatewayQuestion({
@@ -546,11 +642,18 @@ describe("prepareEmbeddedAttemptStream", () => {
               });
               await Promise.all([gateway.waitStarted, promptDelivered.promise]);
 
-              const heldHello = change === "caller-mismatch" ? undefined : gateway.holdNextHello();
+              const heldHello =
+                change === "caller-mismatch" || change === "binding-reassigned"
+                  ? undefined
+                  : gateway.holdNextHello();
               const claim = claimQuestion(operation, "Old source answer", recorder, () =>
                 source.signal.throwIfAborted(),
               );
-              if (heldHello) {
+              if (change === "binding-reassigned") {
+                await bindingInspectEntered.promise;
+                liveBinding = reassignedBinding;
+                releaseBindingInspect();
+              } else if (heldHello) {
                 await heldHello.entered;
                 if (change === "source-revoked") {
                   source.abort();
@@ -579,10 +682,17 @@ describe("prepareEmbeddedAttemptStream", () => {
                 return;
               }
 
-              await expect(claim).rejects.toBeInstanceOf(QuestionDispatchRefusedError);
+              await expect(claim).rejects.toBeInstanceOf(
+                change === "binding-reassigned"
+                  ? PreparedQuestionAnswerRefusedError
+                  : QuestionDispatchRefusedError,
+              );
               expect(resolveRequests()).toEqual([]);
               expect(gateway.manager.get(questionId)?.status).toBe("pending");
               callerMatches = true;
+              if (change === "binding-reassigned") {
+                liveBinding = observedBinding;
+              }
               recorder.finishPendingInput?.("interrupted");
               const currentOperation = replacement ?? operation;
               await expect(
@@ -593,6 +703,13 @@ describe("prepareEmbeddedAttemptStream", () => {
             },
           );
         } finally {
+          if (bindingAdapter) {
+            unregisterSessionBindingAdapter({
+              channel: bindingAdapter.channel,
+              accountId: bindingAdapter.accountId,
+              adapter: bindingAdapter,
+            });
+          }
           source.abort();
           gateway.backingRun.abort();
           await question;

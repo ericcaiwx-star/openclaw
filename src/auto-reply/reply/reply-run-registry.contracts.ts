@@ -141,6 +141,7 @@ export type ReplyBackendMessageInjectionV2 = {
     options: ReplyBackendQueueMessageOptions | undefined,
     assertCurrent: () => void,
     authorityKind: "run" | "source-bound",
+    assertPreparedCurrent?: () => Promise<void>,
   ): Promise<boolean>;
   cancelPendingUserInput?(
     resolvedBy: string,

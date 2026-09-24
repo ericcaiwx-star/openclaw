@@ -414,6 +414,7 @@ export async function claimEmbeddedPendingUserInputAnswer(
   canInject?: () => boolean,
   authority?: Parameters<typeof claimPendingAgentQuestionAnswer>[0]["authority"],
   creatorToolAuthorityFingerprint?: string,
+  assertPreparedCurrent?: () => Promise<void>,
 ): Promise<boolean> {
   if (options?.isInboundUserMessage !== true || hasPromptImageInput(options)) {
     return false;
@@ -426,6 +427,7 @@ export async function claimEmbeddedPendingUserInputAnswer(
       callerFingerprint: options.toolAuthorityFingerprint,
       creatorFingerprint: creatorToolAuthorityFingerprint,
       assertSourceCurrent: authority.assertCurrent,
+      assertPreparedCurrent,
     });
   }
   const claimed = await claimPendingAgentQuestionAnswer({

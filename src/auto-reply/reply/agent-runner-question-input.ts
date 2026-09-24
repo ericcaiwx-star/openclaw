@@ -69,6 +69,7 @@ export async function claimPendingReplyQuestionInput(params: {
       userTurnTranscriptRecorder: params.sourceRecorder,
     },
     assertSourceCurrent: params.assertSourceCurrent,
+    assertPreparedCurrent: params.assertPreparedCurrent,
   });
   return claimed;
 }

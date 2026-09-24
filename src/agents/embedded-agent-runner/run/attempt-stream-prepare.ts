@@ -468,6 +468,7 @@ function prepareStream(
     options?: EmbeddedAgentQueueMessageOptions,
     assertCurrent?: () => void,
     authorityKind: InputAuthority["kind"] = assertCurrent ? "source-bound" : "run",
+    assertPreparedCurrent?: () => Promise<void>,
   ) =>
     claimEmbeddedPendingUserInputAnswer(
       text,
@@ -476,6 +477,7 @@ function prepareStream(
       composeInjectionGuard(assertCurrent),
       questionAuthority(assertCurrent, authorityKind),
       attempt.toolAuthorityFingerprint,
+      assertPreparedCurrent,
     );
   const cancelPendingUserInput = (
     resolvedBy: string,

@@ -446,6 +446,7 @@ export async function claimPendingReplyMessageInjectionTarget(params: {
     toolAuthorityOverlay: ReplyToolAuthorityOverlay;
   };
   assertSourceCurrent: () => void;
+  assertPreparedCurrent?: () => Promise<void>;
 }): Promise<boolean> {
   const operation = params.target[replyMessageInjectionTargetOperation];
   if (
@@ -519,6 +520,7 @@ export async function claimPendingReplyMessageInjectionTarget(params: {
     },
     assertClaimCurrent,
     "source-bound",
+    params.assertPreparedCurrent,
   );
 }
 
