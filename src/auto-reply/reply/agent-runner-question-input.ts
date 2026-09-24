@@ -38,6 +38,8 @@ export async function claimPendingReplyQuestionInput(params: {
   text: string;
   caller: ReplyToolAuthorityOverlay;
   assertSourceCurrent: () => void;
+  assertPreparedCurrent?: () => Promise<void>;
+  onAnswerProcessed?: () => void;
   sourceRecorder?: Parameters<
     typeof claimPendingAgentQuestionAnswerFromCaller
   >[0]["sourceRecorder"];
@@ -47,6 +49,8 @@ export async function claimPendingReplyQuestionInput(params: {
     text: params.text,
     caller: params.caller,
     assertSourceCurrent: params.assertSourceCurrent,
+    assertPreparedCurrent: params.assertPreparedCurrent,
+    onAnswerProcessed: params.onAnswerProcessed,
     sourceRecorder: params.sourceRecorder,
   });
   if (claimed) {

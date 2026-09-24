@@ -1,5 +1,6 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
+  PreparedQuestionAnswerRefusedError,
   QuestionAnswerUnconfirmedError,
   QuestionDispatchRefusedError,
 } from "../../agents/harness/gateway-question-dispatch.js";
@@ -244,6 +245,8 @@ export async function prepareDispatchOperation(state: PrepareDispatchOperationCo
           disableTools: params.replyOptions?.disableTools === true,
         }),
         assertSourceCurrent,
+        assertPreparedCurrent: assertCurrentBindingRoute,
+        sourceRecorder: params.replyOptions.userTurnTranscriptRecorder,
       });
       if (claimed) {
         await adoptClaimedQuestionAnswer();
@@ -253,6 +256,9 @@ export async function prepareDispatchOperation(state: PrepareDispatchOperationCo
         });
       }
     } catch (error) {
+      if (error instanceof PreparedQuestionAnswerRefusedError) {
+        throw error.cause ?? error;
+      }
       if (error instanceof QuestionDispatchRefusedError) {
         return await finishFastCommand({
           payload: markReplyPayloadForSourceSuppressionDelivery({

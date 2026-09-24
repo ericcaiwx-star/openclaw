@@ -232,6 +232,7 @@ export async function claimPendingAgentQuestionAnswerFromCaller(params: {
   callerFingerprint?: string;
   creatorFingerprint?: string;
   assertSourceCurrent: () => void;
+  assertPreparedCurrent?: () => Promise<void>;
   onAnswerProcessed?: () => void;
 }): Promise<boolean> {
   const state = params.sessionKey ? pendingAgentQuestions.get(params.sessionKey.trim()) : undefined;
@@ -271,6 +272,7 @@ export async function claimPendingAgentQuestionAnswerFromCaller(params: {
       },
     },
     params.onAnswerProcessed,
+    params.assertPreparedCurrent,
   );
 }
 
