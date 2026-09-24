@@ -12,6 +12,7 @@ import { SessionWorkStartChangedError } from "../../config/sessions/lifecycle.js
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   getSessionBindingService,
+  inspectSessionBindingByConversation,
   isSessionBindingError,
   readSessionBindingSelectionCurrent,
   type SessionBindingRecord,
@@ -158,6 +159,26 @@ export async function assertPreparedConversationBindingRouteCurrent(
 ): Promise<void> {
   if (!resolveCommandTurnTargetSessionKey(ctx)) {
     await readPreparedConversationBindingRouteCurrent(ctx);
+  }
+}
+
+/** Synchronous owner view for the Gateway send that cannot await before the frame. */
+export function assertPreparedConversationBindingRouteNow(ctx: MsgContext): void {
+  if (resolveCommandTurnTargetSessionKey(ctx)) {
+    return;
+  }
+  for (const expected of readConversationBindingRouteObservations(ctx)) {
+    const inspection = inspectSessionBindingByConversation(expected.conversation);
+    if (inspection.status === "unavailable") {
+      throw new SessionWorkStartChangedError(
+        "Conversation binding owner changed while preparing the reply. Retry the message.",
+      );
+    }
+    if (!matchesConversationBindingRouteFacts(expected, inspection.binding)) {
+      throw new SessionWorkStartChangedError(
+        "Conversation binding changed while preparing the reply. Retry the message.",
+      );
+    }
   }
 }
 

@@ -9,7 +9,10 @@ import {
   replyRunRegistry,
 } from "../../../auto-reply/reply/reply-run-registry.js";
 import { expireStaleReplyOperation } from "../../../auto-reply/reply/reply-run-registry.state.js";
-import { assertPreparedConversationBindingRouteCurrent } from "../../../auto-reply/reply/session-conversation-binding.js";
+import {
+  assertPreparedConversationBindingRouteCurrent,
+  assertPreparedConversationBindingRouteNow,
+} from "../../../auto-reply/reply/session-conversation-binding.js";
 import { buildTestCtx } from "../../../auto-reply/reply/test-ctx.js";
 import {
   copyConversationBindingRouteFacts,
@@ -456,6 +459,7 @@ describe("prepareEmbeddedAttemptStream", () => {
     "source-revoked",
     "operation-reassigned",
     "binding-reassigned",
+    "binding-during-hello",
   ] as const)(
     "carries %s authority through the production V2 backend and Gateway transport",
     async (change) => {
@@ -555,10 +559,12 @@ describe("prepareEmbeddedAttemptStream", () => {
                 boundAt: 2,
               };
               let liveBinding = observedBinding;
+              const checksBinding =
+                change === "binding-reassigned" || change === "binding-during-hello";
               let bindingInspectWaits = change === "binding-reassigned";
               const bindingInspectEntered = createDeferredCore();
               let releaseBindingInspect = () => {};
-              if (change === "binding-reassigned") {
+              if (checksBinding) {
                 bindingAdapter = {
                   channel: conversation.channel,
                   accountId: conversation.accountId,
@@ -609,6 +615,12 @@ describe("prepareEmbeddedAttemptStream", () => {
                 change === "binding-reassigned"
                   ? () => assertPreparedConversationBindingRouteCurrent(bindingCtx)
                   : undefined;
+              const assertSourceCurrent = () => {
+                source.signal.throwIfAborted();
+                if (change === "binding-during-hello") {
+                  assertPreparedConversationBindingRouteNow(bindingCtx);
+                }
+              };
               const claimQuestion = (
                 owner: ReplyOperation,
                 text: string,
@@ -646,8 +658,11 @@ describe("prepareEmbeddedAttemptStream", () => {
                 change === "caller-mismatch" || change === "binding-reassigned"
                   ? undefined
                   : gateway.holdNextHello();
-              const claim = claimQuestion(operation, "Old source answer", recorder, () =>
-                source.signal.throwIfAborted(),
+              const claim = claimQuestion(
+                operation,
+                "Old source answer",
+                recorder,
+                assertSourceCurrent,
               );
               if (change === "binding-reassigned") {
                 await bindingInspectEntered.promise;
@@ -657,6 +672,8 @@ describe("prepareEmbeddedAttemptStream", () => {
                 await heldHello.entered;
                 if (change === "source-revoked") {
                   source.abort();
+                } else if (change === "binding-during-hello") {
+                  liveBinding = reassignedBinding;
                 } else if (change === "operation-reassigned") {
                   operation.complete();
                   replacement = createReplyOperation({
@@ -690,13 +707,18 @@ describe("prepareEmbeddedAttemptStream", () => {
               expect(resolveRequests()).toEqual([]);
               expect(gateway.manager.get(questionId)?.status).toBe("pending");
               callerMatches = true;
-              if (change === "binding-reassigned") {
+              if (checksBinding) {
                 liveBinding = observedBinding;
               }
               recorder.finishPendingInput?.("interrupted");
               const currentOperation = replacement ?? operation;
               await expect(
-                claimQuestion(currentOperation, "Current source answer", undefined, () => {}),
+                claimQuestion(
+                  currentOperation,
+                  "Current source answer",
+                  undefined,
+                  change === "binding-during-hello" ? assertSourceCurrent : () => {},
+                ),
               ).resolves.toBe(true);
               await expect(question).resolves.toMatchObject({ status: "answered" });
               expect(resolveRequests()).toHaveLength(1);

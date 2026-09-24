@@ -45,7 +45,10 @@ import { DispatchSessionRefreshRequiredError } from "./dispatch-session-refresh-
 import { REPLY_ADMISSION_TICKET } from "./reply-admission-ticket.js";
 import { resolveInboundReplyToolAuthorityOverlay } from "./reply-tool-authority.js";
 import { extractShortModelName } from "./response-prefix-template.js";
-import { assertPreparedConversationBindingRouteCurrent } from "./session-conversation-binding.js";
+import {
+  assertPreparedConversationBindingRouteCurrent,
+  assertPreparedConversationBindingRouteNow,
+} from "./session-conversation-binding.js";
 
 export async function prepareDispatchOperation(state: PrepareDispatchOperationContextReadyState) {
   const {
@@ -225,7 +228,10 @@ export async function prepareDispatchOperation(state: PrepareDispatchOperationCo
       cfg,
       commandAuthorized: ctx.CommandAuthorized,
     });
-    const assertSourceCurrent = () => params.replyOptions?.abortSignal?.throwIfAborted();
+    const assertSourceCurrent = () => {
+      params.replyOptions?.abortSignal?.throwIfAborted();
+      assertPreparedConversationBindingRouteNow(ctx);
+    };
     const adoptClaimedQuestionAnswer = async () => {
       try {
         await params.replyOptions?.turnAdoptionLifecycle?.onAdopted();
