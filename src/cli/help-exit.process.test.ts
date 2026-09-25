@@ -196,12 +196,16 @@ describe("CLI help process exit", () => {
   });
 
   it("exits promptly after root --help", async () => {
-    // Keep this precomputed-help case off plugin discovery; plugin-sensitive root help is covered
-    // separately, so the shared child timeout remains a deadlock guard rather than a startup SLO.
+    // Keep a referenced handle alive to prove plugin-sensitive root help requests a drained exit.
     const result = await runCliProcess({
       args: ["--help"],
-      config: { logging: { consoleStyle: "json", level: "silent" } },
+      entry: preparedCliEntry,
+      config: {
+        logging: { consoleStyle: "json", level: "silent" },
+        plugins: { entries: { "oc-path": { enabled: true } } },
+      },
       forbidTlsImport: true,
+      keepAlive: true,
     });
 
     expect(result.stderr).toBe("");
@@ -227,6 +231,7 @@ describe("CLI help process exit", () => {
       entry: preparedCliEntry,
       config: { logging: { consoleStyle: "json", level: "silent" } },
       env: { OPENCLAW_GATEWAY_STARTUP_TRACE: "1" },
+      keepAlive: true,
     });
 
     expect(parseJsonLines(result.stderr)).toEqual(
