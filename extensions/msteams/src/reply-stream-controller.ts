@@ -561,7 +561,26 @@ export function createTeamsReplyStreamController(params: {
         // the reply pipeline after the user already saw the response.
         streamFailed = true;
         streamFinalizationPending = false;
-        params.log?.warn?.(`msteams stream finalize failed: ${coerceErrorMessage(err)}`);
+        const failureMessage = coerceErrorMessage(err);
+        params.log?.warn?.(`msteams stream finalize failed: ${failureMessage}`);
+        // Teams rejected a formatted replacement because it did not contain the
+        // text already streamed. That body is already visible; sending it again
+        // is the duplicate, worse-formatted answer.
+        const pendingText = pendingFinalPayload?.text;
+        if (
+          failureMessage.includes("previously streamed content") &&
+          typeof pendingText === "string" &&
+          pendingText === emittedText
+        ) {
+          pendingFinalPayload = undefined;
+          const acknowledged = acknowledgedNativeDelivery();
+          return {
+            ...acknowledged,
+            visibleReplySent: true,
+            content: acknowledged.content ?? emittedText,
+            ...(logicalContent ? { logicalContent } : {}),
+          };
+        }
         return finalizeWithoutReceipt(logicalContent);
       } finally {
         // This segment's acknowledged-prefix fallback has been consumed.

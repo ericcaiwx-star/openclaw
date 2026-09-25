@@ -659,6 +659,32 @@ describe("createTeamsReplyStreamController", () => {
     }
   });
 
+  it("does not send the streamed body again when Teams rejects a formatted replacement", async () => {
+    const stream = makeStream();
+    stream.emit.mockImplementation((activity: unknown) => {
+      const text = typeof activity === "string" ? activity : (activity as { text?: string }).text;
+      if (typeof text === "string" && text.includes("**Status**")) {
+        throw new Error(
+          "Request streamed content should contain the previously streamed content",
+        );
+      }
+    });
+    const ctrl = createTeamsReplyStreamController({
+      allowProviderPreview: true,
+      conversationType: "personal",
+      context: makeContext(stream),
+      feedbackLoopEnabled: false,
+      msteamsConfig: { streaming: { mode: "progress", progress: { toolProgress: true } } } as never,
+    });
+
+    expect(ctrl.preparePayload({ text: "# Status" })).toBeUndefined();
+    await expect(ctrl.finalize()).resolves.toEqual({
+      visibleReplySent: true,
+      content: "# Status",
+      logicalContent: "# Status",
+    });
+  });
+
   it("suppresses block delivery when progress final text is emitted to the stream", () => {
     const stream = makeStream();
     const ctrl = createTeamsReplyStreamController({
