@@ -664,9 +664,7 @@ describe("createTeamsReplyStreamController", () => {
     stream.emit.mockImplementation((activity: unknown) => {
       const text = typeof activity === "string" ? activity : (activity as { text?: string }).text;
       if (typeof text === "string" && text.includes("**Status**")) {
-        throw new Error(
-          "Request streamed content should contain the previously streamed content",
-        );
+        throw new Error("Request streamed content should contain the previously streamed content");
       }
     });
     const ctrl = createTeamsReplyStreamController({
