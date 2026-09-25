@@ -6,6 +6,26 @@ function returnedString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value : undefined;
 }
 
+function returnedSize(params: {
+  value: unknown;
+  observedSize: string | undefined;
+  useObservedFallback: boolean;
+}): string | undefined {
+  const returned = returnedString(params.value);
+  return returned && /^\d+x\d+$/.test(returned)
+    ? returned
+    : returned || params.useObservedFallback
+      ? params.observedSize
+      : undefined;
+}
+
+function returnedQuality(value: unknown): string | undefined {
+  const returned = returnedString(value);
+  return returned && ["low", "medium", "high", "xhigh", "max"].includes(returned)
+    ? returned
+    : undefined;
+}
+
 function sharedSetting(values: Array<string | undefined>): string | undefined {
   const first = values[0];
   return first !== undefined && values.every((value) => value === first) ? first : undefined;
@@ -14,19 +34,29 @@ function sharedSetting(values: Array<string | undefined>): string | undefined {
 export function buildReturnedImageSettingsDetails(params: {
   images: ReturnedImage[];
   paths: string[];
+  observedSizes?: Array<string | undefined>;
   requestedSize?: string;
   requestedQuality?: string;
   fallbackSize?: string;
 }): Record<string, unknown> {
-  const imageSettings = params.images.map((image, index) => ({
-    path: params.paths[index],
-    size: returnedString(image.metadata?.size),
-    quality: returnedString(image.metadata?.quality),
-  }));
+  const hasReturnedSizes = params.images.some((image) => returnedString(image.metadata?.size));
+  const hasReturnedQualities = params.images.some((image) =>
+    returnedString(image.metadata?.quality),
+  );
+  const hasReturnedSettings = hasReturnedSizes || hasReturnedQualities;
+  const imageSettings = params.images.map((image, index) => {
+    return {
+      path: params.paths[index],
+      size: returnedSize({
+        value: image.metadata?.size,
+        observedSize: params.observedSizes?.[index],
+        useObservedFallback: hasReturnedSettings,
+      }),
+      quality: returnedQuality(image.metadata?.quality),
+    };
+  });
   const returnedSizes = imageSettings.map((settings) => settings.size);
   const returnedQualities = imageSettings.map((settings) => settings.quality);
-  const hasReturnedSizes = returnedSizes.some(Boolean);
-  const hasReturnedQualities = returnedQualities.some(Boolean);
   const appliedSize = sharedSetting(returnedSizes);
   const appliedQuality = sharedSetting(returnedQualities);
 
@@ -39,7 +69,7 @@ export function buildReturnedImageSettingsDetails(params: {
             ? { requestedSize: params.requestedSize }
             : {}),
         }
-      : hasReturnedSizes
+      : hasReturnedSettings
         ? params.requestedSize
           ? { requestedSize: params.requestedSize }
           : {}
@@ -53,7 +83,7 @@ export function buildReturnedImageSettingsDetails(params: {
             ? { requestedQuality: params.requestedQuality }
             : {}),
         }
-      : hasReturnedQualities
+      : hasReturnedSettings
         ? params.requestedQuality
           ? { requestedQuality: params.requestedQuality }
           : {}

@@ -39,4 +39,60 @@ describe("buildReturnedImageSettingsDetails", () => {
       ],
     });
   });
+
+  it("measures auto or malformed sizes and does not report unknown quality as applied", () => {
+    expect(
+      buildReturnedImageSettingsDetails({
+        images: [
+          { metadata: { size: "auto", quality: "auto" } },
+          { metadata: { size: "not-a-size", quality: "unknown" } },
+        ],
+        paths: ["/tmp/generated-1.png", "/tmp/generated-2.png"],
+        observedSizes: ["1024x1536", "1024x1536"],
+        requestedSize: "2160x3840",
+        requestedQuality: "high",
+      }),
+    ).toEqual({
+      size: "1024x1536",
+      requestedSize: "2160x3840",
+      requestedQuality: "high",
+      imageSettings: [
+        { path: "/tmp/generated-1.png", size: "1024x1536", quality: undefined },
+        { path: "/tmp/generated-2.png", size: "1024x1536", quality: undefined },
+      ],
+    });
+  });
+
+  it("does not present requested values as applied when returned metadata is partial", () => {
+    expect(
+      buildReturnedImageSettingsDetails({
+        images: [{ metadata: { size: "1024x1536" } }],
+        paths: ["/tmp/generated.png"],
+        requestedSize: "2160x3840",
+        requestedQuality: "high",
+      }),
+    ).toEqual({
+      size: "1024x1536",
+      requestedSize: "2160x3840",
+      requestedQuality: "high",
+      imageSettings: [{ path: "/tmp/generated.png", size: "1024x1536", quality: undefined }],
+    });
+
+    expect(
+      buildReturnedImageSettingsDetails({
+        images: [{ metadata: { quality: "low" } }],
+        paths: ["/tmp/generated.png"],
+        requestedSize: "2160x3840",
+        requestedQuality: "high",
+        fallbackSize: "2160x3840",
+        observedSizes: ["1024x1536"],
+      }),
+    ).toEqual({
+      size: "1024x1536",
+      requestedSize: "2160x3840",
+      quality: "low",
+      requestedQuality: "high",
+      imageSettings: [{ path: "/tmp/generated.png", size: "1024x1536", quality: "low" }],
+    });
+  });
 });
