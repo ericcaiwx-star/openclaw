@@ -12,6 +12,7 @@ import type {
 } from "../../image-generation/types.js";
 import type { SsrFPolicy } from "../../infra/net/ssrf.js";
 import { resolveGeneratedMediaMaxBytes } from "../../media/configured-max-bytes.js";
+import { readImageMetadataFromHeader } from "../../media/image-ops.js";
 import { getImageMetadata } from "../../media/media-services.js";
 import { extractOriginalFilename, saveMediaBuffer } from "../../media/store.js";
 import { formatGeneratedAttachmentLines } from "../generated-attachments.js";
@@ -130,6 +131,10 @@ export async function executeImageGenerationJob(params: {
   const returnedImageSettingsDetails = buildReturnedImageSettingsDetails({
     images: result.images,
     paths: savedImages.map((image) => image.path),
+    observedSizes: result.images.map((image) => {
+      const metadata = readImageMetadataFromHeader(image.buffer);
+      return metadata ? `${metadata.width}x${metadata.height}` : undefined;
+    }),
     requestedSize: params.size,
     requestedQuality: params.quality,
     fallbackSize:
