@@ -38,6 +38,37 @@ function fixture() {
   return { home, workspace: path.join(home, "workspace") };
 }
 
+it("binds companion reads to the selected Skill root", async () => {
+  const f = fixture();
+  const skillDir = path.join(f.workspace, "skills/guide");
+  const outside = path.join(f.workspace, "outside.txt");
+  await fs.mkdir(path.join(skillDir, "refs"), { recursive: true });
+  await fs.writeFile(path.join(skillDir, "SKILL.md"), "# Guide\n");
+  await fs.writeFile(path.join(skillDir, "refs/allowed.txt"), "allowed companion");
+  await fs.writeFile(outside, "outside secret");
+  await fs.symlink(outside, path.join(skillDir, "refs/escape.txt"), "file");
+  await fs.link(outside, path.join(skillDir, "refs/hardlink.txt"));
+
+  const read = async (relativePath: string) => {
+    const output = new PassThrough();
+    const chunks: Buffer[] = [];
+    output.on("data", (chunk: Buffer) => chunks.push(chunk));
+    await serveWorkspaceSkills({
+      ...f,
+      operation: "readCompanion",
+      input: Readable.from([
+        JSON.stringify({ skillFilePath: path.join(skillDir, "SKILL.md"), relativePath }),
+      ]),
+      output,
+    });
+    return JSON.parse(Buffer.concat(chunks).toString("utf8"));
+  };
+
+  await expect(read("refs/allowed.txt")).resolves.toBe("allowed companion");
+  await expect(read("refs/escape.txt")).rejects.toMatchObject({ code: "symlink" });
+  await expect(read("refs/hardlink.txt")).rejects.toMatchObject({ code: "hardlink" });
+});
+
 it("keeps native file replacement behind the Gateway policy decision", async () => {
   const f = fixture();
   const extractedRoot = path.join(f.home, ".cache/openclaw/skill-installs/source");

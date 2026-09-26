@@ -5,6 +5,7 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import { loadWorkspaceSkills } from "../../skills/loading/workspace-skill-loader.js";
 import { buildSkillSnapshot } from "../../skills/loading/workspace-skill-prompt.js";
 import { readSkillResourceFiles } from "../../skills/runtime/resources.js";
+import { readSkillCompanionAtSource } from "../../skills/runtime/skill-companion.js";
 import { writeSkill } from "../../skills/test-support/e2e-test-helpers.js";
 import type { SkillEntry } from "../../skills/types.js";
 import { resolveWorkshopSkillsDir } from "../../skills/workshop/skills-root.js";
@@ -90,10 +91,19 @@ it.each([false, true])("Code Mode file ownership (same-name pin: %s)", async (co
       signal: options.signal,
     });
   });
+  const readCompanion = vi.fn(
+    (skillFilePath: string, relativePath: string, options: { signal?: AbortSignal }) =>
+      readSkillCompanionAtSource({
+        skillFilePath: path.join(host, path.relative(gateway, skillFilePath)),
+        relativePath,
+        signal: options.signal,
+      }),
+  );
   const skillResources = {
     resolveExplicitSkill: vi.fn(),
     readSkillFiles: vi.fn(),
     readInstructions,
+    readCompanion,
   };
   const release = registerAgentWorkspaceAccess(gateway, {
     bridge: { readFile, writeFile: vi.fn(), stat: vi.fn() },
@@ -142,8 +152,9 @@ it.each([false, true])("Code Mode file ownership (same-name pin: %s)", async (co
     await expect(readCodeModeSkill(skill, undefined, "refs/support.txt")).resolves.toBe(
       "current host body support",
     );
-    expect(readInstructions).toHaveBeenLastCalledWith(
-      path.join(gateway, "skills/guide/refs/support.txt"),
+    expect(readCompanion).toHaveBeenLastCalledWith(
+      path.join(gateway, "skills/guide/SKILL.md"),
+      "refs/support.txt",
       { signal: undefined },
     );
     await fs.writeFile(path.join(host, relative), header + "edited host body");
@@ -240,6 +251,16 @@ it.each([
       readInstructions: (filePath: string, options: { signal?: AbortSignal }) =>
         fs.readFile(path.join(host, path.relative(logical, filePath)), {
           encoding: "utf8",
+          signal: options.signal,
+        }),
+      readCompanion: (
+        skillFilePath: string,
+        relativePath: string,
+        options: { signal?: AbortSignal },
+      ) =>
+        readSkillCompanionAtSource({
+          skillFilePath: path.join(host, path.relative(logical, skillFilePath)),
+          relativePath,
           signal: options.signal,
         }),
       resolveExplicitSkill: vi.fn(),

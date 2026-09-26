@@ -7,6 +7,7 @@ import {
   type Root,
 } from "../infra/fs-safe.js";
 import { decodeSkillXml, type Skill } from "../skills/loading/skill-contract.js";
+import { SKILL_COMPANION_MAX_BYTES } from "../skills/runtime/skill-companion.js";
 
 type PinnedSkillRoot = Promise<{ ok: true; root: Root } | { ok: false; error: unknown }>;
 
@@ -16,11 +17,17 @@ export type CodeModeSkill = {
   location: string;
   source: Pick<Skill, "filePath" | "readContent"> & { pinnedRoot?: PinnedSkillRoot };
   reader?: CodeModeSkillReader;
-  companionReader?: CodeModeSkillReader;
+  companionReader?: CodeModeSkillCompanionReader;
 };
 
 export type CodeModeSkillReader = (params: {
   location: string;
+  signal?: AbortSignal;
+}) => Promise<string>;
+
+export type CodeModeSkillCompanionReader = (params: {
+  skillFilePath: string;
+  relativePath: string;
   signal?: AbortSignal;
 }) => Promise<string>;
 
@@ -58,11 +65,6 @@ function normalizeSkillRelativePath(relativePath: string): string {
     throw new Error(`invalid skill relative path ${JSON.stringify(relativePath)}`);
   }
   return trimmed;
-}
-
-function resolveFilesystemSkillRelativePath(skillFilePath: string, relativePath: string): string {
-  const relative = normalizeSkillRelativePath(relativePath);
-  return path.join(path.dirname(skillFilePath), ...relative.split("/"));
 }
 
 function normalizeNodeSkillRelativePath(relativePath: string): string {
@@ -168,12 +170,10 @@ export function resolveCodeModeSkills(params: {
 
 // Same host-side bound as skill-root discovery. Companion reads must fail
 // before materializing a larger file; Code Mode truncation is not a cap.
-const CODE_MODE_SKILL_FILE_MAX_BYTES = 256_000;
-
 function assertSkillFileWithinBound(text: string, relativePath: string): string {
-  if (Buffer.byteLength(text, "utf8") > CODE_MODE_SKILL_FILE_MAX_BYTES) {
+  if (Buffer.byteLength(text, "utf8") > SKILL_COMPANION_MAX_BYTES) {
     throw new Error(
-      `skill relative file exceeds ${CODE_MODE_SKILL_FILE_MAX_BYTES} bytes: ${JSON.stringify(relativePath)}`,
+      `skill relative file exceeds ${SKILL_COMPANION_MAX_BYTES} bytes: ${JSON.stringify(relativePath)}`,
     );
   }
   return text;
@@ -199,7 +199,7 @@ async function readFilesystemSkillRelative(
     // defaults reject symlinks/hardlinks and enforce the eager size bound.
     const result = await resolvedRoot.root.read(relative, {
       hardlinks: "reject",
-      maxBytes: CODE_MODE_SKILL_FILE_MAX_BYTES,
+      maxBytes: SKILL_COMPANION_MAX_BYTES,
       symlinks: "reject",
     });
     signal?.throwIfAborted();
@@ -208,7 +208,7 @@ async function readFilesystemSkillRelative(
     if (error instanceof FsSafeError) {
       if (error.code === "too-large") {
         throw new Error(
-          `skill relative file exceeds ${CODE_MODE_SKILL_FILE_MAX_BYTES} bytes: ${JSON.stringify(relativePath)}`,
+          `skill relative file exceeds ${SKILL_COMPANION_MAX_BYTES} bytes: ${JSON.stringify(relativePath)}`,
           { cause: error },
         );
       }
@@ -254,9 +254,11 @@ export async function readCodeModeSkill(
   }
 
   if (skill.companionReader) {
+    const relativeTarget = normalizeSkillRelativePath(relative);
     return assertSkillFileWithinBound(
       await skill.companionReader({
-        location: resolveFilesystemSkillRelativePath(skill.source.filePath, relative),
+        skillFilePath: skill.source.filePath,
+        relativePath: relativeTarget,
         signal,
       }),
       relative,

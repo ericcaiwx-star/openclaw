@@ -5,7 +5,11 @@ import {
   applySkillEnvOverridesFromSnapshot,
 } from "../../skills/runtime/env-overrides.js";
 import { resolveSkillResourceCandidates } from "../../skills/runtime/resource-candidates.js";
-import { resolveCodeModeSkills, type CodeModeSkillReader } from "../code-mode-skills.js";
+import {
+  resolveCodeModeSkills,
+  type CodeModeSkillCompanionReader,
+  type CodeModeSkillReader,
+} from "../code-mode-skills.js";
 import type { SandboxContext } from "../sandbox/types.js";
 import { isToolExecutionAllowed } from "../tool-policy-shared.js";
 import { getAgentWorkspaceAccess, WorkspaceAccessUnavailableError } from "../workspace-access.js";
@@ -151,6 +155,11 @@ export async function prepareEmbeddedSkills(params: {
           return await workspaceAccess.skillResources.readInstructions(location, { signal });
         }
       : undefined;
+    const workspaceSkillCompanionReader: CodeModeSkillCompanionReader | undefined =
+      workspaceAccess?.loadSkills && workspaceAccess.skillResources?.readCompanion
+        ? ({ skillFilePath, relativePath, signal }) =>
+            workspaceAccess.skillResources!.readCompanion!(skillFilePath, relativePath, { signal })
+        : undefined;
     const candidates = skillsSnapshot?.resolvedSkills ?? skillEntries.map((entry) => entry.skill);
     const codeModeSkills = params.includeCodeModeSkills
       ? resolveCodeModeSkills({
@@ -175,7 +184,9 @@ export async function prepareEmbeddedSkills(params: {
         ) {
           skill.reader = ({ signal }) =>
             workspaceSkillReader({ location: skill.source.filePath, signal });
-          skill.companionReader = workspaceSkillReader;
+          if (workspaceSkillCompanionReader) {
+            skill.companionReader = workspaceSkillCompanionReader;
+          }
         }
       }
     }

@@ -161,6 +161,12 @@ export type SkillSnapshot = {
 export type SkillResourceSourceReader = {
   /** Read the instruction path selected by the run, without packaging supporting files. */
   readInstructions: (filePath: string, options: { signal?: AbortSignal }) => Promise<string>;
+  /** Read one relative companion through the source host's selected-root boundary. */
+  readCompanion?: (
+    skillFilePath: string,
+    relativePath: string,
+    options: { signal?: AbortSignal },
+  ) => Promise<string>;
   resolveExplicitSkill: (selection: ExplicitSkillSelection) => Promise<Skill | null>;
   /** Null means only the requested root vanished, and only when allowMissingRoot is true. */
   readSkillFiles: (

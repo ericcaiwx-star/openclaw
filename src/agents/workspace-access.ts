@@ -279,6 +279,7 @@ export function registerAgentWorkspaceAccess(
   }
   const skillResources = access.skillResources;
   if (skillResources) {
+    const readCompanion = skillResources.readCompanion?.bind(skillResources);
     boundAccess.skillResources = Object.freeze({
       async readInstructions(filePath, options) {
         assertCurrent();
@@ -288,6 +289,22 @@ export function registerAgentWorkspaceAccess(
         options.signal?.throwIfAborted();
         return result;
       },
+      ...(readCompanion
+        ? {
+            async readCompanion(
+              skillFilePath: string,
+              relativePath: string,
+              options: { signal?: AbortSignal },
+            ) {
+              assertCurrent();
+              options.signal?.throwIfAborted();
+              const result = await readCompanion(skillFilePath, relativePath, options);
+              assertCurrent();
+              options.signal?.throwIfAborted();
+              return result;
+            },
+          }
+        : {}),
       resolveExplicitSkill: guardCall((selection) =>
         skillResources.resolveExplicitSkill(selection),
       ),

@@ -7,6 +7,7 @@ import type * as Store from "../lifecycle/clawhub-store.js";
 import type * as Uninstall from "../lifecycle/clawhub-uninstall.js";
 import { normalizeWorkspaceSkillRoots } from "../loading/workspace-skill-roots.js";
 import type { WorkspaceSkillSourceRequest } from "../loading/workspace-skill-sources.js";
+import { readSkillCompanionAtSource } from "./skill-companion.js";
 import {
   decodeSkillWorkerRequest,
   skillWorkerLines,
@@ -315,6 +316,14 @@ export async function serveWorkspaceSkills(options: {
         throw new Error("Skill instruction path is required");
       }
       await write(await fs.readFile(filePath, "utf8"));
+      return;
+    }
+    case "readCompanion": {
+      const { skillFilePath, relativePath } = decoded;
+      if (typeof skillFilePath !== "string" || typeof relativePath !== "string") {
+        throw new Error("Skill companion path is required");
+      }
+      await write(await readSkillCompanionAtSource({ skillFilePath, relativePath }));
       return;
     }
     case "recordSource": {

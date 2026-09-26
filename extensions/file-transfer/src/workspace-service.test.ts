@@ -176,6 +176,8 @@ describe("registered node workspace service", () => {
     const instructions =
       "---\nname: local-tool\ndescription: Test the workspace tool\n---\nRun local-tool.\n";
     await fs.writeFile(path.join(skillDir, "SKILL.md"), instructions);
+    await fs.mkdir(path.join(skillDir, "refs"));
+    await fs.writeFile(path.join(skillDir, "refs/support.txt"), "Harness companion");
     const packageDir = path.join(remote, "package");
     await fs.mkdir(packageDir);
     await fs.writeFile(
@@ -261,6 +263,9 @@ describe("registered node workspace service", () => {
     const skill = sources.entries.find((entry) => entry.skill.name === "local-tool")!.skill;
     expect(skill.filePath).toBe(path.join(skillDir, "SKILL.md"));
     expect(await access.skillResources!.readInstructions(skill.filePath, {})).toBe(instructions);
+    expect(
+      await access.skillResources!.readCompanion!(skill.filePath, "refs/support.txt", {}),
+    ).toBe("Harness companion");
     const result = await access.installSkillDependencies!({
       skillKey: "local-tool",
       spec: { kind: "node", package: "workspace-node-test-tool" },
@@ -274,6 +279,31 @@ describe("registered node workspace service", () => {
     );
     expect(await fs.readdir(local)).toEqual(["AGENTS.md"]);
   }, 60_000);
+
+  it("revokes a native Skill companion read before result delivery", async () => {
+    const skillDir = path.join(remote, "skills/local-tool");
+    await fs.mkdir(path.join(skillDir, "refs"), { recursive: true });
+    await fs.writeFile(
+      path.join(skillDir, "SKILL.md"),
+      "---\nname: local-tool\ndescription: Test companion reads\n---\n",
+    );
+    await fs.writeFile(path.join(skillDir, "refs/support.txt"), "must not be returned");
+    const output: Uint8Array[] = [];
+    openDuplex = createNodeWorkspaceTestTransport(
+      api,
+      remote,
+      () => {
+        void service.stop?.(context());
+      },
+      (bytes) => output.push(bytes),
+    );
+    await service.start(context());
+    const reader = getAgentWorkspaceAccess(local)!.skillResources!;
+    await expect(
+      reader.readCompanion!(path.join(skillDir, "SKILL.md"), "refs/support.txt", {}),
+    ).rejects.toThrow();
+    expect(output).toEqual([]);
+  });
 
   it.each(["workspace", "execution", "symlink", "skill card", "byte limit"])(
     "does not send denied Skill discovery metadata (%s)",
