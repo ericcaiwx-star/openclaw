@@ -175,6 +175,7 @@ export async function prepareEmbeddedSkills(params: {
         ) {
           skill.reader = ({ signal }) =>
             workspaceSkillReader({ location: skill.source.filePath, signal });
+          skill.companionReader = workspaceSkillReader;
         }
       }
     }

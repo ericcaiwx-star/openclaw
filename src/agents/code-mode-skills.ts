@@ -16,6 +16,7 @@ export type CodeModeSkill = {
   location: string;
   source: Pick<Skill, "filePath" | "readContent"> & { pinnedRoot?: PinnedSkillRoot };
   reader?: CodeModeSkillReader;
+  companionReader?: CodeModeSkillReader;
 };
 
 export type CodeModeSkillReader = (params: {
@@ -57,6 +58,11 @@ function normalizeSkillRelativePath(relativePath: string): string {
     throw new Error(`invalid skill relative path ${JSON.stringify(relativePath)}`);
   }
   return trimmed;
+}
+
+function resolveFilesystemSkillRelativePath(skillFilePath: string, relativePath: string): string {
+  const relative = normalizeSkillRelativePath(relativePath);
+  return path.join(path.dirname(skillFilePath), ...relative.split("/"));
 }
 
 function normalizeNodeSkillRelativePath(relativePath: string): string {
@@ -243,6 +249,16 @@ export async function readCodeModeSkill(
     }
     return assertSkillFileWithinBound(
       await skill.reader({ location: nodeTarget, signal }),
+      relative,
+    );
+  }
+
+  if (skill.companionReader) {
+    return assertSkillFileWithinBound(
+      await skill.companionReader({
+        location: resolveFilesystemSkillRelativePath(skill.source.filePath, relative),
+        signal,
+      }),
       relative,
     );
   }

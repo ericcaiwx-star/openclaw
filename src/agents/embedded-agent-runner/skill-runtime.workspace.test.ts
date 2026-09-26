@@ -51,6 +51,8 @@ it.each([false, true])("Code Mode file ownership (same-name pin: %s)", async (co
   ] as const) {
     await fs.mkdir(path.dirname(path.join(dir, relative)), { recursive: true });
     await fs.writeFile(path.join(dir, relative), header + body);
+    await fs.mkdir(path.join(dir, "skills/guide/refs"));
+    await fs.writeFile(path.join(dir, "skills/guide/refs/support.txt"), `${body} support`);
   }
   await fs.mkdir(path.join(library, "skills/pinned"), { recursive: true });
   const libraryBody = "---\nname: pinned\ndescription: Pinned guide\n---\nGateway Library body";
@@ -79,18 +81,19 @@ it.each([false, true])("Code Mode file ownership (same-name pin: %s)", async (co
   const readFile = vi.fn(async () => {
     throw new Error("Agent-document access does not grant Skill reads");
   });
+  const readInstructions = vi.fn((filePath: string, options: { signal?: AbortSignal }) => {
+    if (!filePath.startsWith(gateway + path.sep)) {
+      throw new Error("The host cannot read Gateway Library files");
+    }
+    return fs.readFile(path.join(host, path.relative(gateway, filePath)), {
+      encoding: "utf8",
+      signal: options.signal,
+    });
+  });
   const skillResources = {
     resolveExplicitSkill: vi.fn(),
     readSkillFiles: vi.fn(),
-    readInstructions: (filePath: string, options: { signal?: AbortSignal }) => {
-      if (!filePath.startsWith(gateway + path.sep)) {
-        throw new Error("The host cannot read Gateway Library files");
-      }
-      return fs.readFile(path.join(host, path.relative(gateway, filePath)), {
-        encoding: "utf8",
-        signal: options.signal,
-      });
-    },
+    readInstructions,
   };
   const release = registerAgentWorkspaceAccess(gateway, {
     bridge: { readFile, writeFile: vi.fn(), stat: vi.fn() },
@@ -136,6 +139,13 @@ it.each([false, true])("Code Mode file ownership (same-name pin: %s)", async (co
     expect(prepared.codeModeSkills).toHaveLength(3);
     const skill = prepared.codeModeSkills.find((entry) => entry.name === "guide")!;
     expect(await readCodeModeSkill(skill)).toBe(header + "current host body");
+    await expect(readCodeModeSkill(skill, undefined, "refs/support.txt")).resolves.toBe(
+      "current host body support",
+    );
+    expect(readInstructions).toHaveBeenLastCalledWith(
+      path.join(gateway, "skills/guide/refs/support.txt"),
+      { signal: undefined },
+    );
     await fs.writeFile(path.join(host, relative), header + "edited host body");
     expect(await readCodeModeSkill(skill)).toBe(header + "edited host body");
     const pinned = prepared.codeModeSkills.find((entry) => entry.name === "pinned")!;
@@ -147,6 +157,9 @@ it.each([false, true])("Code Mode file ownership (same-name pin: %s)", async (co
     expect(readFile).not.toHaveBeenCalled();
     release();
     await expect(readCodeModeSkill(skill)).rejects.toThrow("Workspace access is stopped");
+    await expect(readCodeModeSkill(skill, undefined, "refs/support.txt")).rejects.toThrow(
+      "Workspace access is stopped",
+    );
   } finally {
     release();
   }
