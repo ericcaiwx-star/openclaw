@@ -10,6 +10,8 @@ import { writeSkill } from "../../skills/test-support/e2e-test-helpers.js";
 import type { SkillEntry } from "../../skills/types.js";
 import { resolveWorkshopSkillsDir } from "../../skills/workshop/skills-root.js";
 import { readCodeModeSkill } from "../code-mode-skills.js";
+import { applyCodeModeCatalog } from "../code-mode.js";
+import { createCodeModeHarness, pluginTool, runUntilCompleted } from "../code-mode.test-support.js";
 import { createCoreCodingTools } from "../core-coding-tools.js";
 import { getTextContent } from "../test-helpers/agent-tools-fs-helpers.js";
 import { registerAgentWorkspaceAccess } from "../workspace-access.js";
@@ -186,6 +188,99 @@ it.each([false, true])("Code Mode file ownership (same-name pin: %s)", async (co
     await expect(readCodeModeSkill(skill, undefined, "refs/support.txt")).rejects.toThrow(
       "Workspace access is stopped",
     );
+  } finally {
+    release();
+  }
+});
+
+it("fails closed when a workspace provider lacks companion reads", async () => {
+  const root = temps.make("code-mode-companion-unavailable-");
+  const gateway = path.join(root, "gateway");
+  const host = path.join(root, "host");
+  for (const [dir, body] of [
+    [gateway, "Gateway decoy"],
+    [host, "Workspace host"],
+  ] as const) {
+    await writeSkill({
+      dir: path.join(dir, "skills/guide"),
+      name: "guide",
+      description: "Test guide",
+      body,
+    });
+    await fs.mkdir(path.join(dir, "skills/guide/refs"));
+    await fs.writeFile(path.join(dir, "skills/guide/refs/support.txt"), `${body} support`);
+  }
+  const readInstructions = vi.fn((filePath: string, options: { signal?: AbortSignal }) =>
+    fs.readFile(path.join(host, path.relative(gateway, filePath)), {
+      encoding: "utf8",
+      signal: options.signal,
+    }),
+  );
+  const release = registerAgentWorkspaceAccess(gateway, {
+    bridge: { readFile: vi.fn(), writeFile: vi.fn(), stat: vi.fn() },
+    skillResources: {
+      readInstructions,
+      resolveExplicitSkill: vi.fn(),
+      readSkillFiles: vi.fn(),
+    },
+    loadSkills: async () => ({
+      entries: loadWorkspaceSkills(host, { workspaceOnly: true }).map((entry) => {
+        entry.skill.filePath = path.join(gateway, path.relative(host, entry.skill.filePath));
+        entry.skill.baseDir = path.join(gateway, path.relative(host, entry.skill.baseDir));
+        return entry;
+      }),
+      executionEntries: [],
+      runtime: { platform: process.platform, bins: [] },
+    }),
+  });
+  try {
+    const snapshot = await buildSkillSnapshot(gateway, {
+      config: {
+        plugins: { enabled: false },
+        agents: { entries: { main: { agentDir: path.join(root, "agent") } } },
+      },
+      agentId: "main",
+    });
+    const prepared = await prepareEmbeddedSkills({
+      attempt: { config: {}, skillsSnapshot: snapshot },
+      effectiveWorkspace: gateway,
+      sandbox: undefined,
+      sessionAgentId: "main",
+      includeCodeModeSkills: true,
+      applySkillEnvironment: false,
+    });
+    const skill = prepared.codeModeSkills.find((entry) => entry.name === "guide")!;
+    expect(await readCodeModeSkill(skill)).toContain("Workspace host");
+
+    const { config, catalogRef, tools } = createCodeModeHarness({
+      codeModeSkills: prepared.codeModeSkills,
+    });
+    applyCodeModeCatalog({
+      tools: [...tools, pluginTool("fake_noop", "Noop")],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+      codeModeSkills: prepared.codeModeSkills,
+    });
+    const details = await runUntilCompleted({
+      execTool: tools[0]!,
+      waitTool: tools[1]!,
+      code: `
+        try {
+          return await skills.read("guide", "refs/support.txt");
+        } catch (error) {
+          return error instanceof Error ? error.message : String(error);
+        }
+      `,
+    });
+    expect(details).toMatchObject({ status: "completed" });
+    expect(details.value).toBe(
+      'workspace skill companion reads are unavailable: "refs/support.txt"',
+    );
+    expect(details.value).not.toContain("Gateway decoy");
+    expect(readInstructions).toHaveBeenCalledOnce();
   } finally {
     release();
   }

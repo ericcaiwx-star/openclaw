@@ -187,6 +187,7 @@ export async function prepareEmbeddedSkills(params: {
           (candidate?.fileHost !== "gateway" &&
             !skillsSnapshot?.librarySelections?.some((selection) => selection.name === skill.name))
         ) {
+          skill.source.fileHost = "workspace";
           skill.reader = ({ signal }) =>
             workspaceSkillReader({ location: skill.source.filePath, signal });
           if (workspaceSkillCompanionReader) {

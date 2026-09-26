@@ -19,7 +19,7 @@ export type CodeModeSkill = {
   name: string;
   description: string;
   location: string;
-  source: Pick<Skill, "filePath" | "readContent" | "sourceRootIdentity"> & {
+  source: Pick<Skill, "filePath" | "fileHost" | "readContent" | "sourceRootIdentity"> & {
     pinnedRoot?: PinnedSkillRoot;
   };
   reader?: CodeModeSkillReader;
@@ -166,6 +166,7 @@ export function resolveCodeModeSkills(params: {
       location,
       source: {
         filePath: sourceFilePath,
+        fileHost: source.fileHost,
         readContent: source.readContent,
         sourceRootIdentity: source.sourceRootIdentity,
         pinnedRoot: pinFilesystemSkillRoot(sourceFilePath),
@@ -277,6 +278,10 @@ export async function readCodeModeSkill(
       }),
       relative,
     );
+  }
+
+  if (skill.source.fileHost === "workspace") {
+    throw new Error(`workspace skill companion reads are unavailable: ${JSON.stringify(relative)}`);
   }
 
   // Companion files stay on the selected skill root. The sandbox reader is
