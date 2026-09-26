@@ -108,9 +108,9 @@ function skillRelativeEscapeError(relativePath: string, cause: unknown): Error {
   });
 }
 
-// Locked @openclaw/fs-safe@0.8.1 categorizeFsSafeError still marks not-file
-// and too-large as policy. Companion reads keep this containment allowlist
-// so those stay size/operational instead of looking like root escapes.
+// The locked fs-safe classifier marks not-file and too-large as policy.
+// Companion reads keep this narrower containment allowlist so those stay
+// size/operational failures instead of looking like root escapes.
 function isSkillRelativeContainmentError(code: FsSafeErrorCode): boolean {
   return (
     code === "outside-workspace" ||
@@ -176,13 +176,16 @@ function assertSkillFileWithinBound(text: string, relativePath: string): string 
 async function readFilesystemSkillRelative(
   pinnedRoot: PinnedSkillRoot | undefined,
   relativePath: string,
+  signal?: AbortSignal,
 ): Promise<string> {
   const relative = normalizeSkillRelativePath(relativePath);
   try {
+    signal?.throwIfAborted();
     if (!pinnedRoot) {
       throw new FsSafeError("path-mismatch", "selected skill root identity is unavailable");
     }
     const resolvedRoot = await pinnedRoot;
+    signal?.throwIfAborted();
     if (!resolvedRoot.ok) {
       throw resolvedRoot.error;
     }
@@ -193,6 +196,7 @@ async function readFilesystemSkillRelative(
       maxBytes: CODE_MODE_SKILL_FILE_MAX_BYTES,
       symlinks: "reject",
     });
+    signal?.throwIfAborted();
     return result.buffer.toString("utf8");
   } catch (error) {
     if (error instanceof FsSafeError) {
@@ -250,5 +254,5 @@ export async function readCodeModeSkill(
       `node-hosted skill relative reads require a node skill reader: ${JSON.stringify(relative)}`,
     );
   }
-  return await readFilesystemSkillRelative(skill.source.pinnedRoot, relative);
+  return await readFilesystemSkillRelative(skill.source.pinnedRoot, relative, signal);
 }

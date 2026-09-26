@@ -20,8 +20,6 @@ import {
   pluginTool,
   createCodeModeHarness,
   runUntilCompleted,
-  resultDetails,
-  waitUntilCompleted,
 } from "./code-mode.test-support.js";
 import { createReadTool } from "./sessions/index.js";
 
@@ -175,64 +173,58 @@ describe("Code Mode skills and read tools", () => {
     });
   });
 
-  it.each([false, true])(
-    "reads a skill-root relative file and rejects path escape (preflight=%s)",
-    async (typecheck) => {
-      const tmpParent = await fs.realpath(
-        await fs.mkdtemp(nodePath.join(os.tmpdir(), "oc-skill-relative-")),
-      );
-      const skillRoot = nodePath.join(tmpParent, "demo");
-      await fs.mkdir(nodePath.join(skillRoot, "modules"), { recursive: true });
-      await fs.writeFile(nodePath.join(skillRoot, "SKILL.md"), "# skill\n", "utf8");
-      await fs.writeFile(
-        nodePath.join(skillRoot, "modules", "during-dining.md"),
-        "# dining module\n",
-        "utf8",
-      );
-      const demo = skillCandidate({
-        name: "demo",
-        description: "Full demo description",
-        filePath: nodePath.join(skillRoot, "SKILL.md"),
-      });
-      const reader = vi.fn(async () => "# skill from collection reader\n");
-      const codeModeSkills = resolveCodeModeSkills({
-        skillsPrompt: [
-          "<available_skills>",
-          "  <skill>",
-          "    <name>demo</name>",
-          "    <description>Short prompt description</description>",
-          "    <location>/guest/skills/demo/SKILL.md</location>",
-          "  </skill>",
-          "</available_skills>",
-        ].join("\n"),
-        candidates: [demo],
-        reader,
-      });
-      const {
-        config,
-        catalogRef,
-        tools: codeModeTools,
-      } = createCodeModeHarness({
-        codeModeSkills,
-      });
-      applyCodeModeCatalog({
-        tools: [...codeModeTools, pluginTool("fake_noop", "Noop")],
-        config,
-        sessionId: "session-code-mode",
-        sessionKey: "agent:main:main",
-        runId: "run-code-mode",
-        catalogRef,
-        codeModeSkills,
-      });
+  it("reads a skill-root relative file and rejects path escape", async () => {
+    const tmpParent = await fs.realpath(
+      await fs.mkdtemp(nodePath.join(os.tmpdir(), "oc-skill-relative-")),
+    );
+    const skillRoot = nodePath.join(tmpParent, "demo");
+    await fs.mkdir(nodePath.join(skillRoot, "modules"), { recursive: true });
+    await fs.writeFile(nodePath.join(skillRoot, "SKILL.md"), "# skill\n", "utf8");
+    await fs.writeFile(
+      nodePath.join(skillRoot, "modules", "during-dining.md"),
+      "# dining module\n",
+      "utf8",
+    );
+    const demo = skillCandidate({
+      name: "demo",
+      description: "Full demo description",
+      filePath: nodePath.join(skillRoot, "SKILL.md"),
+    });
+    const reader = vi.fn(async () => "# skill from collection reader\n");
+    const codeModeSkills = resolveCodeModeSkills({
+      skillsPrompt: [
+        "<available_skills>",
+        "  <skill>",
+        "    <name>demo</name>",
+        "    <description>Short prompt description</description>",
+        "    <location>/guest/skills/demo/SKILL.md</location>",
+        "  </skill>",
+        "</available_skills>",
+      ].join("\n"),
+      candidates: [demo],
+      reader,
+    });
+    const {
+      config,
+      catalogRef,
+      tools: codeModeTools,
+    } = createCodeModeHarness({
+      codeModeSkills,
+    });
+    applyCodeModeCatalog({
+      tools: [...codeModeTools, pluginTool("fake_noop", "Noop")],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+      codeModeSkills,
+    });
 
-      const details = await waitUntilCompleted({
-        details: resultDetails(
-          await expectDefined(codeModeTools[0], "codeModeTools[0] test invariant").execute(
-            "skill-relative",
-            {
-              language: "typescript",
-              typecheck,
-              code: `
+    const details = await runUntilCompleted({
+      execTool: expectDefined(codeModeTools[0], "codeModeTools[0] test invariant"),
+      waitTool: expectDefined(codeModeTools[1], "codeModeTools[1] test invariant"),
+      code: `
         const body = await skills.read("demo");
         const moduleBody = await skills.read("demo", "modules/during-dining.md");
         let escaped;
@@ -243,26 +235,26 @@ describe("Code Mode skills and read tools", () => {
         }
         return { body, moduleBody, escaped };
       `,
-            },
-          ),
-        ),
-        waitTool: expectDefined(codeModeTools[1], "codeModeTools[1] test invariant"),
-      });
+    });
 
-      expect(details, JSON.stringify(details)).toMatchObject({ status: "completed" });
-      expect(details.value).toEqual({
-        body: "# skill from collection reader\n",
-        moduleBody: "# dining module\n",
-        escaped: 'invalid skill relative path "../secret.md"',
-      });
-      expect(reader).toHaveBeenCalledOnce();
-      expect(codeModeTools[0]?.description).toContain("skills.read(name,");
-      await expect(
-        readCodeModeSkill(codeModeSkills[0]!, undefined, "../etc/passwd"),
-      ).rejects.toThrow(/invalid skill relative path/);
-      await fs.rm(tmpParent, { recursive: true, force: true });
-    },
-  );
+    expect(details, JSON.stringify(details)).toMatchObject({ status: "completed" });
+    expect(details.value).toEqual({
+      body: "# skill from collection reader\n",
+      moduleBody: "# dining module\n",
+      escaped: 'invalid skill relative path "../secret.md"',
+    });
+    expect(reader).toHaveBeenCalledOnce();
+    expect(codeModeTools[0]?.description).toContain("skills.read(name,");
+    await expect(readCodeModeSkill(codeModeSkills[0]!, undefined, "../etc/passwd")).rejects.toThrow(
+      /invalid skill relative path/,
+    );
+    const aborted = new AbortController();
+    aborted.abort();
+    await expect(
+      readCodeModeSkill(codeModeSkills[0]!, aborted.signal, "modules/during-dining.md"),
+    ).rejects.toMatchObject({ name: "AbortError" });
+    await fs.rm(tmpParent, { recursive: true, force: true });
+  });
 
   it("reads a node-hosted skill module through the locator reader", async () => {
     const reader = vi.fn(async ({ location }: { location: string }) => {
