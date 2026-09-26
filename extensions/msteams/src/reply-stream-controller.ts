@@ -564,21 +564,28 @@ export function createTeamsReplyStreamController(params: {
         const failureMessage = coerceErrorMessage(err);
         params.log?.warn?.(`msteams stream finalize failed: ${failureMessage}`);
         // Teams rejected a formatted replacement because it did not contain the
-        // text already streamed. That body is already visible; sending it again
-        // is the duplicate, worse-formatted answer.
+        // text already streamed. Skip a second copy only when Teams has
+        // acknowledged that entire logical reply. A missing or shorter receipt
+        // still falls back through the normal suffix path.
         const pendingText = pendingFinalPayload?.text;
+        const acknowledged = acknowledgedNativeDelivery();
         if (
           failureMessage.includes("previously streamed content") &&
           typeof pendingText === "string" &&
-          pendingText === emittedText
+          acknowledged.visibleReplySent &&
+          acknowledgedLogicalText === pendingText
         ) {
+          const pending = pendingFinalPayload;
           pendingFinalPayload = undefined;
-          const acknowledged = acknowledgedNativeDelivery();
+          const postNativePayloads = replacementSettlementPending
+            ? takeDeferredReplacementPayloads(
+                pending ? fallbackPayloadAfterAcknowledgedText(pending) : undefined,
+              )
+            : [];
           return {
             ...acknowledged,
-            visibleReplySent: true,
-            content: acknowledged.content ?? emittedText,
             ...(logicalContent ? { logicalContent } : {}),
+            ...(postNativePayloads.length > 0 ? { postNativePayloads } : {}),
           };
         }
         return finalizeWithoutReceipt(logicalContent);

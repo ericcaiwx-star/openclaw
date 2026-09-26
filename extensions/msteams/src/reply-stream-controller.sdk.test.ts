@@ -30,9 +30,9 @@ const provider = createServer((request, response) => {
     };
     const scenario = request.url?.slice(1) ?? "";
     const priorScenarioRequests = requests.filter((entry) => entry.scenario === scenario).length;
-    const acceptedText = requests
-      .filter((entry) => entry.scenario === scenario && entry.status === 201 && entry.text)
-      .at(-1)?.text;
+    const acceptedText = requests.findLast(
+      (entry) => entry.scenario === scenario && entry.status === 201 && entry.text,
+    )?.text;
     const incomingText = activity.text ?? "";
     const prefixRejected =
       scenario === "prefix-reject" &&
