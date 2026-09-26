@@ -6,7 +6,11 @@ import {
   type FsSafeErrorCode,
   type Root,
 } from "../infra/fs-safe.js";
-import { decodeSkillXml, type Skill } from "../skills/loading/skill-contract.js";
+import {
+  decodeSkillXml,
+  type Skill,
+  type SkillSourceRootIdentity,
+} from "../skills/loading/skill-contract.js";
 import { SKILL_COMPANION_MAX_BYTES } from "../skills/runtime/skill-companion.js";
 
 type PinnedSkillRoot = Promise<{ ok: true; root: Root } | { ok: false; error: unknown }>;
@@ -15,7 +19,9 @@ export type CodeModeSkill = {
   name: string;
   description: string;
   location: string;
-  source: Pick<Skill, "filePath" | "readContent"> & { pinnedRoot?: PinnedSkillRoot };
+  source: Pick<Skill, "filePath" | "readContent" | "sourceRootIdentity"> & {
+    pinnedRoot?: PinnedSkillRoot;
+  };
   reader?: CodeModeSkillReader;
   companionReader?: CodeModeSkillCompanionReader;
 };
@@ -28,6 +34,7 @@ export type CodeModeSkillReader = (params: {
 export type CodeModeSkillCompanionReader = (params: {
   skillFilePath: string;
   relativePath: string;
+  sourceRootIdentity: SkillSourceRootIdentity;
   signal?: AbortSignal;
 }) => Promise<string>;
 
@@ -160,6 +167,7 @@ export function resolveCodeModeSkills(params: {
       source: {
         filePath: sourceFilePath,
         readContent: source.readContent,
+        sourceRootIdentity: source.sourceRootIdentity,
         pinnedRoot: pinFilesystemSkillRoot(sourceFilePath),
       },
       reader: params.reader,
@@ -255,10 +263,16 @@ export async function readCodeModeSkill(
 
   if (skill.companionReader) {
     const relativeTarget = normalizeSkillRelativePath(relative);
+    if (!skill.source.sourceRootIdentity) {
+      throw new Error(
+        `workspace skill root identity is unavailable: ${JSON.stringify(skill.source.filePath)}`,
+      );
+    }
     return assertSkillFileWithinBound(
       await skill.companionReader({
         skillFilePath: skill.source.filePath,
         relativePath: relativeTarget,
+        sourceRootIdentity: skill.source.sourceRootIdentity,
         signal,
       }),
       relative,

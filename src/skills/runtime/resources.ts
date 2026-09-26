@@ -105,8 +105,13 @@ export async function readSkillResourceFiles(
 
 const localSkillResourceReader: SkillResourceSourceReader = {
   readInstructions: (filePath, options) => fs.readFile(filePath, { ...options, encoding: "utf8" }),
-  readCompanion: (skillFilePath, relativePath, options) =>
-    readSkillCompanionAtSource({ skillFilePath, relativePath, signal: options.signal }),
+  readCompanion: (skillFilePath, relativePath, sourceRootIdentity, options) =>
+    readSkillCompanionAtSource({
+      skillFilePath,
+      relativePath,
+      sourceRootIdentity,
+      signal: options.signal,
+    }),
   resolveExplicitSkill: resolveExplicitSkillResource,
   readSkillFiles: readSkillResourceFiles,
 };

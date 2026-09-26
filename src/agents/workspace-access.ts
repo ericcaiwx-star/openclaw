@@ -8,6 +8,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { readPersistedMediaFacts, type MediaFact } from "../media/media-facts.js";
 import type { UserTurnTranscriptRecorder } from "../sessions/user-turn-transcript.types.js";
 import type { WorkspaceSkillLifecycle } from "../skills/lifecycle/workspace-types.js";
+import type { SkillSourceRootIdentity } from "../skills/loading/skill-contract.js";
 import type {
   WorkspaceSkillSourceRequest,
   WorkspaceSkillSources,
@@ -294,11 +295,17 @@ export function registerAgentWorkspaceAccess(
             async readCompanion(
               skillFilePath: string,
               relativePath: string,
+              sourceRootIdentity: SkillSourceRootIdentity,
               options: { signal?: AbortSignal },
             ) {
               assertCurrent();
               options.signal?.throwIfAborted();
-              const result = await readCompanion(skillFilePath, relativePath, options);
+              const result = await readCompanion(
+                skillFilePath,
+                relativePath,
+                sourceRootIdentity,
+                options,
+              );
               assertCurrent();
               options.signal?.throwIfAborted();
               return result;

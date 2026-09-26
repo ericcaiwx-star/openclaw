@@ -157,8 +157,13 @@ export async function prepareEmbeddedSkills(params: {
       : undefined;
     const workspaceSkillCompanionReader: CodeModeSkillCompanionReader | undefined =
       workspaceAccess?.loadSkills && workspaceAccess.skillResources?.readCompanion
-        ? ({ skillFilePath, relativePath, signal }) =>
-            workspaceAccess.skillResources!.readCompanion!(skillFilePath, relativePath, { signal })
+        ? ({ skillFilePath, relativePath, sourceRootIdentity, signal }) =>
+            workspaceAccess.skillResources!.readCompanion!(
+              skillFilePath,
+              relativePath,
+              sourceRootIdentity,
+              { signal },
+            )
         : undefined;
     const candidates = skillsSnapshot?.resolvedSkills ?? skillEntries.map((entry) => entry.skill);
     const codeModeSkills = params.includeCodeModeSkills

@@ -48,6 +48,12 @@ it("binds companion reads to the selected Skill root", async () => {
   await fs.writeFile(outside, "outside secret");
   await fs.symlink(outside, path.join(skillDir, "refs/escape.txt"), "file");
   await fs.link(outside, path.join(skillDir, "refs/hardlink.txt"));
+  const selectedRoot = await fs.stat(skillDir, { bigint: true });
+  const sourceRootIdentity = {
+    realPath: await fs.realpath(skillDir),
+    dev: selectedRoot.dev.toString(10),
+    ino: selectedRoot.ino.toString(10),
+  };
 
   const read = async (relativePath: string) => {
     const output = new PassThrough();
@@ -57,7 +63,11 @@ it("binds companion reads to the selected Skill root", async () => {
       ...f,
       operation: "readCompanion",
       input: Readable.from([
-        JSON.stringify({ skillFilePath: path.join(skillDir, "SKILL.md"), relativePath }),
+        JSON.stringify({
+          skillFilePath: path.join(skillDir, "SKILL.md"),
+          relativePath,
+          sourceRootIdentity,
+        }),
       ]),
       output,
     });
@@ -67,6 +77,29 @@ it("binds companion reads to the selected Skill root", async () => {
   await expect(read("refs/allowed.txt")).resolves.toBe("allowed companion");
   await expect(read("refs/escape.txt")).rejects.toMatchObject({ code: "symlink" });
   await expect(read("refs/hardlink.txt")).rejects.toMatchObject({ code: "hardlink" });
+
+  await fs.rename(skillDir, `${skillDir}-selected`);
+  await fs.mkdir(path.join(skillDir, "refs"), { recursive: true });
+  await fs.writeFile(path.join(skillDir, "SKILL.md"), "# Replacement\n");
+  await fs.writeFile(path.join(skillDir, "refs/allowed.txt"), "replacement companion");
+  const output = new PassThrough();
+  const chunks: Buffer[] = [];
+  output.on("data", (chunk: Buffer) => chunks.push(chunk));
+  await expect(
+    serveWorkspaceSkills({
+      ...f,
+      operation: "readCompanion",
+      input: Readable.from([
+        JSON.stringify({
+          skillFilePath: path.join(skillDir, "SKILL.md"),
+          relativePath: "refs/allowed.txt",
+          sourceRootIdentity,
+        }),
+      ]),
+      output,
+    }),
+  ).rejects.toMatchObject({ code: "path-mismatch" });
+  expect(chunks).toEqual([]);
 });
 
 it("keeps native file replacement behind the Gateway policy decision", async () => {

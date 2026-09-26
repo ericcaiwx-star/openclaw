@@ -92,10 +92,16 @@ it.each([false, true])("Code Mode file ownership (same-name pin: %s)", async (co
     });
   });
   const readCompanion = vi.fn(
-    (skillFilePath: string, relativePath: string, options: { signal?: AbortSignal }) =>
+    (
+      skillFilePath: string,
+      relativePath: string,
+      sourceRootIdentity: Parameters<typeof readSkillCompanionAtSource>[0]["sourceRootIdentity"],
+      options: { signal?: AbortSignal },
+    ) =>
       readSkillCompanionAtSource({
         skillFilePath: path.join(host, path.relative(gateway, skillFilePath)),
         relativePath,
+        sourceRootIdentity,
         signal: options.signal,
       }),
   );
@@ -109,7 +115,11 @@ it.each([false, true])("Code Mode file ownership (same-name pin: %s)", async (co
     bridge: { readFile, writeFile: vi.fn(), stat: vi.fn() },
     skillResources,
     loadSkills: async () => ({
-      entries: loadWorkspaceSkills(gateway, { workspaceOnly: true }),
+      entries: loadWorkspaceSkills(host, { workspaceOnly: true }).map((entry) => {
+        entry.skill.filePath = path.join(gateway, path.relative(host, entry.skill.filePath));
+        entry.skill.baseDir = path.join(gateway, path.relative(host, entry.skill.baseDir));
+        return entry;
+      }),
       executionEntries: [],
       runtime: { platform: process.platform, bins: [] },
     }),
@@ -155,6 +165,11 @@ it.each([false, true])("Code Mode file ownership (same-name pin: %s)", async (co
     expect(readCompanion).toHaveBeenLastCalledWith(
       path.join(gateway, "skills/guide/SKILL.md"),
       "refs/support.txt",
+      expect.objectContaining({
+        realPath: path.join(host, "skills/guide"),
+        dev: expect.any(String),
+        ino: expect.any(String),
+      }),
       { signal: undefined },
     );
     await fs.writeFile(path.join(host, relative), header + "edited host body");
@@ -244,7 +259,12 @@ it.each([
     }
     await fs.writeFile(path.join(workspace, "local.txt"), "Local project file");
     await fs.writeFile(path.join(root, "outside.txt"), "Not admitted");
-    const selected = loadWorkspaceSkills(logical, { workspaceOnly: true })[0]!.skill;
+    const selectedAtHost = loadWorkspaceSkills(host, { workspaceOnly: true })[0]!.skill;
+    const selected = {
+      ...selectedAtHost,
+      filePath: path.join(logical, path.relative(host, selectedAtHost.filePath)),
+      baseDir: path.join(logical, path.relative(host, selectedAtHost.baseDir)),
+    };
     const gatewaySkill = loadWorkspaceSkills(library, { workspaceOnly: true })[0]!.skill;
     const skill = { ...selected, fileHost: "workspace" as const };
     const resources = {
@@ -256,11 +276,13 @@ it.each([
       readCompanion: (
         skillFilePath: string,
         relativePath: string,
+        sourceRootIdentity: Parameters<typeof readSkillCompanionAtSource>[0]["sourceRootIdentity"],
         options: { signal?: AbortSignal },
       ) =>
         readSkillCompanionAtSource({
           skillFilePath: path.join(host, path.relative(logical, skillFilePath)),
           relativePath,
+          sourceRootIdentity,
           signal: options.signal,
         }),
       resolveExplicitSkill: vi.fn(),
