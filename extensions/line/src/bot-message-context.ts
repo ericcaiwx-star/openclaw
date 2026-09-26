@@ -186,7 +186,9 @@ async function resolveLineInboundRoute(params: {
     inspection,
   });
   if (runtimeRoute.bindingRecord) {
-    service.touch(
+    // Keep the captured selection through this await. The reply owner must reject a
+    // revoked/reassigned binding, rather than silently dispatching under another owner.
+    await service.touchAsync(
       runtimeRoute.bindingRecord.bindingId,
       undefined,
       runtimeRoute.bindingRecord.conversation,
