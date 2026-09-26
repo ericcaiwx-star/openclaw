@@ -846,6 +846,33 @@ describe("buildLineMessageContext", () => {
     }
   });
 
+  it("routes a runtime-bound LINE conversation when ordinary routing is ambiguous", async () => {
+    cfg = {
+      ...cfg,
+      agents: { list: [{ id: "main" }, { id: "codex" }] },
+      bindings: [],
+    };
+    const userId = "U1234567890abcdef1234567890abcdef";
+    await getSessionBindingService().bind({
+      targetSessionKey: "agent:codex:acp:binding:line:default:test123",
+      targetKind: "session",
+      conversation: {
+        channel: "line",
+        accountId: "default",
+        conversationId: userId,
+      },
+      placement: "current",
+      metadata: {
+        agentId: "codex",
+      },
+    });
+
+    const context = await buildMessageContext(createMessageEvent({ type: "user", userId }));
+
+    expect(context?.route.agentId).toBe("codex");
+    expect(context?.route.sessionKey).toBe("agent:codex:acp:binding:line:default:test123");
+  });
+
   it("gives the agent the sender's and the group's name instead of their ids", async () => {
     getUserProfileMock.mockResolvedValueOnce({ displayName: "Sora" });
     getLineGroupNameMock.mockResolvedValueOnce("Release Squad");
