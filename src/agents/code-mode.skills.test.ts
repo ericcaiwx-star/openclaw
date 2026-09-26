@@ -368,7 +368,47 @@ describe("Code Mode skills and read tools", () => {
     });
     expect(codeModeTools[0]?.description).toContain("`await skills.read(name)`");
     expect(codeModeTools[0]?.description).not.toContain("skills.read(name,");
-    expect(codeModeTools[0]?.description).toContain("not available for node-hosted skills");
+    expect(codeModeTools[0]?.description).toContain("not available for the selected skills");
+  });
+
+  it.each([
+    {
+      name: "missing workspace companion reader",
+      companionReader: undefined,
+      advertised: false,
+    },
+    {
+      name: "available workspace companion reader",
+      companionReader: vi.fn(async () => "companion"),
+      advertised: true,
+    },
+  ])("gates workspace companion guidance on $name", ({ companionReader, advertised }) => {
+    const codeModeSkills: CodeModeSkill[] = [
+      {
+        name: "demo",
+        description: "demo",
+        location: "/workspace/skills/demo/SKILL.md",
+        source: {
+          filePath: "/remote/skills/demo/SKILL.md",
+          fileHost: "workspace",
+          readContent: "# skill\n",
+        },
+        companionReader,
+      },
+    ];
+    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness({ codeModeSkills });
+    applyCodeModeCatalog({
+      tools: [...codeModeTools, pluginTool("fake_noop", "Noop")],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+      codeModeSkills,
+    });
+    const description = codeModeTools[0]?.description ?? "";
+    expect(description.includes("skills.read(name,")).toBe(advertised);
+    expect(description.includes("whose provider supports companion reads")).toBe(advertised);
   });
 
   it.runIf(process.platform !== "win32")(

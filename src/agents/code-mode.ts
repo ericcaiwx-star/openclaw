@@ -139,12 +139,14 @@ function describeCodeModeSkillsGuidance(skills: CodeModeToolContext["codeModeSki
   }
   const hasFilesystemCompanion = skills.some(
     (skill) =>
-      !skill.location.startsWith("node://") && !skill.source.filePath.startsWith("node://"),
+      !skill.location.startsWith("node://") &&
+      !skill.source.filePath.startsWith("node://") &&
+      (skill.source.fileHost !== "workspace" || skill.companionReader !== undefined),
   );
   if (hasFilesystemCompanion) {
-    return ' Skills are available through the async `skills` global: use `await skills.list()`, `await skills.read(name)` for SKILL.md, and `await skills.read(name, "modules/foo.md")` for a file under a local filesystem skill root. Node-hosted skills accept only SKILL.md.';
+    return ' Skills are available through the async `skills` global: use `await skills.list()`, `await skills.read(name)` for SKILL.md, and `await skills.read(name, "modules/foo.md")` for a file under a selected filesystem skill root whose provider supports companion reads. Other selected skills accept only SKILL.md.';
   }
-  return " Skills are available through the async `skills` global: use `await skills.list()` and `await skills.read(name)` for SKILL.md. Companion relative paths are not available for node-hosted skills.";
+  return " Skills are available through the async `skills` global: use `await skills.list()` and `await skills.read(name)` for SKILL.md. Companion relative paths are not available for the selected skills.";
 }
 
 function createCodeModeExecDescription(
