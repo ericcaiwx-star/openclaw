@@ -19,6 +19,65 @@ const RECALL_INTENT_PATTERNS = [
 
 // Future reminders stay quiet unless a completed past discussion or decision
 // shows that its future topic is itself the subject of retrospective recall.
+const RUSSIAN_RECALL_WORD =
+  /(?:^|[^\p{L}])(?:помнишь|помните|вспоминаешь|вспоминаете|вспомни|вспомните)(?!\p{L})/iu;
+const RUSSIAN_REMIND_COMMAND = /^напомни(?:те)?(?!\p{L})/iu;
+const RUSSIAN_QUESTION_CUE = /(?:что|о\s+ч[её]м|как|когда|где|почему)(?!\p{L})/iu;
+const RUSSIAN_DAY_CUE = /сегодня|завтра|послезавтра/iu;
+const RUSSIAN_SCHEDULE_CUE =
+  /вечером|в\s+(?:\d{1,2}(?::\d{2})?|понедельник|вторник|среду|четверг|пятницу|субботу|воскресенье)|на\s+следующей\s+неделе|в\s+следующем\s+месяце|в\s+будущем|через\s+(?:(?:\d+|один|одну|два|две|три|четыре|пять)\s+)?(?:минут|час|день|дня|дней|недел|месяц|год)/iu;
+const RUSSIAN_FUTURE_CUE =
+  /сегодня|завтра|послезавтра|вечером|в\s+(?:\d{1,2}(?::\d{2})?|понедельник|вторник|среду|четверг|пятницу|субботу|воскресенье)|на\s+следующей\s+неделе|в\s+следующем\s+месяце|в\s+будущем|через\s+(?:(?:\d+|один|одну|два|две|три|четыре|пять)\s+)?(?:минут|час|день|дня|дней|недел|месяц|год)/iu;
+const RUSSIAN_COMPLETED_ACTION =
+  /обсуждали|решили|договорились|говорили|упоминали|выбрали|обсуждал[аи]?|решил[аи]?|договорил(?:ся|ась)|говорил[аи]?|упомянул[аи]?|выбрал[аи]?/iu;
+const RUSSIAN_PAST_TIME_CUE =
+  /(?<!\p{L})(?:вчера|позавчера|раньше|прежде)(?!\p{L})|в\s+прошлый\s+раз|на\s+прошлой\s+неделе|в\s+прошлом\s+месяце/iu;
+const RUSSIAN_PAST_CUE =
+  /(?<!\p{L})(?:вчера|позавчера|раньше|прежде)(?!\p{L})|в\s+прошлый\s+раз|на\s+прошлой\s+неделе|в\s+прошлом\s+месяце|что\s+был[оаи]?|обсуждали|решили|договорились|говорили|упоминали|выбрали|обсуждал[аи]?|решил[аи]?|договорил(?:ся|ась)|говорил[аи]?|упомянул[аи]?|выбрал[аи]?/iu;
+const RUSSIAN_DIRECT_QUESTION =
+  /^(?:а\s+)?(?:что|о\s+ч[её]м|как|когда|где|почему)(?!\p{L}).{0,32}(?:мы|ты|вы|я).{0,32}(?:обсуждали|решили|договорились|говорили|упоминали|выбрали|обсуждал[аи]?|решил[аи]?|договорил(?:ся|ась)|говорил[аи]?|упомянул[аи]?|выбрал[аи]?)/iu;
+const RUSSIAN_INFINITIVE = /[а-яё]+(?:ть|ться)(?!\p{L})/iu;
+const RUSSIAN_PROSPECTIVE_RECALL_TASK =
+  /(?:помнишь|помните|вспоминаешь|вспоминаете|вспомни|вспомните)(?!\p{L})[,\s]+(?:ли\s+)?(?:мне\s+|нам\s+|тебе\s+|вам\s+)?(?:не\s+)?[а-яё]+(?:ть|ться)(?!\p{L})/iu;
+
+function hasRussianRecallIntent(message: string): boolean {
+  return message.split(/[.!?]+/u).some((rawClause) => {
+    const clause = rawClause.trim().replace(/^пожалуйста[,\s]+/iu, "");
+    const futureIndex = clause.search(RUSSIAN_FUTURE_CUE);
+    if (RUSSIAN_REMIND_COMMAND.test(clause)) {
+      const questionIndex = clause.search(RUSSIAN_QUESTION_CUE);
+      const scheduleIndex = clause.search(RUSSIAN_SCHEDULE_CUE);
+      if (scheduleIndex >= 0) {
+        const recallsPlannedAction =
+          questionIndex >= 0 &&
+          questionIndex < scheduleIndex &&
+          RUSSIAN_COMPLETED_ACTION.test(clause) &&
+          RUSSIAN_INFINITIVE.test(clause.slice(0, scheduleIndex));
+        const recallsPastTime = RUSSIAN_PAST_TIME_CUE.test(clause.slice(0, scheduleIndex));
+        if (!recallsPlannedAction && !recallsPastTime) {
+          return false;
+        }
+      }
+      const dayIndex = clause.search(RUSSIAN_DAY_CUE);
+      if (
+        dayIndex >= 0 &&
+        (questionIndex < 0 || dayIndex < questionIndex || !RUSSIAN_COMPLETED_ACTION.test(clause))
+      ) {
+        return false;
+      }
+      return RUSSIAN_PAST_CUE.test(clause);
+    }
+    if (RUSSIAN_RECALL_WORD.test(clause)) {
+      return !(
+        (futureIndex >= 0 || RUSSIAN_PROSPECTIVE_RECALL_TASK.test(clause)) &&
+        RUSSIAN_INFINITIVE.test(clause) &&
+        !RUSSIAN_PAST_CUE.test(clause)
+      );
+    }
+    return RUSSIAN_DIRECT_QUESTION.test(clause);
+  });
+}
+
 const LOCALIZED_RECALL_INTENT_PATTERNS = [
   {
     intent:
@@ -50,6 +109,7 @@ export function hasRecallIntent(message: string): boolean {
   return (
     normalized.length > 0 &&
     (RECALL_INTENT_PATTERNS.some((pattern) => pattern.test(normalized)) ||
+      hasRussianRecallIntent(normalized) ||
       LOCALIZED_RECALL_INTENT_PATTERNS.some(
         ({ intent, future, retrospective }) =>
           intent.test(normalized) && (!future.test(normalized) || retrospective.test(normalized)),

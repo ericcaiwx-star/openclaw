@@ -1898,8 +1898,8 @@ describe("active-memory plugin", () => {
     expect(runEmbeddedAgent).not.toHaveBeenCalled();
   });
 
-  it("escalates retrospective Chinese recall when recall mode is unset", async () => {
-    const prompt = "你还记得我们上周决定明天部署的方案吗？";
+  it("escalates retrospective Russian recall when recall mode is unset", async () => {
+    const prompt = "Помнишь, что мы решили вчера?";
     registerPluginConfig({ mode: undefined });
     expect(currentActiveMemoryConfig().mode).toBeUndefined();
     const context = {
@@ -1907,10 +1907,10 @@ describe("active-memory plugin", () => {
       messageProvider: "telegram",
       channelId: "owner",
     };
-    const ordinary = await runPromptBuild({ prompt: "部署之前先整理聊天记录" }, context);
+    const ordinary = await runPromptBuild({ prompt: "Давай обсудим это завтра" }, context);
     expectPrependContextContains(ordinary, skippedRecallContext);
     expect(runEmbeddedAgent).not.toHaveBeenCalled();
-    const future = await runPromptBuild({ prompt: "你记得明天发送报告吗？" }, context);
+    const future = await runPromptBuild({ prompt: "Ты помнишь отправить отчёт?" }, context);
     expectPrependContextContains(future, skippedRecallContext);
     expect(runEmbeddedAgent).not.toHaveBeenCalled();
     const recall = await runPromptBuild({ prompt }, context);
