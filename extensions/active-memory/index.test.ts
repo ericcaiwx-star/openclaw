@@ -1909,7 +1909,7 @@ describe("active-memory plugin", () => {
       "Russian",
       "Помнишь, что мы решили вчера?",
       "Давай обсудим это завтра",
-      "Ты помнишь отправить отчёт?",
+      "Ты помнишь завтра отправить отчёт?",
     ],
   ])(
     "escalates retrospective %s recall when recall mode is unset",
