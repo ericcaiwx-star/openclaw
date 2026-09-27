@@ -92,6 +92,7 @@ describe("active-memory escalation", () => {
     "Ты помнишь, что нужно сегодня отправить отчёт?",
     "Ты помнишь через два часа отправить отчёт?",
     "Ты помнишь через неделю отправить отчёт?",
+    "Ты помнишь, что нужно будет отправить отчёт?",
   ])("does not mistake ordinary or future-facing %j for recall intent", (message) => {
     expect(hasRecallIntent(message)).toBe(false);
   });
