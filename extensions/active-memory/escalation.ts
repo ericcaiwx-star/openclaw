@@ -26,6 +26,8 @@ const RUSSIAN_QUESTION_CUE = /(?:что|о\s+ч[её]м|как|когда|где
 const RUSSIAN_DAY_CUE = /сегодня|завтра|послезавтра/iu;
 const RUSSIAN_SCHEDULE_CUE =
   /вечером|в\s+(?:\d{1,2}(?::\d{2})?|понедельник|вторник|среду|четверг|пятницу|субботу|воскресенье)|на\s+следующей\s+неделе|в\s+следующем\s+месяце|в\s+будущем|через\s+(?:(?:\d+|один|одну|два|две|три|четыре|пять)\s+)?(?:минут|час|день|дня|дней|недел|месяц|год)/iu;
+const RUSSIAN_FUTURE_CUE =
+  /сегодня|завтра|послезавтра|вечером|в\s+(?:\d{1,2}(?::\d{2})?|понедельник|вторник|среду|четверг|пятницу|субботу|воскресенье)|на\s+следующей\s+неделе|в\s+следующем\s+месяце|в\s+будущем|через\s+(?:(?:\d+|один|одну|два|две|три|четыре|пять)\s+)?(?:минут|час|день|дня|дней|недел|месяц|год)/iu;
 const RUSSIAN_COMPLETED_ACTION =
   /обсуждали|решили|договорились|говорили|упоминали|выбрали|обсуждал[аи]?|решил[аи]?|договорил(?:ся|ась)|говорил[аи]?|упомянул[аи]?|выбрал[аи]?/iu;
 const RUSSIAN_PAST_TIME_CUE =
@@ -35,10 +37,13 @@ const RUSSIAN_PAST_CUE =
 const RUSSIAN_DIRECT_QUESTION =
   /^(?:а\s+)?(?:что|о\s+ч[её]м|как|когда|где|почему)(?!\p{L}).{0,32}(?:мы|ты|вы|я).{0,32}(?:обсуждали|решили|договорились|говорили|упоминали|выбрали|обсуждал[аи]?|решил[аи]?|договорил(?:ся|ась)|говорил[аи]?|упомянул[аи]?|выбрал[аи]?)/iu;
 const RUSSIAN_INFINITIVE = /[а-яё]+(?:ть|ться)(?!\p{L})/iu;
+const RUSSIAN_PROSPECTIVE_RECALL_TASK =
+  /(?:помнишь|помните|вспоминаешь|вспоминаете|вспомни|вспомните)(?!\p{L})[,\s]+(?:ли\s+)?(?:мне\s+|нам\s+|тебе\s+|вам\s+)?(?:не\s+)?[а-яё]+(?:ть|ться)(?!\p{L})/iu;
 
 function hasRussianRecallIntent(message: string): boolean {
   return message.split(/[.!?]+/u).some((rawClause) => {
     const clause = rawClause.trim().replace(/^пожалуйста[,\s]+/iu, "");
+    const futureIndex = clause.search(RUSSIAN_FUTURE_CUE);
     if (RUSSIAN_REMIND_COMMAND.test(clause)) {
       const questionIndex = clause.search(RUSSIAN_QUESTION_CUE);
       const scheduleIndex = clause.search(RUSSIAN_SCHEDULE_CUE);
@@ -63,7 +68,11 @@ function hasRussianRecallIntent(message: string): boolean {
       return RUSSIAN_PAST_CUE.test(clause);
     }
     if (RUSSIAN_RECALL_WORD.test(clause)) {
-      return !RUSSIAN_INFINITIVE.test(clause) || RUSSIAN_PAST_CUE.test(clause);
+      return !(
+        (futureIndex >= 0 || RUSSIAN_PROSPECTIVE_RECALL_TASK.test(clause)) &&
+        RUSSIAN_INFINITIVE.test(clause) &&
+        !RUSSIAN_PAST_CUE.test(clause)
+      );
     }
     return RUSSIAN_DIRECT_QUESTION.test(clause);
   });
