@@ -165,6 +165,7 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
       behavior: {
         kind: "channel-delivery",
         readDeliveryEvidence: () => ({
+          hasCompletedSourceReply: params.state.sourceReplyDelivered === true,
           hasRetryBlockedDelivery:
             turn.blockReplyPipeline?.hasRetryBlockedDelivery() === true ||
             params.directBlockDeliveries.some(hasBlockReplyDeliveryCustody),
@@ -291,6 +292,9 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
               (turn.followupRun.run.suppressNextUserMessagePersistence ?? false) ||
               queuedUserMessagePersistedAcrossFallback,
             userTurnTranscriptRecorder,
+            onSourceReplyDelivered: () => {
+              params.state.sourceReplyDelivered = true;
+            },
             notifyUserMessagePersisted: () => {
               queuedUserMessagePersistedAcrossFallback = true;
             },
