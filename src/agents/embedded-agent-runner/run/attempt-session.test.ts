@@ -452,6 +452,8 @@ describe("prepareEmbeddedAttemptAgentSession", () => {
 
   it("prepares resources and publishes the activated session runtime", async () => {
     const fixture = createInput();
+    const onSourceReplyDelivered = vi.fn();
+    fixture.input.attempt.onSourceReplyDelivered = onSourceReplyDelivered;
 
     const result = await prepareEmbeddedAttemptAgentSession(fixture.input);
 
@@ -491,6 +493,7 @@ describe("prepareEmbeddedAttemptAgentSession", () => {
     expect(result.hasDeliveredSourceReply()).toBe(false);
     fixture.onDeliveredSourceReply();
     expect(result.hasDeliveredSourceReply()).toBe(true);
+    expect(onSourceReplyDelivered).toHaveBeenCalledOnce();
   });
 
   it("refreshes replacement permissions while replay preparation waits", async () => {
