@@ -23,6 +23,7 @@ export const en: TranslationMap & {
         | "showLess"
         | "showMore"
         | "tooLargeToDisplay"
+        | "unattributedSender"
         | "toolSender"
         | "errorSender",
         string
@@ -1869,6 +1870,7 @@ export const en: TranslationMap & {
     moreActions: "More actions",
     copyUrl: "Copy URL",
     openNewTab: "Open in new tab",
+    openWithinOpenClaw: "Open in OpenClaw",
     toggle: "Toggle browser panel",
     close: "Close browser panel",
     resize: "Resize browser panel",
@@ -2388,21 +2390,13 @@ export const en: TranslationMap & {
     idle: "Idle",
     offline: "Offline",
     sessions: {
-      all: "All",
-      open: "Open",
-      running: "Running",
-      runningOnly: "Only people with running sessions",
-      sortOpen: "Sort people by open sessions",
-      sortRunning: "Sort people by running sessions",
+      openCount: "{count}\u00a0open",
+      runningCount: "{count}\u00a0running",
       openHint:
         "Owned, unarchived conversations you can access across agents. Excludes hidden subagents, automation, and system sessions.",
       runningHint: "Open sessions actively executing an agent turn. Queued work is not running.",
       counts: "{open} open sessions, {running} running",
       unavailable: "Session counts unavailable",
-      noneRunning: "No sessions running.",
-      total: "Total",
-      scope:
-        "Totals for the people shown, across agents. Only sessions you can access are counted.",
       retry: "Counts may be out of date. Retry",
     },
     card: {
@@ -3216,6 +3210,9 @@ export const en: TranslationMap & {
       dismiss: "Dismiss {author}'s suggestion",
       typing: "{name} is typing…",
       typingMany: "{names} are typing…",
+      typingSeveral: "Several people are typing…",
+      typingOthers: "{count} others",
+      otherCollaborators: "Other collaborators",
       typingDraftState: "is typing...",
       pausedDraftState: "Draft",
       state: {
@@ -3669,7 +3666,7 @@ export const en: TranslationMap & {
     },
     questions: {
       other: "Type your own answer here",
-      multilineHint: "Enter adds a line · Ctrl/⌘+Enter to continue",
+      multilineHint: "Enter adds a line · {shortcut} to continue",
       answer: "Answer",
       answerPlaceholder: "{label}",
       openLink: "Open link",
@@ -3723,6 +3720,7 @@ export const en: TranslationMap & {
       showLess: "Show less",
       showMore: "Show more",
       tooLargeToDisplay: "This message is too large to display here.",
+      unattributedSender: "Message",
       toolSender: "Tool",
       errorSender: "Error",
     },
@@ -4194,6 +4192,8 @@ export const en: TranslationMap & {
     workRun: {
       workedFor: "Worked for {duration}",
       worked: "Worked",
+      toolCallsOne: "1 tool call",
+      toolCallsMany: "{count} tool calls",
     },
     sessionDiff: {
       title: "Changes",
