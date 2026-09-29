@@ -128,6 +128,7 @@ function createInput(options?: { activationError?: Error }) {
     trustedLocalMediaToolNames: new Set(["read"]),
   };
   let onDeliveredSourceReply: (() => void) | undefined;
+  let onCompletedSourceReply: (() => void) | undefined;
 
   hoisted.createPreparedEmbeddedAgentSettingsManager.mockReturnValue(settingsManager);
   hoisted.resolveEffectiveCompactionMode.mockReturnValue("safeguard");
@@ -150,9 +151,10 @@ function createInput(options?: { activationError?: Error }) {
     events.push("apply-system-prompt");
   });
   hoisted.installMessageToolOnlyTerminalHook.mockImplementation(
-    (input: { onDeliveredSourceReply?: () => void }) => {
+    (input: { onDeliveredSourceReply?: () => void; onCompletedSourceReply?: () => void }) => {
       events.push("install-terminal-hook");
       onDeliveredSourceReply = input.onDeliveredSourceReply;
+      onCompletedSourceReply = input.onCompletedSourceReply;
     },
   );
 
@@ -188,6 +190,7 @@ function createInput(options?: { activationError?: Error }) {
       transcriptLifecycle: transcriptLifecycle as never,
       sessionManager: sessionManager as never,
     },
+    onCompletedSourceReply: () => onCompletedSourceReply?.(),
     onDeliveredSourceReply: () => onDeliveredSourceReply?.(),
     resourceLoader,
     setActiveToolsByName,
@@ -452,8 +455,8 @@ describe("prepareEmbeddedAttemptAgentSession", () => {
 
   it("prepares resources and publishes the activated session runtime", async () => {
     const fixture = createInput();
-    const onSourceReplyDelivered = vi.fn();
-    fixture.input.attempt.onSourceReplyDelivered = onSourceReplyDelivered;
+    const onCompletedSourceReplyDelivered = vi.fn();
+    fixture.input.attempt.onCompletedSourceReplyDelivered = onCompletedSourceReplyDelivered;
 
     const result = await prepareEmbeddedAttemptAgentSession(fixture.input);
 
@@ -493,7 +496,9 @@ describe("prepareEmbeddedAttemptAgentSession", () => {
     expect(result.hasDeliveredSourceReply()).toBe(false);
     fixture.onDeliveredSourceReply();
     expect(result.hasDeliveredSourceReply()).toBe(true);
-    expect(onSourceReplyDelivered).toHaveBeenCalledOnce();
+    expect(onCompletedSourceReplyDelivered).not.toHaveBeenCalled();
+    fixture.onCompletedSourceReply();
+    expect(onCompletedSourceReplyDelivered).toHaveBeenCalledOnce();
   });
 
   it("refreshes replacement permissions while replay preparation waits", async () => {
