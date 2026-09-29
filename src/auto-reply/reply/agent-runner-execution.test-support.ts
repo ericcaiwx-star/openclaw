@@ -413,7 +413,7 @@ export type EmbeddedAgentParams = {
   currentInboundContext?: RunEmbeddedAgentInternalParams["currentInboundContext"];
   lifecycleGeneration?: string;
   onDeferredLifecycleOwner?: (owner: DeferredEmbeddedRunLifecycleOwner) => void;
-  onSourceReplyDelivered?: () => void;
+  onCompletedSourceReplyDelivered?: () => void;
   onCompactionAccounting?: RunEmbeddedAgentInternalParams["onCompactionAccounting"];
   onExecutionStarted?: RunEmbeddedAgentInternalParams["onExecutionStarted"];
   onExecutionPhase?: (info: {
