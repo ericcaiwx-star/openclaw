@@ -575,6 +575,7 @@ test("sessions.create runs an existing managed worktree cwd for initial and foll
           spawnedBy: loaded?.spawnedBy,
           workspaceDir: loaded?.spawnedWorkspaceDir,
           cwd: loaded?.spawnedCwd,
+          execHost: loaded?.execHost,
         }) ?? workspace;
       const prepared = await prepareAgentCommandExecution(
         {

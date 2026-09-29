@@ -180,6 +180,7 @@ export async function sandboxExplainCommand(
     spawnedBy: sessionEntry?.spawnedBy,
     workspaceDir: sessionEntry?.spawnedWorkspaceDir,
     cwd: sessionEntry?.spawnedCwd,
+    execHost: sessionEntry?.execHost,
   });
   const effectiveAgentWorkspaceDir = sessionWorkspaceDir ?? configuredWorkspaceDir;
   const directRuntimeCwd =

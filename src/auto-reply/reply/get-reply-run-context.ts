@@ -327,6 +327,7 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
     spawnedBy: sessionEntry?.spawnedBy,
     workspaceDir: sessionEntry?.spawnedWorkspaceDir,
     cwd: sessionEntry?.spawnedCwd,
+    execHost: sessionEntry?.execHost,
   });
   const workspaceDir = sessionWorkspaceOverride ?? configuredWorkspaceDir;
   const bareResetPromptState =

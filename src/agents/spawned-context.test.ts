@@ -109,6 +109,24 @@ describe("resolveIngressWorkspaceOverrideForSessionRun", () => {
         cwd: "/tmp/worktree",
       }),
     ).toBe("/tmp/worktree");
+    expect(
+      resolveIngressWorkspaceOverrideForSessionRun({
+        spawnedBy: "agent:main:subagent:parent",
+        workspaceDir: "/tmp/ws",
+        cwd: "/home/node-user",
+        execHost: "node",
+      }),
+    ).toBe("/tmp/ws");
     expect(resolveIngressWorkspaceOverrideForSessionRun()).toBeUndefined();
+  });
+
+  it("does not treat an adopted node-session cwd as a Gateway workspace", () => {
+    expect(
+      resolveIngressWorkspaceOverrideForSessionRun({
+        spawnedBy: "",
+        cwd: "/home/node-user",
+        execHost: "node",
+      }),
+    ).toBeUndefined();
   });
 });

@@ -1099,7 +1099,7 @@ export async function getReplyFromConfig(
       sessionEntryHandle?.getCurrent() ?? sessionStore?.[sessionKey] ?? sessionEntry;
     const stagingWorkspaceDir =
       resolveIngressWorkspaceOverrideForSessionRun({
-        spawnedBy: stagingSessionEntry.spawnedBy,
+        ...stagingSessionEntry,
         workspaceDir: stagingSessionEntry.spawnedWorkspaceDir,
         cwd: stagingSessionEntry.spawnedCwd,
       }) ?? workspaceDir;

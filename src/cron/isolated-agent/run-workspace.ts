@@ -111,6 +111,7 @@ async function resolveCronSessionWorkspace(params: {
     spawnedBy: entry.spawnedBy,
     workspaceDir: entry.spawnedWorkspaceDir,
     cwd: entry.spawnedCwd,
+    execHost: entry.execHost,
   });
   const requestedCwd = normalizeOptionalString(entry.spawnedCwd);
   if (
