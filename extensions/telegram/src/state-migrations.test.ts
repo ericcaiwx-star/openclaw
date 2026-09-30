@@ -67,6 +67,41 @@ describe("retired Telegram state", () => {
     }
   });
 
+  it("archives a verified empty version-1 thread bindings file", async () => {
+    const sourcePath = path.join(stateDir, "telegram", "thread-bindings-default.json");
+    const source = '{"version":1,"bindings":[]}\n';
+    await fs.mkdir(path.dirname(sourcePath), { recursive: true });
+    await fs.writeFile(sourcePath, source);
+
+    expect(await migration.detectLegacyState(input)).toEqual({
+      preview: [expect.stringContaining(sourcePath)],
+    });
+
+    const result = await migration.migrateLegacyState(input);
+
+    expect(result.warnings).toEqual([]);
+    expect(result.changes).toEqual([
+      `Archived empty Telegram thread bindings legacy source -> ${sourcePath}.migrated`,
+    ]);
+    await expect(fs.readFile(`${sourcePath}.migrated`, "utf8")).resolves.toBe(source);
+    await expect(fs.stat(sourcePath)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(migration.detectLegacyState(input)).resolves.toBeNull();
+  });
+
+  it("preserves a nonempty version-1 thread bindings file", async () => {
+    const sourcePath = path.join(stateDir, "telegram", "thread-bindings-default.json");
+    const source = '{"version":1,"bindings":[{"chatId":"123"}]}\n';
+    await fs.mkdir(path.dirname(sourcePath), { recursive: true });
+    await fs.writeFile(sourcePath, source);
+
+    const result = await migration.migrateLegacyState(input);
+
+    expect(result.changes).toEqual([]);
+    expect(result.warnings).toEqual([expect.stringContaining(sourcePath)]);
+    await expect(fs.readFile(sourcePath, "utf8")).resolves.toBe(source);
+    await expect(fs.stat(`${sourcePath}.migrated`)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
   it("refuses an unreadable source directory instead of certifying inspection", async () => {
     await fs.writeFile(path.join(stateDir, "telegram"), "not a directory");
     await expect(migration.detectLegacyState(input)).rejects.toMatchObject({ code: "ENOTDIR" });
