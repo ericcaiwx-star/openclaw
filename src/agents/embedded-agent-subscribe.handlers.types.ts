@@ -359,6 +359,7 @@ type ToolHandlerParams = Pick<
   | "toolProgressDetail"
   | "sourceReplyDeliveryMode"
   | "onDeliveredMessageToolOnlySourceReply"
+  | "onCompletedMessageToolOnlySourceReply"
 >;
 
 type ToolHandlerState = Pick<
