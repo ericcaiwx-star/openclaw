@@ -88,9 +88,21 @@ describe("retired Telegram state", () => {
     await expect(migration.detectLegacyState(input)).resolves.toBeNull();
   });
 
-  it("preserves a nonempty version-1 thread bindings file", async () => {
+  it.each([
+    {
+      name: "nonempty bindings",
+      source: '{"version":1,"bindings":[{"chatId":"123"}]}\n',
+    },
+    {
+      name: "an unknown field",
+      source: '{"version":1,"bindings":[],"metadata":{}}\n',
+    },
+    {
+      name: "a duplicate escaped bindings key",
+      source: '{"version":1,"bindings":[{"chatId":"123"}],"\\u0062indings":[]}\n',
+    },
+  ])("preserves a version-1 thread bindings file with $name", async ({ source }) => {
     const sourcePath = path.join(stateDir, "telegram", "thread-bindings-default.json");
-    const source = '{"version":1,"bindings":[{"chatId":"123"}]}\n';
     await fs.mkdir(path.dirname(sourcePath), { recursive: true });
     await fs.writeFile(sourcePath, source);
 
