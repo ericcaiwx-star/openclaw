@@ -105,7 +105,7 @@ it("answers chat.send after a dashboard daily rollover", async () => {
     const rolled = loadSessionEntry(scope);
     const drainTimeout =
       result.status === "error" ||
-      String(result.terminalReply?.text ?? "").includes("timed out draining work");
+      (result.terminalReply?.text ?? "").includes("timed out draining work");
     transcript.push(
       `chat.send sessionKey=${sessionKey}`,
       `seeded sessionId=${seededSessionId} freshness=${freshness.state} staleReason=${staleReason ?? "none"}`,
