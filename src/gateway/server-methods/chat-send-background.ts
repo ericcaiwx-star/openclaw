@@ -96,11 +96,13 @@ function scheduleDashboardSessionTitle(
     return;
   }
   void runWithGatewayIndependentRootWorkContinuation(async () => {
+    // Reply progress has to settle before a session lease exists. Rollover
+    // drains that lease before the reply can run, so holding it across this
+    // wait times out the reset.
+    if (ready) {
+      await ready;
+    }
     const generateTitle = async () => {
-      // Retain admission and the caller's context while reply progress releases the gate.
-      if (ready) {
-        await ready;
-      }
       const updated = await maybeGenerateDashboardSessionTitle({
         cfg: params.cfg,
         agentId: params.agentId,
