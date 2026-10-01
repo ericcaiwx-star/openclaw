@@ -52,11 +52,7 @@ import {
 import { buildSubagentLaunchRequest } from "./subagent-spawn-launch-request.js";
 import { createSubagentSpawnLifecycleEmitter } from "./subagent-spawn-lifecycle.js";
 import { resolveSubagentSpawnRequest } from "./subagent-spawn-request.js";
-import {
-  createInitialSubagentSession,
-  resolveAcceptedChildSessionEntry,
-  resolveAcceptedChildSessionId,
-} from "./subagent-spawn-session-patch.js";
+import * as spawnSession from "./subagent-spawn-session-patch.js";
 import { bindThreadForSubagentSpawn } from "./subagent-spawn-thread-binding.js";
 import { emitSessionLifecycleEvent, mergeDeliveryContext } from "./subagent-spawn.runtime.js";
 import { buildSubagentSpawnEnvelope } from "./subagent-system-prompt.js";
@@ -169,7 +165,7 @@ export async function spawnSubagentDirect(
     } = childPlan.resolved;
     let { childSessionOrigin } = childPlan.resolved;
     const { resolvedModel, thinkingOverride } = plan;
-    const initialSession = await createInitialSubagentSession({
+    const initialSession = await spawnSession.createInitialSubagentSession({
       assertActive,
       cfg,
       requesterAgentId,
@@ -368,15 +364,11 @@ export async function spawnSubagentDirect(
         swarmSchedulerGroupKey,
         swarmMaxConcurrent: swarmConfig.maxConcurrent,
       });
-    const acceptedChildEntry = resolveAcceptedChildSessionEntry({
-      persistedChildEntry: childEntry,
-      forked: preparedSpawnContext.mode === "fork" ? preparedSpawnContext.forked : undefined,
-    });
-    if (acceptedChildEntry) {
+    if (childEntry) {
       await recordSessionCreated(cfg, {
         sessionKey: childSessionKey,
         agentId: targetAgentId,
-        entry: acceptedChildEntry,
+        entry: childEntry,
       });
     }
     await recordSubagentSpawned({
@@ -680,8 +672,7 @@ export async function spawnSubagentDirect(
 
     return {
       status: "accepted",
-      childSessionKey,
-      ...(!params.collect ? { sessionId: resolveAcceptedChildSessionId(acceptedChildEntry) } : {}),
+      ...spawnSession.acceptedChildReceipt(childSessionKey, childEntry, params.collect),
       // sessionKey remains collector-launch only; ordinary spawns expose durable
       // identity via sessionId + childSessionKey without redefining sessionKey.
       ...(collectorSessionKey ? { sessionKey: collectorSessionKey } : {}),

@@ -78,6 +78,7 @@ describe("sessions_spawn tool", () => {
       status: "accepted",
       context: "isolated",
       childSessionKey: "agent:main:subagent:1",
+      sessionId: "11111111-1111-4111-8111-111111111111",
       runId: "run-subagent",
     });
     hoisted.spawnAcpDirectMock.mockReset().mockResolvedValue({
@@ -806,6 +807,7 @@ describe("sessions_spawn tool", () => {
     expect(result.details).toMatchObject({
       status: "accepted",
       childSessionKey: "agent:main:subagent:1",
+      sessionId: "11111111-1111-4111-8111-111111111111",
       runId: "run-subagent",
     });
     expect(result.details).not.toHaveProperty("role");
