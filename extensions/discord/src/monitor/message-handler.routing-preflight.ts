@@ -61,7 +61,7 @@ export async function resolveDiscordPreflightRoute(params: {
   const isRuntimeAcpBinding = isDiscordRuntimeAcpThreadBinding(runtimeRoute.bindingRecord);
   const effectiveRoute = runtimeRoute.boundSessionKey
     ? isRuntimeAcpBinding
-      ? route
+      ? route({})
       : runtimeRoute.route
     : resolveDiscordEffectiveRoute({
         route: configuredRoute?.route ?? runtimeRoute.route,
