@@ -4,10 +4,10 @@ import { resolveOpenAIResponsesServerCompactionPlan } from "@openclaw/ai/interna
 import { asPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { estimateMessagesTokens } from "../../agents/compaction.js";
-import type { AgentMessage } from "../../agents/runtime/index.js";
 import { resolveModelExtraParamSources } from "../../agents/model-extra-params.js";
 import { normalizeStaticProviderModelId } from "../../agents/model-ref-shared.js";
 import { normalizeProviderId } from "../../agents/model-selection.js";
+import type { AgentMessage } from "../../agents/runtime/index.js";
 import { parseNonNegativeByteSize } from "../../config/byte-size.js";
 import {
   findConfiguredProviderModel,
