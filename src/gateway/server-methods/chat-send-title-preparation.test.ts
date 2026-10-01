@@ -175,6 +175,7 @@ it("does not hold session admission across an unresolved dashboard title gate", 
     let released: Promise<void> | undefined;
     let competing: { release: () => void } | undefined;
     try {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
       scheduleChatDashboardSessionTitle(
         {
           ...scope,
@@ -185,36 +186,29 @@ it("does not hold session admission across an unresolved dashboard title gate", 
         },
         { released: ready.promise, settled: Promise.resolve() },
       );
-      const deadline = Date.now() + 1_000;
-      let held: Promise<void> | undefined;
-      while (Date.now() < deadline) {
-        held = getSessionWorkAdmissionRelease(admissionQuery);
-        if (held) {
-          break;
-        }
-        await new Promise((resolve) => {
-          setTimeout(resolve, 10);
-        });
+      for (let step = 0; step < 8; step += 1) {
+        await vi.advanceTimersByTimeAsync(0);
       }
-      expect(held).toBeUndefined();
-      await expect(
-        interruptSessionWorkAdmissions({ ...admissionQuery, timeoutMs: 200 }),
-      ).resolves.toBe(true);
+      expect(getSessionWorkAdmissionRelease(admissionQuery)).toBeUndefined();
+      const titleDrain = interruptSessionWorkAdmissions({ ...admissionQuery, timeoutMs: 0 });
+      await vi.advanceTimersByTimeAsync(0);
+      await expect(titleDrain).resolves.toBe(true);
 
       competing = await beginSessionWorkAdmission({
         scope: scope.storePath,
         identities: ["agent:main:dashboard:competing-title-lease"],
         assertAllowed: () => {},
       });
-      await expect(
-        interruptSessionWorkAdmissions({
-          scope: scope.storePath,
-          identities: ["agent:main:dashboard:competing-title-lease"],
-          timeoutMs: 50,
-        }),
-      ).resolves.toBe(false);
+      const competingDrain = interruptSessionWorkAdmissions({
+        scope: scope.storePath,
+        identities: ["agent:main:dashboard:competing-title-lease"],
+        timeoutMs: 0,
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      await expect(competingDrain).resolves.toBe(false);
 
       ready.resolve(true);
+      await vi.advanceTimersByTimeAsync(0);
       await Promise.race([started.promise, failed.promise]);
       released = getSessionWorkAdmissionRelease(admissionQuery);
       expect(released).toBeDefined();
@@ -224,6 +218,7 @@ it("does not hold session admission across an unresolved dashboard title gate", 
       ready.resolve(true);
       generation.resolve("Original release plan");
       await released;
+      vi.useRealTimers();
     }
     expect(loadSessionEntry(scope)?.displayName).toBe("Original release plan");
   });
