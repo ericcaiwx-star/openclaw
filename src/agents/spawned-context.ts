@@ -93,6 +93,8 @@ export function resolveIngressWorkspaceOverrideForSessionRun(
     | (Pick<SpawnedRunMetadata, "spawnedBy" | "workspaceDir"> & {
         cwd?: string | null;
         execHost?: string | null;
+        /** Provider that owns this turn's agent runtime, matching CLI backend selection. */
+        runtimeBackendId?: string | null;
       })
     | null,
 ): string | undefined {
@@ -100,10 +102,14 @@ export function resolveIngressWorkspaceOverrideForSessionRun(
   if (normalized.spawnedBy && normalized.workspaceDir) {
     return normalized.workspaceDir;
   }
-  // A node-host cwd belongs to the remote execution binding. Older adopted
-  // CLI sessions also persisted it as spawnedCwd, but it must never become a
-  // Gateway-local workspace on later turns.
-  if (normalizeOptionalString(metadata?.execHost) === "node") {
+  // Node-hosted Claude CLI placement persists the remote cwd as spawnedCwd.
+  // execHost=node by itself only routes shell commands and must keep a local
+  // dashboard worktree. This matches resolveCliExecutionTarget: node placement
+  // requires the Claude backend as well as execHost=node.
+  if (
+    normalizeOptionalString(metadata?.execHost) === "node" &&
+    normalizeOptionalString(metadata?.runtimeBackendId) === "claude-cli"
+  ) {
     return undefined;
   }
   // Dashboard worktree sessions are not subagents, so their managed cwd is
@@ -111,4 +117,26 @@ export function resolveIngressWorkspaceOverrideForSessionRun(
   // Visible children can record lineage without an inherited workspace.
   // Their managed cwd must remain the sandbox workspace on later turns too.
   return normalizeOptionalString(metadata?.cwd);
+}
+
+/** Map a persisted session row onto the shared ingress workspace decision. */
+export function resolveSessionEntryIngressWorkspace(
+  entry:
+    | {
+        spawnedBy?: string | null;
+        spawnedWorkspaceDir?: string | null;
+        spawnedCwd?: string | null;
+        execHost?: string | null;
+      }
+    | null
+    | undefined,
+  runtimeBackendId?: string | null,
+): string | undefined {
+  return resolveIngressWorkspaceOverrideForSessionRun({
+    spawnedBy: entry?.spawnedBy,
+    workspaceDir: entry?.spawnedWorkspaceDir,
+    cwd: entry?.spawnedCwd,
+    execHost: entry?.execHost,
+    runtimeBackendId,
+  });
 }

@@ -247,6 +247,7 @@ export async function prepareAgentRunDispatch(
     workspaceDir: params.sessionEntry?.spawnedWorkspaceDir,
     cwd: params.sessionEntry?.spawnedCwd,
     execHost: params.sessionEntry?.execHost,
+    runtimeBackendId: resolvedRuntime.provider,
   });
   let preparedModelRuntimeLease: PreparedModelRuntimeLease | undefined;
   let capturedOperator: Awaited<ReturnType<typeof retainGatewayOperatorRun>> | undefined;

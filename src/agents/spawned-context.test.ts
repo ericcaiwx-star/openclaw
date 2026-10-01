@@ -115,6 +115,7 @@ describe("resolveIngressWorkspaceOverrideForSessionRun", () => {
         workspaceDir: "/tmp/ws",
         cwd: "/home/node-user",
         execHost: "node",
+        runtimeBackendId: "claude-cli",
       }),
     ).toBe("/tmp/ws");
     expect(resolveIngressWorkspaceOverrideForSessionRun()).toBeUndefined();
@@ -126,7 +127,26 @@ describe("resolveIngressWorkspaceOverrideForSessionRun", () => {
         spawnedBy: "",
         cwd: "/home/node-user",
         execHost: "node",
+        runtimeBackendId: "claude-cli",
       }),
     ).toBeUndefined();
+  });
+
+  it("keeps a local worktree when node host only routes shell commands", () => {
+    expect(
+      resolveIngressWorkspaceOverrideForSessionRun({
+        spawnedBy: "",
+        cwd: "/tmp/worktree",
+        execHost: "node",
+        runtimeBackendId: "openai",
+      }),
+    ).toBe("/tmp/worktree");
+    expect(
+      resolveIngressWorkspaceOverrideForSessionRun({
+        spawnedBy: "",
+        cwd: "/tmp/worktree",
+        execHost: "node",
+      }),
+    ).toBe("/tmp/worktree");
   });
 });

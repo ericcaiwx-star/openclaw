@@ -93,6 +93,7 @@ export async function runGatewaySessionCompaction(
       workspaceDir: params.entry.spawnedWorkspaceDir,
       cwd: params.entry.spawnedCwd,
       execHost: params.entry.execHost,
+      runtimeBackendId: resolvedModel.provider,
     }) ?? resolveAgentWorkspaceDir(params.cfg, params.agentId);
   const compactionCliTarget = resolveManualCompactionCliTarget({
     provider: resolvedModel.provider,
