@@ -115,7 +115,7 @@ it("does not hold session admission across an unresolved dashboard title gate", 
       cwd: state.workspaceDir,
       message: { role: "user", content: "Original release plan", timestamp: 1 },
     });
-    const ready = createDeferredCore<void>();
+    const ready = createDeferredCore();
     const started = createDeferredCore();
     const generation = createDeferredCore<string>();
     const failed = createDeferredCore<never>();
