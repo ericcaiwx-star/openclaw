@@ -280,13 +280,19 @@ function unwrapStandaloneParameterTags(text: string): string {
   return result + text.slice(lastIndex);
 }
 
-export function stripToolCallXmlTags(
+type StripToolCallXmlOptions = {
+  stripFunctionCallsXmlPayloads?: boolean;
+  stripFunctionResponseAfterPluralToolCalls?: boolean;
+};
+
+export function stripToolCallXmlTags(input: string, options: StripToolCallXmlOptions = {}): string {
+  return stripToolCallXmlTagsInternal(input, options, false);
+}
+
+function stripToolCallXmlTagsInternal(
   input: string,
-  options: {
-    stripFunctionCallsXmlPayloads?: boolean;
-    stripFunctionResponseAfterPluralToolCalls?: boolean;
-    streaming?: boolean;
-  } = {},
+  options: StripToolCallXmlOptions,
+  streaming: boolean,
 ): string {
   const text = input;
   if (!text || !TOOL_CALL_QUICK_RE.test(text)) {
@@ -361,7 +367,7 @@ export function stripToolCallXmlTags(
           shouldStripPluralWrapperBeforeResponse) &&
           isPluralToolCallWrapper);
       const payloadKind = shouldDetectXmlPayload
-        ? detectToolCallPayloadKind(text, payloadStart, options.streaming === true)
+        ? detectToolCallPayloadKind(text, payloadStart, streaming)
         : TOOL_CALL_JSON_PAYLOAD_START_RE.test(text.slice(payloadStart))
           ? "json"
           : null;
@@ -638,12 +644,14 @@ export function assistantVisibleTextFilters(
       transform: stripRelevantMemoriesTags,
       activationTokens: ["relevant-memories", "relevant_memories"],
     },
-    toolCallXmlTextFilter({
-      stripFunctionCallsXmlPayloads: profile === "tool-progress",
-      stripFunctionResponseAfterPluralToolCalls:
-        profile === "delivery" || profile === "final-answer-delivery",
+    toolCallXmlProfileFilter(
+      {
+        stripFunctionCallsXmlPayloads: profile === "tool-progress",
+        stripFunctionResponseAfterPluralToolCalls:
+          profile === "delivery" || profile === "final-answer-delivery",
+      },
       streaming,
-    }),
+    ),
     ...(profile === "tool-progress" ? [] : [assistantTraceTextFilter]),
     legacyBracketToolCallTextFilter,
     plainToolCallTextFilter,
@@ -668,13 +676,18 @@ export const minimaxToolCallTextFilter: TextFilter = {
   activationTokens: ["minimax:tool_call", "<]minimax[>[<tool_call>"],
 };
 
-export function toolCallXmlTextFilter(
-  options: Parameters<typeof stripToolCallXmlTags>[1] = {},
+function toolCallXmlProfileFilter(
+  options: StripToolCallXmlOptions,
+  streaming: boolean,
 ): TextFilter {
   return {
-    transform: (text) => stripToolCallXmlTags(text, options),
+    transform: (text) => stripToolCallXmlTagsInternal(text, options, streaming),
     activationTokens: ["<"],
   };
+}
+
+export function toolCallXmlTextFilter(options: StripToolCallXmlOptions = {}): TextFilter {
+  return toolCallXmlProfileFilter(options, false);
 }
 
 export const legacyBracketToolCallTextFilter: TextFilter = {
