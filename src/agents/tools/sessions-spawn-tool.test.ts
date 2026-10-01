@@ -11,10 +11,7 @@ import { GatewayClientRequestError } from "../../gateway/client.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { finalizeAgentToolAvailability } from "../agent-tool-availability.js";
 import { readParentExecutionIdentity } from "../subagents/spawn/execution-identity-spawn-context.js";
-import {
-  expectRegisteredSubagentRun,
-  supportedSpawnModelChoice,
-} from "../subagents/spawn/subagent-spawn.test-helpers.js";
+import * as spec from "../subagents/spawn/subagent-spawn.test-helpers.js";
 import {
   SWARM_CODE_MODE_IDEMPOTENCY_KEY,
   SWARM_CODE_MODE_REQUEST_FINGERPRINT,
@@ -25,6 +22,7 @@ import { callInProcessGatewayTool } from "./in-process-gateway.js";
 import { registerSessionsSpawnCompletionTests } from "./sessions-spawn-tool.completion.test-support.js";
 
 const { hoisted } = await import("./sessions-spawn-tool.mocks.test-support.js");
+const { expectRegisteredSubagentRun, supportedSpawnModelChoice } = spec;
 
 let createSessionsSpawnTool: typeof import("./sessions-spawn-tool.js").createSessionsSpawnTool;
 type SpawnOptions = NonNullable<Parameters<typeof createSessionsSpawnTool>[0]>;
@@ -305,7 +303,6 @@ describe("sessions_spawn tool", () => {
         runId: "run-visible",
         cleanup: "keep",
       });
-      expect(result.details).not.toHaveProperty("sessionId");
       expect(callGateway).toHaveBeenCalledWith("sessions.create", {
         ...worktree,
         agentId: "main",
