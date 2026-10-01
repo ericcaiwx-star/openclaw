@@ -1,6 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
 // Assistant visible text helpers strip hidden reasoning and control marker text.
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import {
   consumeLineBreak,
   skipHorizontalWhitespace,
@@ -9,6 +8,7 @@ import {
 import { stripPlainTextToolCallBlocks } from "../../../packages/tool-call-repair/src/index.js";
 import { findCodeRegions, isInsideCode, stripLinesOutsideCode } from "./code-regions.js";
 import { downgradedToolCallTextFilter } from "./downgraded-tool-call-text.js";
+import { isGlmArgPayload } from "./glm-arg-key-payload.js";
 import { stripModelSpecialTokens } from "./model-special-tokens.js";
 import { stripReasoningTagsFromText } from "./reasoning-tags.js";
 import {
@@ -17,6 +17,7 @@ import {
   trimTextFilter,
   type TextFilter,
 } from "./text-projection.js";
+import { createQuotedStringScanner, parseXmlTagAt, type ParsedToolCallTag } from "./xml-tag-at.js";
 
 const MEMORY_TAG_RE = /<\s*(\/?)\s*relevant[-_]memories\b[^<>]*>/gi;
 const MEMORY_TAG_QUICK_RE = /<\s*\/?\s*relevant[-_]memories\b/i;
@@ -60,79 +61,19 @@ const NESTED_JSON_TOOL_CALL_PAYLOAD_START_RE = /^\s*(?:\r?\n\s*)?<(?:function_ca
 
 type ToolCallPayloadKind = "json" | "xml" | null;
 
-function createQuotedStringScanner(text: string, start: number): (end: number) => boolean {
-  let quoteChar: "'" | '"' | null = null;
-  let isEscaped = false;
-  // Candidate closing tags share one monotonic scan through their payload.
-  let cursor = start;
-  return (end) => {
-    for (; cursor < end; cursor += 1) {
-      const char = text[cursor];
-      if (quoteChar === null) {
-        if (char === '"' || char === "'") {
-          quoteChar = char;
-        }
-      } else if (isEscaped) {
-        isEscaped = false;
-      } else if (char === "\\") {
-        isEscaped = true;
-      } else if (char === quoteChar) {
-        quoteChar = null;
-      }
-    }
-    return quoteChar !== null;
-  };
-}
-
-interface ParsedToolCallTag {
-  contentStart: number;
-  end: number;
-  isClose: boolean;
-  isSelfClosing: boolean;
-  tagName: string;
-  isTruncated: boolean;
-}
-
-// Match only the tag head; quote-aware scanning owns the close boundary.
-const XML_TAG_HEAD_RE = /<\s*(?:(\/)\s*)?([A-Za-z_:][A-Za-z0-9_.:-]*)(?=$|[\s/>])/y;
-
-function parseXmlTagAt(text: string, start: number): ParsedToolCallTag | null {
-  XML_TAG_HEAD_RE.lastIndex = start;
-  const match = XML_TAG_HEAD_RE.exec(text);
-  if (!match) {
-    return null;
-  }
-  const contentStart = XML_TAG_HEAD_RE.lastIndex;
-  const isClose = match[1] === "/";
-  const closeIndex = findTagCloseIndex(text, contentStart);
-  const isTruncated = closeIndex === -1;
-  return {
-    contentStart,
-    end: isTruncated ? text.length : closeIndex + 1,
-    isClose,
-    isSelfClosing: !isTruncated && !isClose && /\/\s*$/.test(text.slice(contentStart, closeIndex)),
-    tagName: normalizeLowercaseStringOrEmpty(match[2]),
-    isTruncated,
-  };
-}
-
-function findTagCloseIndex(text: string, start: number): number {
-  const isInsideQuote = createQuotedStringScanner(text, start);
-  for (let idx = start; idx < text.length; idx += 1) {
-    const char = text[idx];
-    if ((char === "<" || char === ">") && !isInsideQuote(idx)) {
-      return char === ">" ? idx : -1;
-    }
-  }
-  return -1;
-}
-
-function detectToolCallPayloadKind(text: string, start: number): ToolCallPayloadKind {
+function detectToolCallPayloadKind(
+  text: string,
+  start: number,
+  streaming = false,
+): ToolCallPayloadKind {
   const rest = text.slice(start);
   if (TOOL_CALL_JSON_PAYLOAD_START_RE.test(rest)) {
     return "json";
   }
   if (TOOL_CALL_XML_PAYLOAD_START_RE.test(rest)) {
+    return "xml";
+  }
+  if (isGlmArgPayload(rest, streaming)) {
     return "xml";
   }
   return null;
@@ -344,6 +285,7 @@ export function stripToolCallXmlTags(
   options: {
     stripFunctionCallsXmlPayloads?: boolean;
     stripFunctionResponseAfterPluralToolCalls?: boolean;
+    streaming?: boolean;
   } = {},
 ): string {
   const text = input;
@@ -419,7 +361,7 @@ export function stripToolCallXmlTags(
           shouldStripPluralWrapperBeforeResponse) &&
           isPluralToolCallWrapper);
       const payloadKind = shouldDetectXmlPayload
-        ? detectToolCallPayloadKind(text, payloadStart)
+        ? detectToolCallPayloadKind(text, payloadStart, options.streaming === true)
         : TOOL_CALL_JSON_PAYLOAD_START_RE.test(text.slice(payloadStart))
           ? "json"
           : null;
@@ -700,6 +642,7 @@ export function assistantVisibleTextFilters(
       stripFunctionCallsXmlPayloads: profile === "tool-progress",
       stripFunctionResponseAfterPluralToolCalls:
         profile === "delivery" || profile === "final-answer-delivery",
+      streaming,
     }),
     ...(profile === "tool-progress" ? [] : [assistantTraceTextFilter]),
     legacyBracketToolCallTextFilter,
