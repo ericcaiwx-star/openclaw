@@ -39,10 +39,7 @@ import {
 } from "../run-session-target.js";
 import { resolveSystemPromptRepoRoot } from "../system-prompt-params.js";
 import { resolveCompactionFallbacksOverride } from "./compact-fallbacks.js";
-import type {
-  CompactEmbeddedAgentSessionParams,
-  CompactEmbeddedAgentSessionRuntimeParams,
-} from "./compact.types.js";
+import type { CompactEmbeddedAgentSessionRuntimeParams } from "./compact.types.js";
 import { resolveEmbeddedCompactionTarget } from "./compaction-runtime-context.js";
 import {
   projectCodexHostTranscriptBytePreflightConfig,
