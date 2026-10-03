@@ -7,6 +7,7 @@ import { createCanonicalFixtureSkill } from "../../skills/test-support/test-help
 import { withTempDir } from "../../test-utils/temp-dir.js";
 import { prepareInstalledSkillCatalog } from "../installed-skill-runtime.js";
 import { createSandboxTestContext } from "../sandbox/test-fixtures.js";
+import { registerAgentWorkspaceAccess } from "../workspace-access.js";
 import { createInstalledSkillTools } from "./installed-skill-tools.js";
 
 it("reads bounded companions only under the prepared local skill identity", async () => {
@@ -24,16 +25,14 @@ it("reads bounded companions only under the prepared local skill identity", asyn
     await fs.symlink(outside, path.join(root, "symlink.md"));
     await fs.link(outside, path.join(root, "hardlink.md"));
     await fs.writeFile(path.join(root, "large.md"), "x".repeat(256 * 1024 + 1));
-    const local = recordSkillFileHost(
-      createCanonicalFixtureSkill({
-        name: "guide",
-        description: "Guide",
-        filePath,
-        baseDir: root,
-        source: "bundled",
-      }),
-      "gateway",
-    );
+    // Native filesystem loading leaves fileHost unset without a workspace adapter.
+    const local = createCanonicalFixtureSkill({
+      name: "guide",
+      description: "Guide",
+      filePath,
+      baseDir: root,
+      source: "bundled",
+    });
     const skills = prepareInstalledSkillCatalog({
       workspaceDir: dir,
       snapshot: { prompt: "", skills: [{ name: "guide" }], discoverySkills: [local] },
@@ -194,5 +193,61 @@ it("withholds companion bytes after cancellation or owner revocation across awai
         await rejected;
       }
     }
+  });
+});
+
+it("never treats an unmarked remote library selection as a local companion root", async () => {
+  await withTempDir("skill-companion-remote-", async (dir) => {
+    const filePath = path.join(dir, "SKILL.md");
+    await fs.writeFile(filePath, "Whole instructions");
+    await fs.writeFile(path.join(dir, "companion.md"), "Host marker");
+    const skill = createCanonicalFixtureSkill({
+      name: "guide",
+      description: "Guide",
+      filePath,
+      baseDir: dir,
+      source: "bundled",
+    });
+    const release = registerAgentWorkspaceAccess(dir, {
+      loadSkills: vi.fn(),
+      bridge: {
+        readFile: vi.fn(),
+        readFileWithSource: vi.fn(),
+        readDirectory: vi.fn(),
+        writeFile: vi.fn(),
+        createFileExclusive: vi.fn(),
+        stat: vi.fn(),
+      },
+    });
+    try {
+      const catalog = prepareInstalledSkillCatalog({
+        workspaceDir: dir,
+        snapshot: {
+          prompt: "",
+          skills: [{ name: "guide" }],
+          discoverySkills: [skill],
+          librarySelections: [
+            {
+              name: "guide",
+              skillId: "guide-id",
+              revision: "guide-revision",
+              ownerProfileId: null,
+            },
+          ],
+        },
+      });
+      const read = expectDefined(createInstalledSkillTools(catalog)[1], "skill reader");
+      await expect(
+        read.execute("companion", { name: "guide", relativePath: "companion.md" }),
+      ).rejects.toThrow("instruction-only");
+    } finally {
+      release();
+    }
+    expect(() =>
+      prepareInstalledSkillCatalog({
+        workspaceDir: dir,
+        snapshot: { prompt: "", skills: [{ name: "guide" }], discoverySkills: [skill] },
+      }),
+    ).toThrow("Workspace access is stopped");
   });
 });

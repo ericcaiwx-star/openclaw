@@ -102,7 +102,8 @@ export function prepareInstalledSkillCatalog(params: {
         companionRoot:
           !sandbox?.enabled &&
           !reader &&
-          resolveSkillFileHost(skill) === "gateway" &&
+          (resolveSkillFileHost(skill) === "gateway" ||
+            (resolveSkillFileHost(skill) === undefined && !workspace?.loadSkills)) &&
           path.isAbsolute(skill.filePath)
             ? createFsSafeRoot(path.dirname(skill.filePath)).then(
                 (root) => ({ root }),
