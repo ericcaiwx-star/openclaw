@@ -103,14 +103,14 @@ it("answers chat.send after a dashboard daily rollover", async () => {
     const staleReason = freshness.state === "stale" ? freshness.freshness.staleReason : undefined;
     const result = await sendAndWait(gateway, "Continue after the daily reset.");
     const rolled = loadSessionEntry(scope);
-    const drainTimeout =
-      result.status === "error" ||
-      (result.terminalReply?.text ?? "").includes("timed out draining work");
+    const drainTimeout = (result.error ?? result.terminalReply?.text ?? "").includes(
+      "timed out draining work",
+    );
     transcript.push(
       `chat.send sessionKey=${sessionKey}`,
       `seeded sessionId=${seededSessionId} freshness=${freshness.state} staleReason=${staleReason ?? "none"}`,
       "sessionStartedAt is 48h before the daily boundary atHour=4",
-      `status=${result.status} sessionId=${rolled?.sessionId ?? "missing"} reply=${JSON.stringify(result.terminalReply?.text ?? "")}`,
+      `status=${result.status} error=${JSON.stringify(result.error ?? "")} sessionId=${rolled?.sessionId ?? "missing"} reply=${JSON.stringify(result.terminalReply?.text ?? "")}`,
       `sessionStartedAtRefreshed=${(rolled?.sessionStartedAt ?? 0) > staleAt + 24 * 60 * 60 * 1000}`,
       `lifecycleRotated=${rolled?.lifecycleRevision !== "seed-revision"}`,
       `drainTimeout=${drainTimeout}`,
@@ -118,7 +118,7 @@ it("answers chat.send after a dashboard daily rollover", async () => {
     console.info(transcript.join("\n"));
     expect(freshness.state).toBe("stale");
     expect(staleReason).toBe("daily");
-    expect(result.status).toBe("ok");
+    expect(result.status, result.error).toBe("ok");
     expect(result.terminalReply?.text).toBe(replyText);
     expect(rolled?.sessionId).toBe(seededSessionId);
     expect(rolled?.sessionStartedAt).toBeGreaterThan(staleAt + 24 * 60 * 60 * 1000);
@@ -163,7 +163,7 @@ async function readAndComplete(
 async function sendAndWait(
   gateway: Awaited<ReturnType<typeof startGatewayWithClient>>,
   message: string,
-): Promise<{ status: string; terminalReply?: { text?: string } }> {
+): Promise<{ status: string; error?: string; terminalReply?: { text?: string } }> {
   const started = await gateway.client.request<{ runId: string }>("chat.send", {
     sessionKey,
     message,
@@ -172,6 +172,7 @@ async function sendAndWait(
   });
   return await gateway.client.request<{
     status: string;
+    error?: string;
     terminalReply?: { text?: string };
   }>("agent.wait", { runId: started.runId, timeoutMs: 30_000 }, { timeoutMs: 35_000 });
 }
