@@ -365,6 +365,7 @@ export async function withSessionEntriesFromStoresInWorker<T>(
   consume: (reads: readonly PreparedSessionEntryWorkerRead[]) => T,
   options?: {
     ordered?: boolean;
+    beforeConsume?: () => Promise<void>;
     prepareSource?: (
       input: SessionEntryWorkerRead,
       ...source: Parameters<SessionEntryReadSourcePreparation>
@@ -372,15 +373,19 @@ export async function withSessionEntriesFromStoresInWorker<T>(
   },
 ): Promise<T> {
   if (options?.ordered) {
-    return withOrderedSessionEntriesInWorker(inputs, consume, (input, read) =>
-      withSessionStoreReaderInWorker(input, read, {
-        prepareSource:
-          options.prepareSource && ((...source) => options.prepareSource!(input, ...source)),
-      }),
+    return withOrderedSessionEntriesInWorker(
+      inputs,
+      consume,
+      (input, read) =>
+        withSessionStoreReaderInWorker(input, read, {
+          prepareSource:
+            options.prepareSource && ((...source) => options.prepareSource!(input, ...source)),
+        }),
+      options.beforeConsume,
     );
   }
   const reads: PreparedSessionEntryWorkerRead[] = [];
-  const enter = (index: number): Promise<T> => {
+  const enter = async (index: number): Promise<T> => {
     const input = inputs[index];
     if (input) {
       return withSessionEntriesFromStoreInWorker(
@@ -396,6 +401,9 @@ export async function withSessionEntriesFromStoresInWorker<T>(
         false,
         options?.prepareSource && ((...source) => options.prepareSource!(input, ...source)),
       );
+    }
+    if (options?.beforeConsume) {
+      await options.beforeConsume();
     }
     for (const read of reads) {
       read.assertCurrent();
@@ -418,7 +426,7 @@ export async function withSessionEntriesFromStoresInWorker<T>(
         void Promise.resolve(result).catch(() => {});
         throw new Error("Session entry read consumers must remain synchronous");
       }
-      return Promise.resolve(result);
+      return result;
     } finally {
       active = false;
     }
