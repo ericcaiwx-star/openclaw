@@ -10,7 +10,7 @@ assert(checkout && [164274,158568].includes(pr));
 const proofRoot = await mkdtemp('/tmp/qq-review-');
 const results = [];
 let failed = false;
-for (const scenario of ['recovers', 'persistent', 'failed-tool']) {
+for (const scenario of ['recovers', 'persistent', 'nonzero-exit', 'tool-timeout']) {
   const root = join(proofRoot, scenario), workspace = join(root, 'workspace'), state = join(root,'state');
   await mkdir(workspace,{recursive:true}); await mkdir(state,{recursive:true});
   const ledger = join(workspace,'executions.txt');
@@ -28,13 +28,13 @@ for (const scenario of ['recovers', 'persistent', 'failed-tool']) {
       emit({role:'assistant'});
       if(requests.length===1){
         assert(input.tools.some(t=>t.function.name==='exec'),'exec unavailable');
-        emit({tool_calls:[{index:0,id:'prepared-once',type:'function',function:{name:'exec',arguments:JSON.stringify({command:`printf 'executed\\n' >> '${ledger}'${scenario==='failed-tool'?' ; exit 7':''}`})}}]});emit({},'tool_calls');
+        emit({tool_calls:[{index:0,id:'prepared-once',type:'function',function:{name:'exec',arguments:JSON.stringify({command:`printf 'executed\\n' >> '${ledger}'${scenario==='nonzero-exit'?' ; exit 7':scenario==='tool-timeout'?' ; sleep 4':''}`,...(scenario==='tool-timeout'?{timeoutSeconds:1,yieldMs:5000}:{})})}}]});emit({},'tool_calls');
       }else if(requests.length===2||scenario==='persistent'){
         emit({tool_calls:[{index:0,id:`rejected-${requests.length}`,type:'function',function:{name:'exec',arguments:'{"command":'}}]});emit({},'tool_calls');
       }else{
         assert(continuation,'missing transcript continuation');
         assert.equal(requests.at(-1).toolResultCount,1,'completed result missing or duplicated');
-        emit({content:scenario==='failed-tool'?`${marker}: prior tool failed with exit 7; no success claimed.`:marker});emit({},'stop');
+        emit({content:scenario==='nonzero-exit'?`${marker}: prior command exited with code 7; no success claimed.`:scenario==='tool-timeout'?`${marker}: prior tool timed out; no success claimed.`:marker});emit({},'stop');
       }
       res.end('data: [DONE]\n\n');
     }catch(error){res.destroy(error);}
@@ -58,9 +58,10 @@ for (const scenario of ['recovers', 'persistent', 'failed-tool']) {
     assert(requests.every(r=>r.originalUserCount===1),'original user turn duplicated');
     if(scenario==='recovers') {assert(recovered,'no successful continuation');assert.equal(code,0);assert.equal(requests.length,3);}
     if(scenario==='persistent'){assert(!recovered);assert(requests.length>=3&&requests.length<=9);assert.notEqual(code,0);assert(/incomplete_turn|Agent run failed|couldn.t|malformed/.test(stdout+stderr));}
-    if(scenario==='failed-tool'){
-      if(pr===164274){assert(!recovered,'failed tool incorrectly continued');assert.notEqual(code,0);}
-      else{assert(recovered,'failed-tool continuation missing');assert.equal(code,0);}
+    if(scenario==='nonzero-exit'){assert(recovered,'completed nonzero-exit continuation missing');assert.equal(code,0);assert(stdout.includes('no success claimed.'));}
+    if(scenario==='tool-timeout'){
+      if(pr===164274){assert(!recovered,'timed-out tool incorrectly continued');assert.notEqual(code,0);}
+      else{assert(recovered,'timed-out tool continuation missing');assert.equal(code,0);}
     }
     row.verdict='pass';
   }catch(error){row.verdict='fail';row.error=error.message;failed=true;}
