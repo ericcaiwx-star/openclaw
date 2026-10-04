@@ -8,20 +8,13 @@ import {
 import { createSqliteWorkerOperationAdmission } from "../../infra/sqlite-worker-operation-admission.js";
 import {
   isIncognitoSessionKey,
-  LEGACY_IMPLICIT_AGENT_ID,
   normalizeAgentId,
   parseAgentSessionKey,
 } from "../../routing/session-key.js";
 import { assertAgentDatabaseAdmitted } from "../../state/agent-database-admission.js";
 import type { AgentDatabaseRegistryChange } from "../../state/openclaw-agent-db-registry-listing.js";
-import {
-  listOpenIncognitoAgentDatabases,
-  retainOpenClawAgentDatabaseReadCandidates,
-} from "../../state/openclaw-agent-db.js";
-import {
-  isIncognitoOpenClawAgentSqlitePath,
-  resolveOpenClawAgentSqlitePath,
-} from "../../state/openclaw-agent-db.paths.js";
+import { retainOpenClawAgentDatabaseReadCandidates } from "../../state/openclaw-agent-db.js";
+import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import type { AgentDatabaseRequestExecutionSource } from "../../state/openclaw-agent-execution-contract.js";
 import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
 import { runOpenClawAgentWorkerWrite } from "../../state/openclaw-agent-write-admission.js";
@@ -51,6 +44,10 @@ import type {
   SessionStoreWorkerReadScope,
   SessionEntryReadSourcePreparation,
 } from "./session-entry-read-runtime.types.js";
+import {
+  captureSessionEntryReadScope,
+  isNativeSessionEntryRead,
+} from "./session-entry-read-scope.js";
 import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "./session-sqlite-target-paths.js";
 import {
   assertSessionStoreReadCandidate,
@@ -71,36 +68,6 @@ import type {
   SessionEntryListWorkerInput,
 } from "./session-transcript-worker.types.js";
 import type { SessionEntry } from "./types.js";
-
-export function captureSessionEntryReadScope(input: SessionEntryReadScope) {
-  const env = cloneEnvWithPlatformSemantics(input.env ?? process.env);
-  env.OPENCLAW_STATE_DIR = resolveStateDir(env);
-  const scope = {
-    ...input,
-    env,
-    ...(input.storePath ? { storePath: path.resolve(input.storePath) } : {}),
-  };
-  const agentId = scope.agentId
-    ? normalizeAgentId(scope.agentId)
-    : parseAgentSessionKey(scope.sessionKey)?.agentId;
-  return { scope, env, agentId };
-}
-
-export function isNativeSessionEntryRead(
-  scope: SessionEntryReadScope,
-  agentId: string | undefined,
-) {
-  const storePath = scope.storePath;
-  return Boolean(
-    isIncognitoSessionKey(scope.sessionKey) ||
-    (storePath &&
-      (isIncognitoOpenClawAgentSqlitePath(storePath, {
-        agentId: agentId ?? scope.defaultAgentId ?? LEGACY_IMPLICIT_AGENT_ID,
-        env: scope.env,
-      }) ||
-        listOpenIncognitoAgentDatabases().some((owner) => owner.storePath === storePath))),
-  );
-}
 
 export type SessionEntryReadWorkerOwner = {
   kind: "native" | "file" | "unresolved";
