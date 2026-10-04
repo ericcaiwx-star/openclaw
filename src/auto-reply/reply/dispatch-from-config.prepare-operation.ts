@@ -30,7 +30,10 @@ import {
   markReplyPayloadForSourceSuppressionDelivery,
   type ReplyPayload,
 } from "../reply-payload.js";
-import { claimPendingReplyQuestionInput } from "./agent-runner-question-input.js";
+import {
+  claimPendingReplyQuestionInput,
+  createQuestionInvalidAnswerReply,
+} from "./agent-runner-question-input.js";
 import {
   DispatchReplyOperationAbortedError,
   runWithDispatchAbortSignal,
@@ -300,6 +303,18 @@ export async function prepareDispatchOperation(state: PrepareDispatchOperationCo
           logKind: "question_answer",
         });
       } else {
+        const rejectedReply = createQuestionInvalidAnswerReply(error);
+        if (rejectedReply) {
+          state.replyOperationRunState.admission = {
+            status: "skipped",
+            reason: "question-response-rejected",
+          };
+          return await finishFastCommand({
+            payload: rejectedReply,
+            reason: "before_dispatch_handled",
+            logKind: "question_answer",
+          });
+        }
         throw error;
       }
     }

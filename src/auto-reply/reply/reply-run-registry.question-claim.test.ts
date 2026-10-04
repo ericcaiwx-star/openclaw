@@ -1,6 +1,7 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
+import { claimEmbeddedPendingUserInputAnswer } from "../../agents/embedded-agent-runner/run/attempt-queue-message.js";
 import {
   QuestionDispatchRefusedError,
   type AgentQuestionDispatcher,
@@ -13,7 +14,12 @@ import {
   createAgentQuestionAnswerAuthority,
   withAgentQuestionAnswerAuthority,
 } from "../../agents/harness/host-private-capabilities.js";
+import { prepareOperatorModelPolicy } from "../../agents/operator-model-policy.js";
+import { EmbeddedQuestionBroker } from "../../infra/embedded-question-broker.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
+import { resolveReplySteeringAuthority } from "./agent-runner-fallback-authority.js";
 import { claimPendingReplyQuestionInput } from "./agent-runner-question-input.js";
+import { createQueueTestRun } from "./queue.test-helpers.js";
 import {
   claimPendingReplyMessageInjectionTarget,
   replyRunRegistry,
@@ -22,6 +28,10 @@ import {
 } from "./reply-run-registry.js";
 import { createTestReplyOperation } from "./reply-run-registry.test-helpers.js";
 import { testing } from "./reply-run-registry.test-support.js";
+import {
+  prepareReplyToolAuthority,
+  resolveInboundReplyToolAuthorityOverlay,
+} from "./reply-tool-authority.js";
 
 afterEach(() => {
   testing.resetReplyRunRegistry();
@@ -428,3 +438,203 @@ it.each(["source-revoked", "operation-reassigned"] as const)(
     }
   },
 );
+
+it.each([
+  "accepted",
+  "cross-profile-disabled",
+  "altered-tools",
+  "stale-proof",
+  "source-revoked",
+  "creator-route-changed",
+  "creator-reassigned",
+] as const)("keeps the production host pending fallback boundary for %s", async (outcome) => {
+  const sessionKey = `agent:main:pending-fallback-${outcome}`;
+  const run = createQueueTestRun({ prompt: "Continue" });
+  run.run.config = { agents: { defaults: { model: { primary: "openai/gpt-test" } } } };
+  const modelPolicy = prepareOperatorModelPolicy({ cfg: run.run.config, policy: {} });
+  const operator = (profileId: string) =>
+    createAdmittedRunOperatorAuthority({
+      profileId,
+      scopes: ["operator.read", "operator.write"],
+      gatewayAccessGrant: null,
+      modelPolicy,
+      assertCurrent() {},
+    });
+  run.operatorAuthority = operator("alice");
+  Object.assign(run.run, {
+    senderId: "alice-sender",
+    senderName: "Alice",
+    senderIsOwner: true,
+    clientCaps: ["ui-commands"],
+    gatewayUiCommandTarget: { connId: "alice-tab", profileId: "alice" },
+  });
+  const operation = createTestReplyOperation({ sessionKey });
+  operation.bindToolAuthoritySnapshot(prepareReplyToolAuthority(run));
+  operation.bindToolAuthorityRoute({ provider: "openai", model: "gpt-fallback" });
+  const creatorFingerprint = operation.toolAuthorityFingerprint!;
+  run.operatorAuthority = operator("bob");
+  Object.assign(run.run, {
+    senderId: "bob-sender",
+    senderName: "Bob",
+    modelSelectionLocked: true,
+    gatewayUiCommandTarget: { connId: "bob-tab", profileId: "bob" },
+  });
+  if (outcome === "altered-tools") {
+    run.toolsAllow = ["read"];
+  }
+  const pendingProof = resolveReplySteeringAuthority(
+    run,
+    operation,
+  ).pendingInputAuthorityFingerprint;
+  expect(pendingProof).toBe(outcome === "altered-tools" ? undefined : creatorFingerprint);
+  const caller = resolveInboundReplyToolAuthorityOverlay({
+    ctx: {},
+    senderIsOwner: true,
+    operatorAuthority: run.operatorAuthority,
+    toolsAllow: run.toolsAllow,
+    disableTools: false,
+  });
+  expect(operation.projectToolAuthorityFingerprint(caller)).not.toBe(creatorFingerprint);
+  const broker = new EmbeddedQuestionBroker(createTestGatewayScheduler());
+  const questionId = `ask_pending_fallback_${outcome}`;
+  const questions = [{ id: "answer", header: "Answer", question: "Continue?", options: [] }];
+  broker.request({
+    id: questionId,
+    sessionKey,
+    questions: questions.map(({ id, ...question }) => ({ ...question, questionId: id })),
+  });
+  const resolved = vi.fn();
+  const gatewayCall: AgentQuestionDispatcher = {
+    version: 2,
+    call: async (request) => {
+      if (request.authority.kind === "source-bound") {
+        request.authority.assertCurrent();
+      }
+      if (request.method === "question.resolve") {
+        resolved();
+      }
+      return broker.call(request.method, request.params);
+    },
+  };
+  const question = withAgentQuestionAnswerAuthority(
+    createAgentQuestionAnswerAuthority({
+      sessionKey,
+      fingerprint: creatorFingerprint,
+      project: (overlay) => operation.projectToolAuthorityFingerprint(overlay) ?? "missing-owner",
+      assertActive() {},
+    }),
+    () =>
+      registerPendingAgentQuestion({
+        sessionKey,
+        questionId,
+        questions,
+        gatewayCall,
+        answer: broker.waitAnswer({ id: questionId, includeResolutionId: true }),
+      }),
+  );
+  question.attachRegistration(Promise.resolve());
+  const backendEntered = createDeferred();
+  const releaseBackend = createDeferred();
+  const source = new AbortController();
+  let replacement: ReplyOperation | undefined;
+  const claimPendingUserInputAnswer = vi.fn(
+    async (
+      text: string,
+      options: ReplyBackendQueueMessageOptions | undefined,
+      assertCurrent: () => void,
+    ) => {
+      backendEntered.resolve();
+      await releaseBackend.promise;
+      return await claimEmbeddedPendingUserInputAnswer(
+        text,
+        options,
+        sessionKey,
+        () => true,
+        { kind: "source-bound", assertCurrent },
+        creatorFingerprint,
+      );
+    },
+  );
+  operation.attachBackend({
+    kind: "embedded",
+    cancel: vi.fn(),
+    ...(outcome === "cross-profile-disabled" ? { supportsCrossProfileSteering: false } : {}),
+    messageInjectionV2: {
+      version: 2,
+      isAvailable: () => true,
+      queueMessage: vi.fn(async () => {}),
+      claimPendingUserInputAnswer,
+    },
+  });
+  operation.setPhase("running");
+  const onAnswerProcessed = vi.fn();
+  try {
+    const claim = claimPendingReplyQuestionInput({
+      sessionKey,
+      text: "Continue",
+      caller,
+      personalToolParticipant: {
+        operatorAuthority: run.operatorAuthority,
+        senderId: run.run.senderId,
+        senderName: run.run.senderName,
+        gatewayUiCommandTarget: run.run.gatewayUiCommandTarget,
+      },
+      pendingInputAuthorityFingerprint: outcome === "stale-proof" ? "stale-proof" : pendingProof,
+      assertSourceCurrent: () => source.signal.throwIfAborted(),
+      onAnswerProcessed,
+    });
+    await backendEntered.promise;
+    if (outcome === "source-revoked") {
+      source.abort();
+    } else if (outcome === "creator-route-changed") {
+      operation.bindToolAuthorityRoute({ provider: "openai", model: "new-fallback" });
+    } else if (outcome === "creator-reassigned") {
+      operation.complete();
+      replacement = createTestReplyOperation({ sessionKey, sessionId: "replacement-session" });
+    }
+    releaseBackend.resolve();
+    if (outcome === "accepted") {
+      await expect(claim).resolves.toBe(true);
+      expect(resolved).toHaveBeenCalledOnce();
+      expect(onAnswerProcessed).toHaveBeenCalledOnce();
+      expect(broker.get({ id: questionId }).question).toMatchObject({ status: "answered" });
+      expect(operation.personalToolParticipants?.resolve("bob")).toMatchObject({
+        profileId: "bob",
+        name: "Bob",
+        gatewayUiCommandTarget: { connId: "bob-tab", profileId: "bob" },
+      });
+      expect(claimPendingUserInputAnswer).toHaveBeenCalledWith(
+        "Continue",
+        expect.objectContaining({
+          pendingInputAuthorityFingerprint: creatorFingerprint,
+          toolAuthorityFingerprint: creatorFingerprint,
+        }),
+        expect.any(Function),
+        "source-bound",
+      );
+    } else {
+      await expect(claim).rejects.toBeInstanceOf(QuestionDispatchRefusedError);
+      expect(resolved).not.toHaveBeenCalled();
+      expect(onAnswerProcessed).not.toHaveBeenCalled();
+      expect(broker.get({ id: questionId }).question).toMatchObject({ status: "pending" });
+      expect(broker.get({ id: questionId }).question.answers).toBeUndefined();
+      expect(question.isResolving()).toBe(false);
+      expect(() => operation.personalToolParticipants?.resolve("bob")).toThrow(
+        outcome === "creator-reassigned"
+          ? "This turn has ended; ask again in a new turn."
+          : "User is not a participant",
+      );
+      if (replacement) {
+        expect(replacement.personalToolParticipants).toBeUndefined();
+      }
+    }
+  } finally {
+    releaseBackend.resolve();
+    question.dispose();
+    broker.stop();
+    replacement?.complete();
+    if (!operation.result) {
+      operation.complete();
+    }
+  }
+});

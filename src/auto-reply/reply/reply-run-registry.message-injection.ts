@@ -531,17 +531,25 @@ export async function claimPendingReplyMessageInjectionTarget(params: {
   } catch {
     return false;
   }
-  const { toolAuthorityOverlay, ...backendOptions } = params.options;
+  const { toolAuthorityOverlay, personalToolParticipant, ...backendOptions } = params.options;
+  const participant = personalToolParticipant ?? toolAuthorityOverlay;
   const projectedToolAuthorityFingerprint =
     owner.projectToolAuthorityFingerprint(toolAuthorityOverlay);
   const creatorToolAuthorityFingerprint = normalizeOptionalString(
     backend.toolAuthorityFingerprint ?? owner.toolAuthorityFingerprint,
   );
+  // The prepared followup owner may prove equivalent policy at the active
+  // model route. Keep that pending-input-only proof through the host sink.
+  const claimToolAuthorityFingerprint =
+    normalizeOptionalString(backendOptions.pendingInputAuthorityFingerprint) ===
+    creatorToolAuthorityFingerprint
+      ? creatorToolAuthorityFingerprint
+      : projectedToolAuthorityFingerprint;
   const assertClaimCurrent = () => {
     assertTargetCurrent();
     if (
       !creatorToolAuthorityFingerprint ||
-      projectedToolAuthorityFingerprint !== creatorToolAuthorityFingerprint
+      claimToolAuthorityFingerprint !== creatorToolAuthorityFingerprint
     ) {
       throw new QuestionDispatchRefusedError(
         "question answer caller policy does not match its creator",
@@ -549,7 +557,7 @@ export async function claimPendingReplyMessageInjectionTarget(params: {
     }
     const current = owner.resolve({
       options: claimOptions,
-      personalToolParticipant: toolAuthorityOverlay,
+      personalToolParticipant: participant,
       assertCurrent: params.assertSourceCurrent,
     });
     if (
@@ -566,7 +574,7 @@ export async function claimPendingReplyMessageInjectionTarget(params: {
   // again at final I/O; projection itself still receives an immediate liveness check.
   const claimOptions = {
     ...backendOptions,
-    toolAuthorityFingerprint: projectedToolAuthorityFingerprint,
+    toolAuthorityFingerprint: claimToolAuthorityFingerprint,
   };
   assertTargetCurrent();
   const claimed = await guarded.claimPendingUserInputAnswer(
@@ -577,7 +585,7 @@ export async function claimPendingReplyMessageInjectionTarget(params: {
     ...(params.assertPreparedCurrent ? ([params.assertPreparedCurrent] as const) : []),
   );
   if (claimed) {
-    owner.acceptParticipant?.(toolAuthorityOverlay);
+    owner.acceptParticipant?.(participant);
   }
   return claimed;
 }

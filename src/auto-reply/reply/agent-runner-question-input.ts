@@ -12,7 +12,10 @@ import type { RunReplyAgentParams } from "./agent-runner-core.js";
 import { admitFollowupRunLifecycle, completeFollowupRunLifecycle } from "./queue/lifecycle.js";
 import { resolveFollowupAbortSignal } from "./queue/types.js";
 import { resolveReplyOperationRunState } from "./reply-operation-run-state.js";
-import type { ReplyToolAuthorityOverlay } from "./reply-run-registry.contracts.js";
+import type {
+  ReplyMessageInjectionOptions,
+  ReplyToolAuthorityOverlay,
+} from "./reply-run-registry.contracts.js";
 import { claimPendingReplyMessageInjectionTarget, replyRunRegistry } from "./reply-run-registry.js";
 import { resolveInboundReplyToolAuthorityOverlay } from "./reply-tool-authority.js";
 import { readPreparedConversationBindingSourceRoutes } from "./session-conversation-binding.js";
@@ -27,7 +30,7 @@ type ReplyQuestionInputParams = Pick<
   | "sessionCtx"
   | "sessionEntry"
   | "sessionKey"
->;
+> & { pendingInputAuthorityFingerprint?: string };
 
 type ReplyQuestionInputResult =
   | { handled: false }
@@ -38,6 +41,8 @@ export async function claimPendingReplyQuestionInput(params: {
   sessionKey: string;
   text: string;
   caller: ReplyToolAuthorityOverlay;
+  personalToolParticipant?: ReplyMessageInjectionOptions["personalToolParticipant"];
+  pendingInputAuthorityFingerprint?: string;
   assertSourceCurrent: () => void;
   assertPreparedCurrent?: () => Promise<void>;
   sourceBindingRoutes?: Parameters<
@@ -70,6 +75,8 @@ export async function claimPendingReplyQuestionInput(params: {
       options: {
         isInboundUserMessage: true,
         toolAuthorityOverlay: params.caller,
+        personalToolParticipant: params.personalToolParticipant,
+        pendingInputAuthorityFingerprint: params.pendingInputAuthorityFingerprint,
         userTurnTranscriptRecorder: params.sourceRecorder,
         questionSourceBindingRoutes: params.sourceBindingRoutes,
       },
@@ -87,6 +94,23 @@ export async function claimPendingReplyQuestionInput(params: {
     }
     throw error;
   }
+}
+
+/** Both admission paths preserve the existing retry notice for this exact validation outcome. */
+export function createQuestionInvalidAnswerReply(error: unknown): ReplyPayload | undefined {
+  const rejection = readQuestionRejection(error);
+  if (rejection?.code !== "INVALID_REQUEST" || rejection.reason !== "QUESTION_INVALID_ANSWER") {
+    return undefined;
+  }
+  const detail = error instanceof Error ? error.message.trim() : "";
+  return markReplyPayloadForSourceSuppressionDelivery({
+    text: `${
+      detail
+        ? `The answer was not accepted: ${detail}.`
+        : "The answer was not accepted because a question is still unanswered."
+    } The question is still open, so reply again and answer every question by number or question id.`,
+    isError: true,
+  });
 }
 
 /** Question-only runtimes accept answers without exposing ordinary steering. */
@@ -137,6 +161,13 @@ export async function runReplyQuestionInput(
       sessionKey,
       text,
       caller,
+      personalToolParticipant: {
+        operatorAuthority: followupRun.operatorAuthority,
+        senderId: followupRun.run.senderId,
+        senderName: followupRun.run.senderName,
+        gatewayUiCommandTarget: followupRun.run.gatewayUiCommandTarget,
+      },
+      pendingInputAuthorityFingerprint: params.pendingInputAuthorityFingerprint,
       assertSourceCurrent,
       sourceBindingRoutes: readPreparedConversationBindingSourceRoutes(params.sessionCtx),
       sourceRecorder: followupRun.userTurnTranscriptRecorder,
@@ -168,23 +199,12 @@ export async function runReplyQuestionInput(
       };
     }
     // Validation precedes commitment: keep the question open and explain how to retry.
-    const rejection = readQuestionRejection(error);
-    if (rejection?.code === "INVALID_REQUEST" && rejection.reason === "QUESTION_INVALID_ANSWER") {
-      const detail = error instanceof Error ? error.message.trim() : "";
+    const rejectedReply = createQuestionInvalidAnswerReply(error);
+    if (rejectedReply) {
       if (state) {
         state.admission = { status: "skipped", reason: "question-response-rejected" };
       }
-      return {
-        handled: true,
-        payload: markReplyPayloadForSourceSuppressionDelivery({
-          text: `${
-            detail
-              ? `The answer was not accepted: ${detail}.`
-              : "The answer was not accepted because a question is still unanswered."
-          } The question is still open, so reply again and answer every question by number or question id.`,
-          isError: true,
-        }),
-      };
+      return { handled: true, payload: rejectedReply };
     }
     if (!(error instanceof QuestionAnswerUnconfirmedError)) {
       throw error;

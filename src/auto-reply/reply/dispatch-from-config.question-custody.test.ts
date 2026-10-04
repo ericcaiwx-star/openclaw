@@ -692,140 +692,171 @@ describe("dispatch input custody after a question response", () => {
     }
   });
 
-  it("reports an incomplete multi-question answer and keeps the question open", async () => {
-    const fixture = createQuestionDispatch("incomplete-answer");
-    const dispatcher = createDispatcher();
-    const broker = new EmbeddedQuestionBroker(createTestGatewayScheduler());
-    const questionId = "ask_incomplete_answer";
-    const questions = [
-      { id: "destination", header: "Where", question: "Where to?" },
-      { id: "budget", header: "Budget", question: "How much?" },
-    ];
-    broker.request({
-      id: questionId,
-      sessionKey: fixture.operation.key,
-      questions: questions.map(({ id, ...question }) => ({
-        ...question,
-        questionId: id,
-        options: [],
-      })),
-    });
-    const onResolved = vi.fn();
-    broker.subscribe((event) => {
-      if (event.event === "question.resolved") {
-        onResolved(event.payload);
-      }
-    });
-    const onResumed = vi.fn();
-    const answer = broker.waitAnswer({ id: questionId, includeResolutionId: true });
-    const resumed = answer.then(onResumed);
-    const gatewayCall: AgentQuestionDispatcher = {
-      version: 2,
-      call: async ({ method, params, authority }) => {
-        if (authority.kind === "source-bound") {
-          authority.assertCurrent();
+  it.each(["early", "later"] as const)(
+    "reports an incomplete multi-question answer through %s dispatch and keeps the question open",
+    async (admissionPath) => {
+      const fixture = createQuestionDispatch(`incomplete-answer-${admissionPath}`);
+      const dispatcher = createDispatcher();
+      const broker = new EmbeddedQuestionBroker(createTestGatewayScheduler());
+      const questionId = "ask_incomplete_answer";
+      const questions = [
+        { id: "destination", header: "Where", question: "Where to?" },
+        { id: "budget", header: "Budget", question: "How much?" },
+      ];
+      broker.request({
+        id: questionId,
+        sessionKey: fixture.operation.key,
+        questions: questions.map(({ id, ...question }) => ({
+          ...question,
+          questionId: id,
+          options: [],
+        })),
+      });
+      const onResolved = vi.fn();
+      broker.subscribe((event) => {
+        if (event.event === "question.resolved") {
+          onResolved(event.payload);
         }
-        return broker.call(method, params);
-      },
-    };
-    // The creator authority the source-bound claim path requires; this fixture
-    // accepts any caller so the test exercises answer validation, not policy.
-    const authority = createAgentQuestionAnswerAuthority({
-      sessionKey: fixture.operation.key,
-      fingerprint: "question-custody-fixture",
-      project: () => "question-custody-fixture",
-      assertActive: () => {},
-    });
-    const question = withAgentQuestionAnswerAuthority(authority, () =>
-      registerPendingAgentQuestion({
-        sessionKey: fixture.operation.key,
-        questionId,
-        questions,
-        gatewayCall,
-        answer,
-      }),
-    );
-    question.attachRegistration(Promise.resolve());
-    const replyResolver = vi.fn(async (ctx: MsgContext, opts?: GetReplyOptions) => {
-      const text = ctx.BodyForAgent;
-      if (typeof text !== "string") {
-        throw new Error("missing question answer text");
-      }
-      const result = await runReplyQuestionInput({
-        commandBody: text,
-        followupRun: createQueueTestRun({ prompt: text }),
-        sessionKey: fixture.operation.key,
-        sessionCtx: ctx,
-        opts,
       });
-      expect(result.handled).toBe(true);
-      return result.handled ? result.payload : undefined;
-    });
-    const dispatch = (text: string, messageId: string) =>
-      dispatchReplyFromConfig({
-        ctx: { ...fixture.ctx, agentText: text, MessageSid: messageId },
-        cfg: { ...automaticDirectReplyConfig, diagnostics: { enabled: true } },
-        dispatcher,
-        replyOptions: {
-          sourceReplyDeliveryMode: "message_tool_only",
-          turnAdoptionLifecycle: { onAdopted: async () => {} },
+      const onResumed = vi.fn();
+      const answer = broker.waitAnswer({ id: questionId, includeResolutionId: true });
+      const resumed = answer.then(onResumed);
+      const gatewayCall: AgentQuestionDispatcher = {
+        version: 2,
+        call: async ({ method, params, authority }) => {
+          if (authority.kind === "source-bound") {
+            authority.assertCurrent();
+          }
+          return broker.call(method, params);
         },
-        replyResolver,
+      };
+      // The creator authority the source-bound claim path requires; this fixture
+      // accepts any caller so the test exercises answer validation, not policy.
+      const authority = createAgentQuestionAnswerAuthority({
+        sessionKey: fixture.operation.key,
+        fingerprint: "question-custody-fixture",
+        project: () => "question-custody-fixture",
+        assertActive: () => {},
       });
-    try {
-      await dispatch("Lisbon", "incomplete-answer");
-      expect(dispatcher.sendFinalReply).toHaveBeenCalledOnce();
-      expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(
-        expect.objectContaining({
-          text: expect.stringContaining("The answer was not accepted: question 'budget'"),
-          isError: true,
+      const question = withAgentQuestionAnswerAuthority(authority, () =>
+        registerPendingAgentQuestion({
+          sessionKey: fixture.operation.key,
+          questionId,
+          questions,
+          gatewayCall,
+          answer,
         }),
       );
-      expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(
-        expect.objectContaining({ text: expect.stringContaining("still open") }),
-      );
-      expect(diagnosticMocks.logMessageProcessed).toHaveBeenCalledWith(
-        expect.objectContaining({ outcome: "error", reason: "question-response-rejected" }),
-      );
-      expect(question.isResolving()).toBe(false);
-      expect(broker.get({ id: questionId }).question).toMatchObject({ status: "pending" });
-      expect(broker.get({ id: questionId }).question.answers).toBeUndefined();
-      expect(onResolved).not.toHaveBeenCalled();
-      expect(onResumed).not.toHaveBeenCalled();
-      expect(fixture.cancel).not.toHaveBeenCalled();
-
-      await dispatch("Lisbon", "incomplete-answer");
-      expect(replyResolver).toHaveBeenCalledOnce();
-      expect(dispatcher.sendFinalReply).toHaveBeenCalledOnce();
-      expect(onResolved).not.toHaveBeenCalled();
-
-      await dispatch("1: Lisbon\n2: 2000", "complete-answer");
-      expect(broker.get({ id: questionId }).question).toMatchObject({
-        status: "answered",
-        answers: { answers: { destination: ["Lisbon"], budget: ["2000"] } },
+      question.attachRegistration(Promise.resolve());
+      const replyResolver = vi.fn(async (ctx: MsgContext, opts?: GetReplyOptions) => {
+        const text = ctx.BodyForAgent;
+        if (typeof text !== "string") {
+          throw new Error("missing question answer text");
+        }
+        const result = await runReplyQuestionInput({
+          commandBody: text,
+          followupRun: createQueueTestRun({ prompt: text }),
+          sessionKey: fixture.operation.key,
+          sessionCtx: ctx,
+          opts,
+        });
+        expect(result.handled).toBe(true);
+        return result.handled ? result.payload : undefined;
       });
-      await resumed;
-      expect(onResolved).toHaveBeenCalledExactlyOnceWith({
-        id: questionId,
-        status: "answered",
-        answers: { answers: { destination: ["Lisbon"], budget: ["2000"] } },
-      });
-      expect(onResumed).toHaveBeenCalledOnce();
-      expect(replyResolver).toHaveBeenCalledTimes(2);
-      expect(dispatcher.sendFinalReply).toHaveBeenCalledOnce();
+      const onAdopted = vi.fn(async () => {});
+      const dispatchStates: ReplyOperationRunState[] = [];
+      const dispatch = (text: string, messageId: string) => {
+        const replyState: ReplyOperationRunState = {};
+        dispatchStates.push(replyState);
+        return dispatchReplyFromConfig({
+          ctx:
+            admissionPath === "early"
+              ? buildTestCtx({
+                  ...fixture.ctx,
+                  Body: text,
+                  RawBody: text,
+                  BodyForAgent: text,
+                  BodyForCommands: text,
+                  CommandBody: text,
+                  commandText: text,
+                  MessageSid: messageId,
+                })
+              : { ...fixture.ctx, agentText: text, MessageSid: messageId },
+          cfg: { ...automaticDirectReplyConfig, diagnostics: { enabled: true } },
+          dispatcher,
+          replyOptions: {
+            sourceReplyDeliveryMode: "message_tool_only",
+            turnAdoptionLifecycle: { onAdopted },
+            [REPLY_OPERATION_RUN_STATE]: replyState,
+          },
+          replyResolver,
+        });
+      };
+      try {
+        await dispatch("Lisbon", "incomplete-answer");
+        expect(dispatcher.sendFinalReply).toHaveBeenCalledOnce();
+        expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(
+          expect.objectContaining({
+            text: expect.stringContaining("The answer was not accepted: question 'budget'"),
+            isError: true,
+          }),
+        );
+        expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(
+          expect.objectContaining({ text: expect.stringContaining("still open") }),
+        );
+        if (admissionPath === "later") {
+          expect(diagnosticMocks.logMessageProcessed).toHaveBeenCalledWith(
+            expect.objectContaining({ outcome: "error", reason: "question-response-rejected" }),
+          );
+        }
+        expect(dispatchStates[0]).toMatchObject({
+          questionInputHandled: true,
+          admission: { status: "skipped", reason: "question-response-rejected" },
+        });
+        expect(onAdopted).not.toHaveBeenCalled();
+        expect(replyRunRegistry.get(fixture.operation.key)).toBe(fixture.operation);
+        expect(question.isResolving()).toBe(false);
+        expect(broker.get({ id: questionId }).question).toMatchObject({ status: "pending" });
+        expect(broker.get({ id: questionId }).question.answers).toBeUndefined();
+        expect(onResolved).not.toHaveBeenCalled();
+        expect(onResumed).not.toHaveBeenCalled();
+        expect(fixture.cancel).not.toHaveBeenCalled();
 
-      await dispatch("1: Lisbon\n2: 2000", "complete-answer");
-      expect(replyResolver).toHaveBeenCalledTimes(2);
-      expect(onResolved).toHaveBeenCalledOnce();
-      expect(onResumed).toHaveBeenCalledOnce();
-      expect(fixture.cancel).not.toHaveBeenCalled();
-    } finally {
-      question.dispose();
-      broker.stop();
-      await resumed;
-      fixture.operation.complete();
-    }
-  });
+        await dispatch("Lisbon", "incomplete-answer");
+        expect(replyResolver).toHaveBeenCalledTimes(admissionPath === "early" ? 0 : 1);
+        expect(dispatcher.sendFinalReply).toHaveBeenCalledOnce();
+        expect(onResolved).not.toHaveBeenCalled();
+
+        await dispatch("1: Lisbon\n2: 2000", "complete-answer");
+        expect(broker.get({ id: questionId }).question).toMatchObject({
+          status: "answered",
+          answers: { answers: { destination: ["Lisbon"], budget: ["2000"] } },
+        });
+        await resumed;
+        expect(onResolved).toHaveBeenCalledExactlyOnceWith({
+          id: questionId,
+          status: "answered",
+          answers: { answers: { destination: ["Lisbon"], budget: ["2000"] } },
+        });
+        expect(onResumed).toHaveBeenCalledOnce();
+        expect(onAdopted).toHaveBeenCalledTimes(admissionPath === "early" ? 1 : 0);
+        expect(replyResolver).toHaveBeenCalledTimes(admissionPath === "early" ? 0 : 2);
+        expect(dispatcher.sendFinalReply).toHaveBeenCalledOnce();
+
+        await dispatch("1: Lisbon\n2: 2000", "complete-answer");
+        expect(replyResolver).toHaveBeenCalledTimes(admissionPath === "early" ? 0 : 2);
+        expect(onResolved).toHaveBeenCalledOnce();
+        expect(onResumed).toHaveBeenCalledOnce();
+        expect(onAdopted).toHaveBeenCalledTimes(admissionPath === "early" ? 1 : 0);
+        expect(fixture.cancel).not.toHaveBeenCalled();
+      } finally {
+        question.dispose();
+        broker.stop();
+        await resumed;
+        fixture.operation.complete();
+      }
+    },
+  );
 
   it.each([
     { code: "INVALID_REQUEST", reason: "QUESTION_ID_IN_USE" },
