@@ -12,7 +12,8 @@ import type { RegisterSubagentRunOptions } from "../registry/subagent-registry.t
 import { testing as swarmSchedulerTesting } from "../swarm/swarm-scheduler.test-support.js";
 import * as spawnTest from "./subagent-spawn.test-helpers.js";
 
-const { createConfigOverride, createSubagentRegistrationScopeForTest, inheritedSpawnCases } = spawnTest;
+const { createConfigOverride, createSubagentRegistrationScopeForTest, inheritedSpawnCases } =
+  spawnTest;
 const { installSessionStoreCaptureMock, loadSubagentSpawnModuleForTest } = spawnTest;
 const { supportedSpawnModelChoice } = spawnTest;
 

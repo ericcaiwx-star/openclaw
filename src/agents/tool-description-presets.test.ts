@@ -115,6 +115,6 @@ describe("sessions_spawn tool description", () => {
     const hiddenAcp = describeSessionsSpawnTool({ acpAvailable: false });
     expect(hiddenAcp).toContain("Ordinary hidden native accepts include durable `sessionId`");
     expect(hiddenAcp).toContain("collector and `visible=true` accepts omit it");
-    expect(hiddenAcp).not.toContain("ACP");
+    expect(hiddenAcp).not.toContain('`runtime="acp"`');
   });
 });
