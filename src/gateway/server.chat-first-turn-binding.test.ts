@@ -1,5 +1,4 @@
 import { createServer, type ServerResponse } from "node:http";
-import { setTimeout as delay } from "node:timers/promises";
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import {
@@ -371,7 +370,6 @@ it(
             content_index: 0,
             delta,
           });
-          await delay(15);
         }
         writeSse(response, {
           type: "response.output_text.done",
