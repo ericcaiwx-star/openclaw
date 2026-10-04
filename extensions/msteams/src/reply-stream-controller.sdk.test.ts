@@ -416,11 +416,11 @@ describe("Teams native final text preparation", () => {
   it("finalizes a progress table reply as an extension of the streamed text", async () => {
     const scenario = "prefix-progress-table";
     const text = "Tools found:\n\n| Tool | Scope |\n|---|---|\n| whoami | Graph |\n| list | MCP |";
-    const { acknowledgements, controller, logger } = createLoopbackController(scenario, {
+    const { controller, firstAcknowledgement, logger } = createLoopbackController(scenario, {
       streaming: { mode: "progress", progress: { toolProgress: true } },
     });
     await controller.pushPlanProgress([{ step: "List tools", status: "in_progress" }]);
-    await expect.poll(() => acknowledgements.length).toBeGreaterThan(0);
+    await firstAcknowledgement;
 
     expect(controller.preparePayload({ text })).toBeUndefined();
     const result = await controller.finalize();
