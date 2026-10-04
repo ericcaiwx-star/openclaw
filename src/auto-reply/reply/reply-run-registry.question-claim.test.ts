@@ -119,8 +119,10 @@ it.each([false, true, undefined])(
           answer: Promise.resolve({ status: "pending" }),
           gatewayCall: {
             version: 2,
-            call: async ({ authority }) => {
-              if (authority.kind === "source-bound") authority.assertCurrent();
+            call: async ({ authority: requestAuthority }) => {
+              if (requestAuthority.kind === "source-bound") {
+                requestAuthority.assertCurrent();
+              }
               resolved();
               return {};
             },
@@ -287,8 +289,8 @@ it("rejects a lower-authority question registered during V2 backend preparation"
   };
   // Mirrors the bundled adapter: the backend relies on the supplied
   // source-bound assertion and does not compare tool fingerprints itself.
-  const backendStarted = createDeferred<void>();
-  const releaseBackend = createDeferred<void>();
+  const backendStarted = createDeferred();
+  const releaseBackend = createDeferred();
   const backendClaim = vi.fn(
     async (
       text: string,
