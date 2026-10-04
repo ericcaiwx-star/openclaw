@@ -1,0 +1,104 @@
+{
+  "name": "QQ malformed tool call secretless review",
+  "permissions": {},
+  "concurrency": {
+    "group": "qq-malformed-independent-review",
+    "cancel-in-progress": false
+  },
+  "jobs": {
+    "proof": {
+      "runs-on": "ubuntu-24.04",
+      "timeout-minutes": 35,
+      "strategy": {
+        "fail-fast": false,
+        "max-parallel": 4,
+        "matrix": {
+          "include": [
+            {
+              "pr": 164274,
+              "phase": "head",
+              "sha": "eefde2c625bc8736ec78c22c0596403be1fcc581",
+              "pnpm": "12.5.1"
+            },
+            {
+              "pr": 164274,
+              "phase": "base",
+              "sha": "641f774c407f78f9e569e9d373ecb2660aa81bb8",
+              "pnpm": "12.5.1"
+            },
+            {
+              "pr": 158568,
+              "phase": "head",
+              "sha": "f116adaa665fa5e5eafdd2bdb31790cc6e642a47",
+              "pnpm": "12.4.2"
+            },
+            {
+              "pr": 158568,
+              "phase": "base",
+              "sha": "deb168691b2a10fde299ec0f911c8a5cbd9d0dda",
+              "pnpm": "12.4.2"
+            }
+          ]
+        }
+      },
+      "steps": [
+        {
+          "name": "Prepare public sources and pinned toolchain without credentials",
+          "env": {
+            "TARGET_SHA": "${{ matrix.sha }}",
+            "TARGET_PNPM": "${{ matrix.pnpm }}"
+          },
+          "run": "set -euo pipefail\nmkdir evidence harness source\ngit -c core.hooksPath=/dev/null -C harness init\ngit -c core.hooksPath=/dev/null -C harness fetch --depth=1 https://github.com/ericcaiwx-star/openclaw.git \"$GITHUB_SHA\"\ngit -c core.hooksPath=/dev/null -C harness checkout --detach FETCH_HEAD\ngit -c core.hooksPath=/dev/null -C source init\ngit -c core.hooksPath=/dev/null -C source fetch --depth=1 https://github.com/openclaw/openclaw.git \"$TARGET_SHA\"\ngit -c core.hooksPath=/dev/null -C source checkout --detach FETCH_HEAD\ntest \"$(git -C source rev-parse HEAD)\" = \"$TARGET_SHA\"\ngit -C source status --porcelain\ngit -C source rev-parse HEAD > evidence/source-sha.txt\nprintf '%s\\n' \"$GITHUB_SHA\" > evidence/harness-sha.txt\nmkdir -p \"$RUNNER_TEMP/toolchain\" \"$RUNNER_TEMP/secretless-home\"\ncd \"$RUNNER_TEMP/toolchain\"\ncurl --fail --silent --show-error -O https://nodejs.org/dist/v24.19.0/node-v24.19.0-linux-x64.tar.xz\ncurl --fail --silent --show-error -O https://nodejs.org/dist/v24.19.0/SHASUMS256.txt\ngrep ' node-v24.19.0-linux-x64.tar.xz$' SHASUMS256.txt | sha256sum -c -\ntar -xf node-v24.19.0-linux-x64.tar.xz\nexport PATH=\"$RUNNER_TEMP/toolchain/node-v24.19.0-linux-x64/bin:$PATH\"\nnpm install --prefix \"$RUNNER_TEMP/toolchain/pnpm\" pnpm@\"$TARGET_PNPM\"\nprintf '%s\\n' \"$RUNNER_TEMP/toolchain/node-v24.19.0-linux-x64/bin:$RUNNER_TEMP/toolchain/pnpm/node_modules/.bin:$PATH\" > \"$GITHUB_WORKSPACE/evidence/proof-path.txt\"\nnode --version\n\"$RUNNER_TEMP/toolchain/pnpm/node_modules/.bin/pnpm\" --version\n"
+        },
+        {
+          "name": "Install in an empty environment",
+          "run": "set -euo pipefail\nexport PATH=\"$(cat evidence/proof-path.txt)\"\ncd source\ntest \"$(node -p 'JSON.parse(require(\"fs\").readFileSync(\"package.json\")).packageManager.split(\"+\")[0]')\" = \"pnpm@$TARGET_PNPM\"\nenv -i PATH=\"$PATH\" HOME=\"$RUNNER_TEMP/secretless-home\" CI=1 pnpm install --frozen-lockfile > ../evidence/install.log 2>&1\n",
+          "env": {
+            "TARGET_PNPM": "${{ matrix.pnpm }}"
+          }
+        },
+        {
+          "name": "Independent regression and neighboring tests",
+          "env": {
+            "PR": "${{ matrix.pr }}",
+            "PHASE": "${{ matrix.phase }}"
+          },
+          "run": "set +e\nset -uo pipefail\nexport PATH=\"$(cat evidence/proof-path.txt)\"\nif [ \"$PR\" = 164274 ]; then\n  cp harness/harness/terminal-boundaries.test.ts source/src/agents/embedded-agent-runner/run/qq-review-boundaries.test.ts\n  TARGETS='src/agents/embedded-agent-runner/run/qq-review-boundaries.test.ts src/agents/embedded-agent-runner/run/terminal-resolution.test.ts src/agents/embedded-agent-runner/run/incomplete-turn-recovery.test.ts src/agents/embedded-agent-runner/run/incomplete-turn-resolution.test.ts'\nelse\n  cp harness/harness/158568-boundaries.test.ts source/src/agents/embedded-agent-runner/run/qq-review-boundaries.test.ts\n  TARGETS='src/agents/embedded-agent-runner/run/qq-review-boundaries.test.ts src/agents/embedded-agent-runner/run/attempt-recovery.test.ts src/agents/embedded-agent-runner/run/run-attempt-dispatch.owner.test.ts src/agents/embedded-agent-runner/run/incomplete-turn-recovery.test.ts'\nfi\ncd source\nenv -i PATH=\"$PATH\" HOME=\"$RUNNER_TEMP/secretless-home\" CI=1 OPENCLAW_TEST_PROJECTS_PARALLEL=1 OPENCLAW_VITEST_MAX_WORKERS=1 pnpm test $TARGETS > ../evidence/unit.log 2>&1\nCODE=$?\nprintf '%s\\n' \"$CODE\" > ../evidence/unit-exit.txt\ntail -55 ../evidence/unit.log\nprintf 'REMOTE_UNIT_EXIT=%s\\n' \"$CODE\"\n"
+        },
+        {
+          "name": "Build exact source qaRuntime",
+          "run": "set -euo pipefail\nexport PATH=\"$(cat evidence/proof-path.txt)\"\ncd source\nenv -i PATH=\"$PATH\" HOME=\"$RUNNER_TEMP/secretless-home\" CI=1 NODE_OPTIONS=--max-old-space-size=6144 node --import ./scripts/tsx.mjs scripts/build-all.mts qaRuntime > ../evidence/build.log 2>&1\n"
+        },
+        {
+          "name": "CLI transcript continuation and effect counts",
+          "env": {
+            "PR": "${{ matrix.pr }}"
+          },
+          "run": "set +e\nset -uo pipefail\nexport PATH=\"$(cat evidence/proof-path.txt)\"\nenv -i PATH=\"$PATH\" HOME=\"$RUNNER_TEMP/secretless-home\" CI=1 node harness/harness/runtime.mjs \"$GITHUB_WORKSPACE/source\" \"$PR\" > evidence/runtime.log 2>&1\nCODE=$?\nprintf '%s\\n' \"$CODE\" > evidence/runtime-exit.txt\ncat evidence/runtime.log\nprintf 'REMOTE_RUNTIME_EXIT=%s\\n' \"$CODE\"\nROOT=$(sed -n 's/^RUNTIME_PROOF_ROOT //p' evidence/runtime.log)\nif [ -n \"$ROOT\" ]; then cp -R \"$ROOT\" evidence/runtime-details; fi\n"
+        },
+        {
+          "name": "Preserve independent evidence",
+          "if": "always()",
+          "uses": "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02",
+          "with": {
+            "name": "qq-review-${{ matrix.pr }}-${{ matrix.phase }}",
+            "path": "evidence",
+            "retention-days": 14
+          }
+        },
+        {
+          "name": "Require exact-head proofs to pass",
+          "if": "matrix.phase == 'head'",
+          "run": "test \"$(cat evidence/unit-exit.txt)\" = 0\ntest \"$(cat evidence/runtime-exit.txt)\" = 0\n"
+        }
+      ]
+    }
+  },
+  "on": {
+    "push": {
+      "branches": [
+        "codex/qq-malformed-review-20261004"
+      ]
+    }
+  }
+}
