@@ -1,3 +1,4 @@
+import { getAgentToolAssistantTurnId } from "../../packages/agent-core/src/tool-execution-context.js";
 import { assertMemoryAudienceSession } from "./memory-audience.js";
 import { resolveMemoryCapabilityRegistration } from "./memory-state.js";
 import { capturePluginLifecycleAuthority } from "./registry-lifecycle.js";
@@ -49,6 +50,10 @@ export function createPluginToolFactoryContext(params: {
   };
   return {
     ...context,
+    getAssistantTurnId() {
+      assertInvocationCurrent();
+      return getAgentToolAssistantTurnId();
+    },
     ...(continuation
       ? {
           requesterSenderId: continuation.senderId,

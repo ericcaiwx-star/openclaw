@@ -62,12 +62,44 @@ describe("Crabbox conversation tool", () => {
       presentation: "desktop",
       idempotencyKey: expect.stringMatching(/^[a-f0-9]{64}$/u),
     });
+    expect(request.mock.calls[0]?.[1].idempotencyKey).toBe(
+      "4ff351b800d34b95e3a304e2fe76ce39cb4b5b585af2a071f8e6008912fc6a98",
+    );
     const second = fixture({ ...context, sessionId: "session-two" });
     await second.tool!.execute("call-one", params);
     expect(second.request.mock.calls[0]?.[1].idempotencyKey).not.toBe(
       request.mock.calls[0]?.[1].idempotencyKey,
     );
   });
+
+  it.each([
+    ["create", { action: "create" }, "idempotencyKey"],
+    [
+      "background start",
+      { action: "exec", argv: ["node", "server.mjs"], background: true },
+      "processId",
+    ],
+  ] as const)(
+    "scopes repeated provider call ids for %s while preserving assistant replays",
+    async (_name, args, key) => {
+      let currentIdentity: string | undefined;
+      const { tool, request } = fixture({ ...context, getAssistantTurnId: () => currentIdentity });
+      const invoke = (identity: string | undefined) => {
+        currentIdentity = identity;
+        return tool!.execute("repeated-call", args);
+      };
+      await invoke("assistant-one");
+      await invoke("assistant-two");
+      await invoke("assistant-one");
+      await invoke(undefined);
+      const keys = request.mock.calls.map((call) => call[1][key]);
+      expect(keys[1]).not.toBe(keys[0]);
+      expect(keys[2]).toBe(keys[0]);
+      const direct = fixture();
+      await direct.tool!.execute("repeated-call", args);
+      expect(keys[3]).toBe(direct.request.mock.calls[0]?.[1][key]);
+    },
+  );
 
   it("requires a profile choice when more than one is configured and rechecks runtime config", async () => {
     let current = context.config;

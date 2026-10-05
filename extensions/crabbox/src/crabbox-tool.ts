@@ -67,9 +67,18 @@ type CrabboxToolOptions = {
   gateway: OpenClawPluginApi["runtime"]["gateway"];
 };
 
-function operationId(sessionId: string, toolCallId: string): string {
+function operationId(
+  sessionId: string,
+  toolCallId: string,
+  getAssistantTurnId: OpenClawPluginToolContext["getAssistantTurnId"],
+): string {
+  const assistantTurnId = getAssistantTurnId?.();
   return createHash("sha256")
-    .update(JSON.stringify([sessionId, toolCallId]))
+    .update(
+      JSON.stringify(
+        assistantTurnId ? [sessionId, assistantTurnId, toolCallId] : [sessionId, toolCallId],
+      ),
+    )
     .digest("hex");
 }
 
@@ -134,7 +143,7 @@ export function createCrabboxTool({ context, gateway }: CrabboxToolOptions): Any
             "environments.session.create",
             {
               profileId,
-              idempotencyKey: operationId(sessionId, toolCallId),
+              idempotencyKey: operationId(sessionId, toolCallId, context.getAssistantTurnId),
               ...(os ? { os } : {}),
               ...(machineClass ? { machineClass } : {}),
               ...(presentation ? { presentation } : {}),
@@ -170,7 +179,9 @@ export function createCrabboxTool({ context, gateway }: CrabboxToolOptions): Any
           throw new Error("background must be a boolean");
         }
         const processId =
-          params.background === true ? `app-${operationId(sessionId, toolCallId)}` : undefined;
+          params.background === true
+            ? `app-${operationId(sessionId, toolCallId, context.getAssistantTurnId)}`
+            : undefined;
         try {
           return jsonResult(
             await gateway.request(

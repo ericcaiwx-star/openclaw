@@ -195,6 +195,19 @@ That is the opposite argument order from the declarative
 Reading `params` from the first argument of a factory tool returns the tool
 call ID string instead.
 
+For replay-stable operation keys, the optional
+`toolContext.getAssistantTurnId?.()` getter reads the current agent-loop
+assistant identity during `execute`. It prefers the provider's `responseId`,
+then the runtime's durable `turnId`. Combine it with the session and tool call
+ID: providers can reuse a tool call ID in a later assistant response, while a
+replay of the same response must keep the same operation key.
+
+Read this getter inside `execute`, not while constructing the factory: a tool
+can serve several assistant responses. Older hosts may omit the getter, and it
+returns `undefined` outside an agent-loop invocation. Retained reads use the
+context's existing invocation and plugin lifetime guards. This identity is
+metadata, not authorization to perform an effect.
+
 Concrete tools can provide `prepareArguments(args)` to normalize input before
 schema validation. The native agent loop also honors
 `executionMode: "sequential"` when tool calls must run one at a time. These

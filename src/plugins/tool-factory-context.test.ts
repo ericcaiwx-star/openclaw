@@ -1,4 +1,6 @@
 import { describe, expect, expectTypeOf, it, vi } from "vitest";
+import { makeAssistantMessage } from "../../packages/agent-core/src/agent-loop.test-support.js";
+import { runWithAgentToolExecutionContext } from "../../packages/agent-core/src/tool-execution-context.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { createOperationalRunInstanceRef } from "../agents/admitted-run-context.js";
 import {
@@ -123,6 +125,40 @@ describe("plugin tool declaration membership", () => {
 });
 
 describe("versioned plugin tool authority", () => {
+  it("reads current assistant identity through a live context and rejects retained reads after retirement", async () => {
+    const { entry, registry } = register(() => null);
+    const context = createPluginToolFactoryContext({
+      entry,
+      registry,
+      context: { getAssistantTurnId: () => "caller-supplied" },
+    });
+    const readIdentity = context.getAssistantTurnId;
+    expect(readIdentity).toBeTypeOf("function");
+    expect(readIdentity!()).toBeUndefined();
+    for (const [identity, expected] of [
+      [{ responseId: " response-one ", turnId: "ignored" }, "response-one"],
+      [{ turnId: " persisted-turn " }, "persisted-turn"],
+    ] as const) {
+      const toolCall = {
+        type: "toolCall" as const,
+        id: "repeated-call",
+        name: "probe",
+        arguments: {},
+      };
+      await runWithAgentToolExecutionContext(
+        { assistantMessage: { ...makeAssistantMessage([toolCall]), ...identity }, toolCall },
+        async () => {
+          expect(readIdentity!()).toBe(expected);
+          await Promise.resolve();
+          expect(readIdentity!()).toBe(expected);
+        },
+      );
+    }
+    expect(readIdentity!()).toBeUndefined();
+    markPluginRegistryRetired(registry);
+    expect(() => readIdentity!()).toThrow("no longer active");
+  });
+
   it.each([false, true])(
     "does not promote legacy continuation factories, preserving direct owner=%s",
     (directOwner) => {
