@@ -264,22 +264,12 @@ export function createIMessageDurableIngress(options: {
     onError: (error) =>
       options.runtime.error?.(`imessage: ingress drain failed: ${formatErrorMessage(error)}`),
   });
-  let stopTask: Promise<void> | undefined;
-
   return {
     receive: async (raw, receiveOpts) => {
       await monitor.admit({ raw, ...(receiveOpts?.catchup ? { catchup: true } : {}) });
     },
     start: monitor.start,
-    stop: () => {
-      stopTask ??= (async () => {
-        // iMessage debounce must own every accepted claim before disposal so a
-        // restart replays only rows that were never handed to a flush.
-        await monitor.waitForIdle();
-        await monitor.stop();
-      })();
-      return stopTask;
-    },
+    stop: monitor.stop,
     waitForIdle: monitor.waitForIdle,
   };
 }

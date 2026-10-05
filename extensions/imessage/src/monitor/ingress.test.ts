@@ -6,7 +6,9 @@ import {
   closeOpenClawStateDatabaseForTest,
   createChannelIngressQueueForTests,
 } from "openclaw/plugin-sdk/channel-ingress-test-runtime";
+import { withinTest } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { iMessageApprovalControlBindings } from "../approval-control-binding-window.js";
 import { createIMessageDurableIngress } from "./ingress.js";
 
 type IMessageIngressQueue = NonNullable<
@@ -68,6 +70,84 @@ afterEach(() => {
 });
 
 describe("iMessage durable ingress", () => {
+  for (const lane of ["ordinary", "priority"] as const) {
+    it(`cancels a ${lane} approval wait before joining and replays the unadopted row once`, async (context) => {
+      await withQueue(async (queue) => {
+        const dispatchStarted = deferred();
+        let currentTime = Date.now();
+        const now = () => currentTime;
+        const window = iMessageApprovalControlBindings.begin({
+          accountId: "default",
+          conversation: { chatId: 42 },
+        });
+        let abortSignal: AbortSignal | undefined;
+        const waitingDispatch = vi.fn(async (_message, lifecycle) => {
+          abortSignal = lifecycle.abortSignal;
+          dispatchStarted.resolve();
+          await iMessageApprovalControlBindings.wait({
+            accountId: "default",
+            conversation: { chatId: 42 },
+            abortSignal,
+          });
+          return { kind: "completed" } as const;
+        });
+        const ordinaryDispatch = lane === "ordinary" ? waitingDispatch : vi.fn();
+        const ingress = createIMessageDurableIngress({
+          accountId: "default",
+          queue,
+          dispatch: ordinaryDispatch,
+          now,
+          ...(lane === "priority" ? { dispatchPriority: waitingDispatch } : {}),
+          runtime: runtime(),
+        });
+        let stop: Promise<void> | undefined;
+        ingress.start();
+        try {
+          await ingress.receive(rawRow());
+          await withinTest(dispatchStarted.promise, context.signal);
+          stop = ingress.stop();
+          // No wall-clock race: timeout cancellation unwinds cleanup on the broken wrapper.
+          await withinTest(stop, context.signal);
+          expect(abortSignal?.aborted).toBe(true);
+          expect(ingress.stop()).toBe(stop);
+          if (lane === "priority") {
+            expect(ordinaryDispatch).not.toHaveBeenCalled();
+          }
+          const unsettled = await queue.listUnsettled!({ orderBy: "received" });
+          expect(unsettled.pending.length + unsettled.claims.length).toBe(1);
+
+          // Advance the existing retry backoff without adding a wall-clock wait.
+          currentTime += 1_000;
+          const recoveredDispatch = vi.fn(async (_message, lifecycle) => {
+            await lifecycle.onAdopted();
+            return { kind: "completed" } as const;
+          });
+          const recovered = createIMessageDurableIngress({
+            accountId: "default",
+            queue,
+            dispatch: recoveredDispatch,
+            now,
+            runtime: runtime(),
+          });
+          recovered.start();
+          try {
+            await recovered.waitForIdle();
+            await recovered.receive(rawRow());
+            await recovered.waitForIdle();
+            expect(recoveredDispatch).toHaveBeenCalledOnce();
+            expect(await queue.listPending({ limit: "all" })).toEqual([]);
+            expect(await queue.listClaims()).toEqual([]);
+          } finally {
+            await recovered.stop();
+          }
+        } finally {
+          window.close();
+          await (stop ?? ingress.stop());
+        }
+      });
+    });
+  }
+
   it("does not advance the read cursor or dispatch when durable append fails", async () => {
     await withQueue(async (queue) => {
       const appendError = new Error("sqlite unavailable");
