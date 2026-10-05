@@ -810,7 +810,7 @@ test("delete-mode cleanup retains its native receipt while real Gateway deletion
   );
   const join = observeRootWork();
   try {
-    expect(controller.startSubagentAnnounceCleanupFlow(runId, entry)).toBe(true);
+    expect(controller.startSubagentAnnounceCleanupFlow(entry)).toBe(true);
     await join();
     const completed = getCurrentSubagentRunOwner(subagentRuns, entry);
     if (!completed) {

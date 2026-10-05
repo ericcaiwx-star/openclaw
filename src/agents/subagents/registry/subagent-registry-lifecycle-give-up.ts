@@ -200,3 +200,56 @@ export async function finishSubagentCleanup(
     isCurrent() &&
     entry.execution.suppressSessionEffects !== true &&
     context.sessionEffectsHostCurrent(entry);
+  if (shouldRemoveSubagentAttachments(entry, cleanup) && sessionEffectsCurrent()) {
+    await safeRemoveAttachmentsDir(entry, sessionEffectsCurrent);
+  }
+  if (!isCurrent()) {
+    if (cleanupGeneration !== undefined) {
+      await retireSupersededCleanupIfNeeded(context, entry, cleanupGeneration);
+    }
+    return;
+  }
+  entry = getCurrentSubagentRunOwner(context.options.runs, entry) ?? entry;
+  const completionReason = args.giveUpReason
+    ? (entry.endedReason ?? SUBAGENT_ENDED_REASON_COMPLETE)
+    : args.completionReason;
+  if (args.giveUpReason) {
+    logAnnounceGiveUp(entry, args.giveUpReason);
+  }
+  const cleanupOwnerCurrent = () =>
+    (cleanupGeneration === undefined || context.isCleanupGeneration(entry, cleanupGeneration)) &&
+    context.isCleanupOwnerCurrent(entry);
+  // Hook loading is best-effort; durable delivery and cleanup must already
+  // be terminal before plugin code can fail or stall.
+  await context.completeCleanupBookkeeping({
+    runId: entry.runId,
+    entry,
+    cleanup,
+    completedAt: args.completedAt ?? Date.now(),
+    skipRequesterSettleWake: args.skipRequesterSettleWake,
+    stateContext,
+    isCurrent: cleanupOwnerCurrent,
+  });
+  entry = getCurrentSubagentRunOwner(context.options.runs, entry) ?? entry;
+  const endedHookOwnerCurrent = () => {
+    assertSubagentRegistryWriteSourceCurrent(stateContext);
+    return (
+      (!args.giveUpReason || entry.generation === args.generation) &&
+      cleanupOwnerCurrent() &&
+      context.sessionEffectsHostCurrent(entry)
+    );
+  };
+  if (!(await context.shouldSuppressSessionEffects(entry)) && endedHookOwnerCurrent()) {
+    const reason = completionReason ?? entry.endedReason ?? SUBAGENT_ENDED_REASON_COMPLETE;
+    if (context.options.shouldEmitEndedHookForRun({ entry, reason })) {
+      await context.options.emitSubagentEndedHookForRun({
+        entry,
+        reason,
+        sendFarewell: true,
+        isCurrent: endedHookOwnerCurrent,
+        prepareCurrent: async () =>
+          !(await context.shouldSuppressSessionEffects(entry)) && endedHookOwnerCurrent(),
+      });
+    }
+  }
+}
