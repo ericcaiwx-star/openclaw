@@ -119,47 +119,7 @@ export function createSubagentSweeperHarness(
     resumeRequesterSettleWake,
     startSubagentAnnounceCleanupFlow: vi.fn(() => true),
     completeCleanupBookkeeping,
+    // Scheduling-only fixture; native physical deletion is covered by the worker owner suite.
+    deleteSuspendedSubagentSession: vi.fn(async ({ entry }) => entry),
     isCleanupOwnerCurrent: (selected) =>
       isSameSubagentRunOwner(runs.get(selected.runId), selected) || !runs.has(selected.runId),
-    sessionEffectsHostCurrent: (selected) => selected.execution.suppressSessionEffects !== true,
-    shouldSuppressSessionEffects: async (selected) =>
-      selected.execution.suppressSessionEffects === true,
-    discardTerminalDelivery,
-    shouldEmitEndedHookForRun: vi.fn(() => false),
-    emitSubagentEndedHookForRun,
-    callGateway,
-    cleanupCollectorLaunchResources: vi.fn(async () => true),
-    runContextEngineSubagentEnded,
-    notifyContextEngineSubagentEnded,
-    retireSupersededRun: vi.fn(),
-    getRunsForChildSession: createSubagentSweeperChildLookup(runs),
-    getRunsForCollectorGroup: (requesterSessionKey, groupId) =>
-      [...runs].filter(
-        ([, candidate]) =>
-          candidate.collect &&
-          candidate.groupId === groupId &&
-          (candidate.swarmRequesterSessionKey ?? candidate.requesterSessionKey) ===
-            requesterSessionKey,
-      ),
-    warn,
-  });
-  onTestFinished(async () => {
-    await sweeper.reset();
-    worker.mockRestore();
-  });
-  return {
-    entry,
-    runs,
-    callGateway,
-    completeCleanupBookkeeping,
-    completeSubagentRunWithRecovery,
-    discardTerminalDelivery,
-    emitSubagentEndedHookForRun,
-    finalizeInterruptedSubagentRun,
-    notifyContextEngineSubagentEnded,
-    resumeRequesterSettleWake,
-    runContextEngineSubagentEnded,
-    sweeper,
-    warn,
-  };
-}

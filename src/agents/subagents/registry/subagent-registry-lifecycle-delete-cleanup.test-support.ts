@@ -195,7 +195,7 @@ export function registerDeleteCleanupRetentionTests({
       },
     });
     await expect(
-      controller.finalizeResumedAnnounceGiveUp({ runId: entry.runId, entry, reason: "expiry" }),
+      controller.finalizeResumedAnnounceGiveUp({ entry, reason: "expiry" }),
     ).rejects.toThrow("suppression publication failed");
     expect(readLifecycleRun(entry).cleanupCompletedAt).toBeUndefined();
     expect(readLifecycleRun(entry).execution.suppressSessionEffects).toBeUndefined();
