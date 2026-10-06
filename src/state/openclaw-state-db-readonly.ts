@@ -2,7 +2,9 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { lstatSync } from "node:fs";
 import path from "node:path";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
+import { sleepWithAbort } from "@openclaw/retry";
 import { hasErrnoCode } from "../infra/errno.js";
+import { StateDatabaseAdmissionPendingError } from "../infra/gateway-state-owner-record.js";
 import { SqliteCoordinatorError } from "../infra/sqlite-lifecycle-errors.js";
 import {
   retainSnapshotTempDirectory,
@@ -22,9 +24,10 @@ import {
   openClawStateDatabaseCache,
 } from "./openclaw-state-db-cache.js";
 import { readAdmittedStateContentVersion } from "./openclaw-state-db-content-version.js";
-import type {
-  OpenClawStateDatabaseOptions,
-  OpenClawStateSchemaReadAdmission,
+import {
+  OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
+  type OpenClawStateDatabaseOptions,
+  type OpenClawStateSchemaReadAdmission,
 } from "./openclaw-state-db-contract.js";
 import {
   assertStateReadSchema,
@@ -109,6 +112,9 @@ export async function withOpenClawStateDatabaseReadSnapshot<T>(
   const env = options.env ?? process.env;
   const callerSignal = getAsyncWorkSignal();
   const controller = new AbortController();
+  const admissionSignal = callerSignal
+    ? AbortSignal.any([callerSignal, controller.signal])
+    : controller.signal;
   const assertHostAdmission = () =>
     openClawStateDatabaseCache.assertOpenClawStateDatabaseFreshOpenAllowedAtPath(pathname, env);
   let closeSnapshotWork: ((reason: unknown) => void) | undefined;
@@ -116,7 +122,25 @@ export async function withOpenClawStateDatabaseReadSnapshot<T>(
     let admission: ReturnType<typeof captureOpenClawStateDatabaseReadAdmission>;
     let prepared: AsyncPreparedSqliteReadOnlyLocation;
     try {
-      assertHostAdmission();
+      const deadline = performance.now() + OPENCLAW_SQLITE_BUSY_TIMEOUT_MS;
+      for (;;) {
+        try {
+          assertHostAdmission();
+          break;
+        } catch (error) {
+          const remaining = deadline - performance.now();
+          if (
+            !(error instanceof StateDatabaseAdmissionPendingError) ||
+            path.resolve(error.databasePath) !== pathname ||
+            remaining <= 0
+          ) {
+            throw error;
+          }
+          // Only cold schema admission may wait; retained reads and callbacks never replay.
+          await sleepWithAbort(Math.min(10, remaining), admissionSignal);
+          admissionSignal.throwIfAborted();
+        }
+      }
       admission = captureOpenClawStateDatabaseReadAdmission(pathname);
       controller.signal.throwIfAborted();
       if (
