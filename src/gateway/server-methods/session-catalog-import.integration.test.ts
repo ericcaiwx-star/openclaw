@@ -459,7 +459,14 @@ describe("sessions.catalog.import with durable Gateway owners", () => {
           releasePreparedCatalog = resolve;
         },
       );
-      const readPreparedModelCatalog = vi.fn(async () => await stalledPreparedCatalog);
+      let markPreparedCatalogReadStarted!: () => void;
+      const preparedCatalogReadStarted = new Promise<void>((resolve) => {
+        markPreparedCatalogReadStarted = resolve;
+      });
+      const readPreparedModelCatalog = vi.fn(async () => {
+        markPreparedCatalogReadStarted();
+        return await stalledPreparedCatalog;
+      });
       fixture.setPreparedModelCatalogReader(readPreparedModelCatalog);
 
       const controller = new AbortController();
@@ -468,10 +475,9 @@ describe("sessions.catalog.import with durable Gateway owners", () => {
         fixture.client,
         controller.signal,
       );
-      await vi.waitFor(() => {
-        expect(fixture.provider.copyToGatewaySession).toHaveBeenCalledOnce();
-        expect(readPreparedModelCatalog).toHaveBeenCalledOnce();
-      });
+      await preparedCatalogReadStarted;
+      expect(fixture.provider.copyToGatewaySession).toHaveBeenCalledOnce();
+      expect(readPreparedModelCatalog).toHaveBeenCalledOnce();
       controller.abort(new Error("request closed"));
       expect(await cancelledCall).toHaveBeenCalledWith(
         false,

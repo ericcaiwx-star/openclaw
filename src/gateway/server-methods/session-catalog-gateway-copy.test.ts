@@ -311,17 +311,12 @@ describe("copySessionCatalogToGateway", () => {
         ),
       );
       try {
+        const settled = expect(copying).resolves.toMatchObject({
+          ok: false,
+          error: { code: "UNAVAILABLE", retryable: true },
+        });
         controller.abort(new Error(`${owner} closed`));
-        let result: Awaited<typeof copying> | undefined;
-        void copying.then((value) => {
-          result = value;
-        });
-        await vi.waitFor(() => {
-          expect(result).toMatchObject({
-            ok: false,
-            error: { code: "UNAVAILABLE", retryable: true },
-          });
-        });
+        await settled;
         expect(mocks.createGatewaySession).not.toHaveBeenCalled();
       } finally {
         assessment.resolve({ models: [] });
