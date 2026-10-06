@@ -257,7 +257,7 @@ describe("copySessionCatalogToGateway", () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date", "performance"] });
     const assessment = createDeferredCore<{ models: Array<Record<string, unknown>> }>();
     const createRead = createDeferredCore<{ entries: never[]; routeVariants: never[] }>();
-    const createReadStarted = createDeferredCore<void>();
+    const createReadStarted = createDeferredCore();
     mocks.buildModelsListResult.mockReturnValueOnce(assessment.promise as never);
     mocks.createGatewaySession.mockImplementationOnce(async (params: Record<string, unknown>) => {
       createReadStarted.resolve();
@@ -292,30 +292,64 @@ describe("copySessionCatalogToGateway", () => {
     }
   });
 
-  it("ends a preferred-model catalog wait when the requesting connection closes", async () => {
+  it.each(["request signal", "connection"] as const)(
+    "ends a preferred-model catalog wait when the %s closes",
+    async (owner) => {
+      const assessment = createDeferredCore<{ models: Array<Record<string, unknown>> }>();
+      const controller = new AbortController();
+      mocks.buildModelsListResult.mockReturnValueOnce(assessment.promise as never);
+      const copying = copySessionCatalogToGateway(
+        copyParams(
+          owner === "request signal"
+            ? { signal: controller.signal }
+            : {
+                client: {
+                  connect: { scopes: ["operator.read", "operator.write"] },
+                  connectionSignal: controller.signal,
+                } as never,
+              },
+        ),
+      );
+      try {
+        controller.abort(new Error(`${owner} closed`));
+        let result: Awaited<typeof copying> | undefined;
+        void copying.then((value) => {
+          result = value;
+        });
+        await vi.waitFor(() => {
+          expect(result).toMatchObject({
+            ok: false,
+            error: { code: "UNAVAILABLE", retryable: true },
+          });
+        });
+        expect(mocks.createGatewaySession).not.toHaveBeenCalled();
+      } finally {
+        assessment.resolve({ models: [] });
+        await copying;
+      }
+    },
+  );
+
+  it("allows a clean retry after a timed-out preferred-model assessment", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
     const assessment = createDeferredCore<{ models: Array<Record<string, unknown>> }>();
-    const connection = new AbortController();
     mocks.buildModelsListResult.mockReturnValueOnce(assessment.promise as never);
-    const copying = copySessionCatalogToGateway(
-      copyParams({
-        client: {
-          connect: { scopes: ["operator.read", "operator.write"] },
-          connectionSignal: connection.signal,
-        } as never,
-      }),
-    );
-    try {
-      connection.abort(new Error("connection closed"));
-      await Promise.resolve();
-      expect(await Promise.race([copying, Promise.resolve("pending" as const)])).toMatchObject({
-        ok: false,
-        error: { code: "UNAVAILABLE", retryable: true },
-      });
-      expect(mocks.createGatewaySession).not.toHaveBeenCalled();
-    } finally {
-      assessment.resolve({ models: [] });
-      await copying;
-    }
+    const first = copySessionCatalogToGateway(copyParams());
+    await vi.advanceTimersByTimeAsync(20_000);
+    await expect(first).resolves.toMatchObject({
+      ok: false,
+      error: { code: "UNAVAILABLE", retryable: true },
+    });
+    expect(mocks.createGatewaySession).not.toHaveBeenCalled();
+
+    assessment.resolve({ models: [] });
+    await expect(copySessionCatalogToGateway(copyParams())).resolves.toEqual({
+      ok: true,
+      sessionKey: "agent:main:gateway-copy",
+    });
+    expect(mocks.createGatewaySession).toHaveBeenCalledOnce();
+    expect(mocks.importSessionCatalogHistory).toHaveBeenCalledOnce();
+    expect(mocks.recordSessionStateEventAsync).toHaveBeenCalledOnce();
   });
 
   it("preserves configured-model fallback for ordinary availability errors", async () => {
