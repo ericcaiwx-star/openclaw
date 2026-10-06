@@ -125,19 +125,26 @@ describe("plugin tool declaration membership", () => {
 });
 
 describe("versioned plugin tool authority", () => {
-  it("reads current assistant identity through a live context and rejects retained reads after retirement", async () => {
+  it("reads prepared operation scope without stamping legacy history and rejects retired reads", async () => {
     const { entry, registry } = register(() => null);
     const context = createPluginToolFactoryContext({
       entry,
       registry,
-      context: { getAssistantTurnId: () => "caller-supplied" },
+      context: { getToolInvocationScope: () => "caller-supplied" },
     });
-    const readIdentity = context.getAssistantTurnId;
+    const readIdentity = context.getToolInvocationScope;
     expect(readIdentity).toBeTypeOf("function");
     expect(readIdentity!()).toBeUndefined();
     for (const [identity, expected] of [
-      [{ responseId: " response-one ", turnId: "ignored" }, "response-one"],
-      [{ turnId: " persisted-turn " }, "persisted-turn"],
+      [{ responseId: "legacy-response", turnId: "legacy-turn" }, undefined],
+      [
+        {
+          responseId: "later-response",
+          toolInvocationScope: { version: 1, id: "committed-scope" },
+        },
+        "committed-scope",
+      ],
+      [{ toolInvocationScope: { version: 1, id: "reopened-scope" } }, "reopened-scope"],
     ] as const) {
       const toolCall = {
         type: "toolCall" as const,

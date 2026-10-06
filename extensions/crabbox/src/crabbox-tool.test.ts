@@ -83,7 +83,10 @@ describe("Crabbox conversation tool", () => {
     "scopes repeated provider call ids for %s while preserving assistant replays",
     async (_name, args, key) => {
       let currentIdentity: string | undefined;
-      const { tool, request } = fixture({ ...context, getAssistantTurnId: () => currentIdentity });
+      const { tool, request } = fixture({
+        ...context,
+        getToolInvocationScope: () => currentIdentity,
+      });
       const invoke = (identity: string | undefined) => {
         currentIdentity = identity;
         return tool!.execute("repeated-call", args);

@@ -70,13 +70,13 @@ type CrabboxToolOptions = {
 function operationId(
   sessionId: string,
   toolCallId: string,
-  getAssistantTurnId: OpenClawPluginToolContext["getAssistantTurnId"],
+  getToolInvocationScope: OpenClawPluginToolContext["getToolInvocationScope"],
 ): string {
-  const assistantTurnId = getAssistantTurnId?.();
+  const invocationScope = getToolInvocationScope?.();
   return createHash("sha256")
     .update(
       JSON.stringify(
-        assistantTurnId ? [sessionId, assistantTurnId, toolCallId] : [sessionId, toolCallId],
+        invocationScope ? [sessionId, invocationScope, toolCallId] : [sessionId, toolCallId],
       ),
     )
     .digest("hex");
@@ -143,7 +143,7 @@ export function createCrabboxTool({ context, gateway }: CrabboxToolOptions): Any
             "environments.session.create",
             {
               profileId,
-              idempotencyKey: operationId(sessionId, toolCallId, context.getAssistantTurnId),
+              idempotencyKey: operationId(sessionId, toolCallId, context.getToolInvocationScope),
               ...(os ? { os } : {}),
               ...(machineClass ? { machineClass } : {}),
               ...(presentation ? { presentation } : {}),
@@ -180,7 +180,7 @@ export function createCrabboxTool({ context, gateway }: CrabboxToolOptions): Any
         }
         const processId =
           params.background === true
-            ? `app-${operationId(sessionId, toolCallId, context.getAssistantTurnId)}`
+            ? `app-${operationId(sessionId, toolCallId, context.getToolInvocationScope)}`
             : undefined;
         try {
           return jsonResult(

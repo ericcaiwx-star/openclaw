@@ -196,17 +196,26 @@ Reading `params` from the first argument of a factory tool returns the tool
 call ID string instead.
 
 For replay-stable operation keys, the optional
-`toolContext.getAssistantTurnId?.()` getter reads the current agent-loop
-assistant identity during `execute`. It prefers the provider's `responseId`,
-then the runtime's durable `turnId`. Combine it with the session and tool call
-ID: providers can reuse a tool call ID in a later assistant response, while a
-replay of the same response must keep the same operation key.
+`toolContext.getToolInvocationScope?.()` getter reads the prepared operation
+scope during `execute`. The agent-loop commit owner records this versioned fact
+in new executable assistant messages before tool effects, using the response
+identity or its existing durable local turn identity. The first executable
+fragment freezes the scope; a later response ID cannot rekey admitted effects.
+Provider tool-call IDs and tool-result pairing remain unchanged.
 
-Read this getter inside `execute`, not while constructing the factory: a tool
-can serve several assistant responses. Older hosts may omit the getter, and it
-returns `undefined` outside an agent-loop invocation. Retained reads use the
-context's existing invocation and plugin lifetime guards. This identity is
-metadata, not authorization to perform an effect.
+Combine a present scope with the session and tool-call ID. Persisted legacy
+messages have no scope and must keep their legacy operation keys, even when
+they already have a response or turn ID. Loading history never stamps a scope.
+Trusted history admission reconstructs a private restored-source fact without
+changing stored bytes. The commit owner preserves legacy mode for such a frame,
+including later cloned fragments. Arbitrary unmarked bytes resupplied as fresh
+model output do not establish historical provenance; this remaining source
+boundary is part of the proposed contract.
+
+Read this getter inside `execute`, not while constructing the factory. Older
+hosts may omit it, and it returns `undefined` outside an agent-loop invocation.
+Retained reads use the existing invocation and plugin lifetime guards. Unknown
+scope versions fail explicitly. This metadata grants no effect authority.
 
 Concrete tools can provide `prepareArguments(args)` to normalize input before
 schema validation. The native agent loop also honors

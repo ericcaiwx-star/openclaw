@@ -25,8 +25,8 @@ type OpenClawPluginToolContextBase = {
   runtimeConfig?: OpenClawConfig;
   /** Returns the latest runtime-resolved config snapshot for long-lived tool definitions. */
   getRuntimeConfig?: () => OpenClawConfig | undefined;
-  /** Current assistant identity for replay-stable tool keys; read inside execute, not at factory creation. */
-  getAssistantTurnId?: () => string | undefined;
+  /** Prepared operation scope; legacy history has none. Read inside execute, not at factory creation. */
+  getToolInvocationScope?: () => string | undefined;
   /** Effective filesystem policy for the active tool run. */
   fsPolicy?: ToolFsPolicy;
   workspaceDir?: string;

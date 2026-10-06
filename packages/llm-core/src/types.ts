@@ -534,6 +534,8 @@ export interface AssistantMessage {
   responseId?: string; // Provider-specific response/message identifier when the upstream API exposes one
   providerReplay?: ProviderReplayState; // Opaque provider state carried into a compatible later request.
   turnId?: string; // Runtime-assigned stable turn identity when the provider does not expose one
+  /** Host-prepared operation scope, persisted before new tool effects. Absent on legacy history. */
+  toolInvocationScope?: Readonly<{ version: 1; id: string }>;
   diagnostics?: AssistantMessageDiagnostic[]; // Redacted provider/runtime completion, failure, and recovery diagnostics.
   usage: Usage;
   stopReason: StopReason;

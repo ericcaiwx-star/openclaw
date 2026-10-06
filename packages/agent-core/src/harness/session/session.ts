@@ -1,5 +1,6 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { stripCompactionReplayCheckpoint } from "../../../../ai/src/transports/provider-compaction-checkpoint.js";
+import { markRestoredAgentMessage } from "../../internal-hooks.js";
 import { getOpenClawSystemUpdateKind } from "../../operator-messages.js";
 import type { AgentMessage } from "../../types.js";
 import {
@@ -34,9 +35,11 @@ export function projectSessionEntryMessage(entry: SessionTreeEntry): AgentMessag
   switch (entry.type) {
     case "message":
       // Display-only history stays persisted but never enters replay or summarization.
-      return "excludeFromContext" in entry.message && entry.message.excludeFromContext === true
-        ? undefined
-        : entry.message;
+      if ("excludeFromContext" in entry.message && entry.message.excludeFromContext === true) {
+        return undefined;
+      }
+      markRestoredAgentMessage(entry.message);
+      return entry.message;
     case "custom_message":
       return createCustomMessage(
         entry.customType,
@@ -140,6 +143,8 @@ export function* iterateSessionContextMessages<T extends SessionTreeEntry>(
         value: true,
       });
     }
+    // Retained-context projections are still admitted history, including owner-made clones.
+    markRestoredAgentMessage(message);
     yield message;
   }
 }

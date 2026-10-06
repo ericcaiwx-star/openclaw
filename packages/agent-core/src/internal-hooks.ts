@@ -79,6 +79,27 @@ const toolExecutionPreparerByTool = new WeakMap<object, InternalToolExecutionPre
 type InternalToolResultAcknowledgement = () => void;
 const toolResultAcknowledgementByValue = new WeakMap<object, InternalToolResultAcknowledgement>();
 const toolResultProvenanceByValue = new WeakMap<object, object>();
+const restoredAgentMessages = new WeakSet<AgentMessage>();
+
+/** Rebuild source provenance at trusted history admission; never add serialized data. */
+export function markRestoredAgentMessage(message: AgentMessage): void {
+  restoredAgentMessages.add(message);
+}
+
+export function isRestoredAgentMessage(message: AgentMessage): boolean {
+  return restoredAgentMessages.has(message);
+}
+
+/** Core-owned clones keep history origin only when the call identity is unchanged. */
+export function copyRestoredAgentMessageOrigin<T extends AgentMessage>(
+  source: AgentMessage,
+  target: T,
+): T {
+  if (restoredAgentMessages.has(source)) {
+    restoredAgentMessages.add(target);
+  }
+  return target;
+}
 
 /** Install OpenClaw-owned loop control without adding a plugin-facing Agent option. */
 export function setInternalBeforeToolBatch(

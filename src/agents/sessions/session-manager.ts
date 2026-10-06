@@ -5,6 +5,7 @@
  * behavior are split into focused internal modules.
  */
 import { isDeepStrictEqual } from "node:util";
+import { copyRestoredAgentMessageOrigin } from "../../../packages/agent-core/src/internal-hooks.js";
 import type { AgentMessage } from "../../../packages/agent-core/src/types.js";
 import type { SessionTranscriptRuntimeTarget } from "../../config/sessions/session-accessor.js";
 import { readSessionTranscriptBoundedActiveContextCore } from "../../config/sessions/session-accessor.sqlite-active-context.js";
@@ -50,6 +51,10 @@ import {
   readSessionManagerContextAsync,
   readSessionManagerModelContextAsync,
 } from "./session-manager-incognito.js";
+import {
+  copyRestoredSessionMessageOrigins,
+  restoredContextMessages,
+} from "./session-manager-invocation-origin.js";
 import { receiveSessionManagerCommit } from "./session-manager-persistence-error.js";
 import type {
   SessionLeafControl,
@@ -149,7 +154,10 @@ export class SessionManager extends SessionManagerBranching {
       }
       // The worker projects private fields away; equal payloads can share immutable custody.
       if (isDeepStrictEqual(entry.message, stored.message)) {
-        entry.message = freezeJsonSnapshot(stored.message);
+        entry.message = copyRestoredAgentMessageOrigin(
+          entry.message,
+          freezeJsonSnapshot(stored.message),
+        );
       } else {
         for (const key of Object.keys(entry.message)) {
           const value: unknown = Reflect.get(stored.message, key);
@@ -293,7 +301,10 @@ export class SessionManager extends SessionManagerBranching {
             };
             for (const entry of entries) {
               if (entry.type === "message") {
-                entry.message = redactTranscriptMessageForStorage(entry.message, {});
+                entry.message = copyRestoredAgentMessageOrigin(
+                  entry.message,
+                  redactTranscriptMessageForStorage(entry.message, {}),
+                );
               }
             }
             const { withSessionMetadataWorker } =
@@ -331,7 +342,11 @@ export class SessionManager extends SessionManagerBranching {
               }
               assertCommitCurrent();
               for (const [index, entry] of committed.entries.entries()) {
-                Object.assign(entries[index]!, entry);
+                const pending = entries[index]!;
+                if (pending.type === "message" && entry.type === "message") {
+                  copyRestoredAgentMessageOrigin(pending.message, entry.message);
+                }
+                Object.assign(pending, entry);
               }
               adopt(committed.version);
             } catch (cause) {
@@ -368,6 +383,7 @@ export class SessionManager extends SessionManagerBranching {
   ) {
     const prepared = SessionManager.inMemory(this.cwd);
     Object.assign(prepared, structuredClone(this.captureTranscriptView()));
+    copyRestoredSessionMessageOrigins(prepared.fileEntries, this.byId);
     const initialEntryCount = prepared.fileEntries.length;
     const persistedBoundaryCount = prepared.persistedBoundaryCount;
     prepared.persistedBoundaryCount = undefined;
@@ -380,6 +396,7 @@ export class SessionManager extends SessionManagerBranching {
       ): Generator<SessionPersistenceStep, void, void> {
         const publication = SessionManager.inMemory(prepared.cwd);
         Object.assign(publication, structuredClone(prepared.captureTranscriptView()));
+        copyRestoredSessionMessageOrigins(publication.fileEntries, prepared.byId);
         const entries = publication.fileEntries
           .slice(initialEntryCount)
           .filter((entry) => entry.type !== "session");
@@ -658,7 +675,9 @@ export class SessionManager extends SessionManagerBranching {
   ): T {
     prepareSessionManagerSync("readSessionContext", target);
     return withSessionContextAdmission(target, options.admission, () =>
-      readSessionTranscriptContextMessages(target, read),
+      readSessionTranscriptContextMessages(target, (messages, header) =>
+        read(restoredContextMessages(messages), header),
+      ),
     );
   }
 
@@ -668,7 +687,11 @@ export class SessionManager extends SessionManagerBranching {
     read: (messages: Iterable<AgentMessage>, header: unknown) => T | Promise<T>,
     options: { admission?: UserTurnTranscriptAdmissionReceipt; signal?: AbortSignal } = {},
   ): Promise<T> {
-    return readSessionManagerContextAsync(target, read, options);
+    return readSessionManagerContextAsync(
+      target,
+      (messages, header) => read(restoredContextMessages(messages), header),
+      options,
+    );
   }
 
   /**

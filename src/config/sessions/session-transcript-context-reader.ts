@@ -1,3 +1,4 @@
+import { markRestoredAgentMessage } from "../../../packages/agent-core/src/internal-hooks.js";
 import type { AgentMessage } from "../../../packages/agent-core/src/types.js";
 import type { SessionTranscriptRuntimeTarget } from "./session-accessor.types.js";
 import type { SessionTranscriptContextSnapshot } from "./session-history-read.types.js";
@@ -22,6 +23,8 @@ export function createSessionTranscriptContextReader(owner: {
       const messages = (function* () {
         for (const message of snapshot.messages) {
           owner.assertCurrent(target);
+          // Carry history origin only across the owner's current admitted yield.
+          markRestoredAgentMessage(message);
           yield message;
         }
       })();

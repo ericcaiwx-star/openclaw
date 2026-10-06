@@ -327,16 +327,19 @@ it("persists async calls before admission, streams the remaining answer, and exe
   const events: AgentEvent[] = [];
   const executionOrder: string[] = [];
   const contexts: Context[] = [];
+  const scopes: Array<AssistantMessage["toolInvocationScope"]> = [];
   const lookup = vi.fn(async () => {
     const owner = getAgentToolExecutionContext()?.assistantMessage;
     expect(persisted).toContain(owner);
     expect(owner?.turnId).toBeTruthy();
+    scopes.push(owner?.toolInvocationScope);
     executionOrder.push("lookup");
     lookupStarted.resolve();
     await gate.promise;
     return { content: [{ type: "text" as const, text: "lookup result" }], details: {} };
   });
   const ordinaryExecute = vi.fn(async () => {
+    scopes.push(getAgentToolExecutionContext()?.assistantMessage.toolInvocationScope);
     executionOrder.push("ordinary");
     return { content: [], details: {} };
   });
@@ -392,6 +395,7 @@ it("persists async calls before admission, streams the remaining answer, and exe
     response.push({ type: "start", partial: assistant([]) });
     response.push({ type: "toolcall_end", contentIndex: 0, toolCall: source, partial: prefix });
     await withTestTimeout(lookupStarted.promise, 1_000, "Lookup did not start");
+    expect(scopes[0]).toMatchObject({ version: 1, id: expect.any(String) });
     expect(lookup).toHaveBeenCalledTimes(1);
     const text = { type: "text" as const, text: "independent answer" };
     const progress = assistant([source, text]);
@@ -426,13 +430,23 @@ it("persists async calls before admission, streams the remaining answer, and exe
     response.push({
       type: "done",
       reason: "toolUse",
-      message: assistant([source, text, ordinary], "toolUse"),
+      message: {
+        ...assistant([source, text, ordinary], "toolUse"),
+        responseId: "late-provider-response",
+      },
     });
     response.end();
     closed = true;
     const result = await run;
     expect(result).toEqual(persisted);
     expect(executionOrder).toEqual(["admit:lookup", "lookup", "admit:ordinary", "ordinary"]);
+    expect(scopes).toEqual([scopes[0], scopes[0]]);
+    expect(
+      persisted
+        .filter((m) => m.role === "assistant")
+        .slice(0, 2)
+        .map((m) => m.toolInvocationScope),
+    ).toEqual([scopes[0], scopes[0]]);
     expect(
       result
         .filter((message) => message.role === "assistant")

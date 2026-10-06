@@ -20,6 +20,19 @@ export function resolveAgentAssistantTurnId(message: AssistantMessage): string |
   return message.responseId?.trim() || message.turnId?.trim() || undefined;
 }
 
+/** Read a prepared scope; never infer one for restored legacy operations. */
+export function resolveAgentToolInvocationScope(message: AssistantMessage): string | undefined {
+  const scope = message.toolInvocationScope;
+  if (scope === undefined) {
+    return undefined;
+  }
+  const id = scope?.id;
+  if (scope?.version !== 1 || typeof id !== "string" || !id.trim()) {
+    throw new Error("Unsupported assistant tool invocation scope");
+  }
+  return id;
+}
+
 // Provider tool-call ids are only unique within one assistant response.
 export function getAgentToolAssistantTurnId(): string | undefined {
   const message = getAgentToolExecutionContext()?.assistantMessage;

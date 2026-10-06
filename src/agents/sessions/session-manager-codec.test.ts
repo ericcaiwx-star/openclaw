@@ -44,6 +44,59 @@ describe("session manager codec compatibility", () => {
   });
 
   it.each([
+    { version: 3, scoped: false },
+    { version: 3, scoped: true },
+    { version: 4, scoped: false },
+    { version: 4, scoped: true },
+  ])(
+    "restores invocation scope without migrating version $version (scoped: $scoped)",
+    ({ version, scoped }) => {
+      const timestamp = "2026-01-01T00:00:00.000Z";
+      const assistant = {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "crabbox_0", name: "crabbox", arguments: {} }],
+        api: "openai-completions",
+        provider: "fixture",
+        model: "fixture-model",
+        responseId: "recorded-response",
+        turnId: "recorded-turn",
+        stopReason: "toolUse",
+        timestamp: 1,
+        usage: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 0,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+        ...(scoped ? { toolInvocationScope: { version: 1, id: "recorded-scope" } } : {}),
+      };
+      const result = {
+        role: "toolResult",
+        toolCallId: "crabbox_0",
+        toolName: "crabbox",
+        content: [],
+        isError: false,
+        timestamp: 2,
+      };
+      const entries = [
+        { type: "session", version, id: "invocation-compatibility", timestamp, cwd: "/tmp" },
+        { type: "message", id: "call", parentId: null, timestamp, message: assistant },
+        { type: "message", id: "result", parentId: "call", timestamp, message: result },
+      ];
+
+      const persistedEntries = JSON.stringify(entries);
+      const manager = SessionManager.fromEntries(JSON.parse(persistedEntries));
+
+      expect(manager.getHeader()?.version).toBe(version);
+      expect(manager.migrated).toBe(false);
+      expect(JSON.stringify(manager.getEntry("call"))).toBe(JSON.stringify(entries[1]));
+      expect(manager.buildSessionContext().messages).toEqual([assistant, result]);
+    },
+  );
+
+  it.each([
     {
       name: "message with malformed content",
       entry: { type: "message", id: "m1", parentId: null, message: { role: "user" } },

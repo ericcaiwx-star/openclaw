@@ -1,5 +1,6 @@
 import type { AssistantMessage, ToolResultMessage } from "@openclaw/llm-core";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { copyRestoredAgentMessageOrigin } from "./internal-hooks.js";
 import type { AgentMessage, ToolResultContentSource } from "./types.js";
 
 type TurnTaintMetadata = {
@@ -49,7 +50,7 @@ export function withAssistantTurnTaint(
     ...message,
     __openclaw: { ...readTurnTaintMetadata(message), turnTainted: true },
   } satisfies AssistantMessage & { __openclaw: TurnTaintMetadata };
-  return taintedMessage;
+  return copyRestoredAgentMessageOrigin(message, taintedMessage);
 }
 
 export function withToolResultContentSource(

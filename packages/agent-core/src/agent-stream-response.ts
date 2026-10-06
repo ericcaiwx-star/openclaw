@@ -14,13 +14,21 @@ import type {
   ToolResultMessage,
 } from "@openclaw/llm-core";
 import { uuidv7 } from "./harness/session/uuid.js";
-import { copyInternalToolResultState } from "./internal-hooks.js";
+import {
+  copyInternalToolResultState,
+  copyRestoredAgentMessageOrigin,
+  isRestoredAgentMessage,
+} from "./internal-hooks.js";
 import {
   type AgentCoreStreamRuntimeDeps,
   resolveAgentCoreStreamFn,
   runAgentCoreStream,
 } from "./runtime-deps.js";
 import { createStreamSteering } from "./stream-steering.js";
+import {
+  resolveAgentAssistantTurnId,
+  resolveAgentToolInvocationScope,
+} from "./tool-execution-context.js";
 import { normalizeCoreContextMessages } from "./turn-interruption.js";
 import { withToolResultContentSource } from "./turn-taint.js";
 import type {
@@ -59,12 +67,15 @@ function resolveAssistantMessageUpdate(
   currentMessage: AssistantMessage,
 ): AssistantMessage {
   if ("partial" in event && event.partial) {
-    return event.partial;
+    return copyRestoredAgentMessageOrigin(currentMessage, event.partial);
   }
   if (event.type !== "text_delta") {
     return currentMessage;
   }
-  return appendTextDeltaToAssistantMessage(currentMessage, event.contentIndex, event.delta);
+  return copyRestoredAgentMessageOrigin(
+    currentMessage,
+    appendTextDeltaToAssistantMessage(currentMessage, event.contentIndex, event.delta),
+  );
 }
 
 function removeNonExecutableToolCalls(message: AssistantMessage): AssistantMessage {
@@ -77,16 +88,45 @@ function removeNonExecutableToolCalls(message: AssistantMessage): AssistantMessa
     : replaceCompactionReplayOwnerContent(message, content);
 }
 
-function ensureToolTurnIdentity(message: AssistantMessage): AssistantMessage {
+function ensureToolTurnIdentity(
+  message: AssistantMessage,
+  committedScope?: AssistantMessage["toolInvocationScope"] | null,
+  restored = false,
+): AssistantMessage {
+  if (committedScope === null) {
+    if (message.toolInvocationScope !== undefined) {
+      throw new Error("A restored legacy response cannot introduce an invocation scope");
+    }
+    return message;
+  }
+  if (committedScope) {
+    // The first executable fragment owns identity even if responseId arrives later.
+    return { ...message, toolInvocationScope: committedScope };
+  }
   const executable =
     message.stopReason === "toolUse" ||
     ((message.stopReason === "stop" || message.stopReason === "length") &&
       message.content.some((item) => item.type === "toolCall" && item.async));
-  if (!executable || message.responseId?.trim() || message.turnId?.trim()) {
+  if (!executable) {
     return message;
   }
-  // message_end persists this local identity before any tool can execute.
-  return { ...message, turnId: uuidv7() };
+  const recordedScopeId = resolveAgentToolInvocationScope(message);
+  if (restored && recordedScopeId === undefined) {
+    return message;
+  }
+  const responseIdentity = resolveAgentAssistantTurnId(message);
+  const localTurnId = !responseIdentity ? uuidv7() : undefined;
+  const scopeId =
+    recordedScopeId ??
+    JSON.stringify([message.provider, message.api, responseIdentity ?? localTurnId]);
+  // Only the fresh-response commit owner stamps this fact. History loaders do not.
+  // Capture the small owned fact, not a producer's mutable alias. Response IDs
+  // belong to a provider/API namespace; missing IDs reuse the existing local turn.
+  return {
+    ...message,
+    ...(localTurnId ? { turnId: localTurnId } : {}),
+    toolInvocationScope: Object.freeze({ version: 1, id: scopeId }),
+  };
 }
 
 export async function emitToolResultMessage(
@@ -272,6 +312,8 @@ export async function streamAgentResponse(
         let partialIndex: number | undefined;
         let committedContentCount = 0;
         let streamedTurnId: string | undefined;
+        // undefined = undecided; null = restored legacy; object = prepared scoped.
+        let committedScope: AssistantMessage["toolInvocationScope"] | null;
 
         // Result wrappers bind ownership to unchanged content. Only split actual async fragments.
         const remainingFragment = (message: AssistantMessage) =>
@@ -350,18 +392,28 @@ export async function streamAgentResponse(
                     .every((item) => item.type !== "toolCall" || item.async === true)
                 ) {
                   const prefix = prepareAssistantMessage(
-                    ensureToolTurnIdentity({
-                      ...replaceCompactionReplayOwnerContent(
-                        message,
-                        message.content.slice(committedContentCount, event.contentIndex + 1),
-                      ),
-                      ...(streamedTurnId ? { turnId: streamedTurnId } : {}),
-                      stopReason: "toolUse",
-                      // Usage belongs to the terminal fragment, once per provider response.
-                      usage: createEmptyTransportUsage(),
-                    }),
+                    ensureToolTurnIdentity(
+                      {
+                        ...replaceCompactionReplayOwnerContent(
+                          message,
+                          message.content.slice(committedContentCount, event.contentIndex + 1),
+                        ),
+                        ...(streamedTurnId ? { turnId: streamedTurnId } : {}),
+                        stopReason: "toolUse",
+                        // Usage belongs to the terminal fragment, once per provider response.
+                        usage: createEmptyTransportUsage(),
+                      },
+                      committedScope,
+                      isRestoredAgentMessage(message),
+                    ),
                   );
+                  copyRestoredAgentMessageOrigin(message, prefix);
                   streamedTurnId ??= prefix.turnId;
+                  if (committedScope === undefined) {
+                    committedScope =
+                      prefix.toolInvocationScope ??
+                      (isRestoredAgentMessage(message) ? null : undefined);
+                  }
                   // Await transcript persistence before admitting side effects. The model
                   // may keep sampling, but every executed call has a durable owner.
                   await commitFragment(prefix);
@@ -388,6 +440,13 @@ export async function streamAgentResponse(
           // Output-limit recovery drains admitted tools; other failures fence queued starts.
           abortFailedResponse(terminal);
           const result = await response.result();
+          // All projections belong to this response, even when the producer clones its terminal.
+          if (partialMessage) {
+            copyRestoredAgentMessageOrigin(partialMessage, result);
+          }
+          if (terminal) {
+            copyRestoredAgentMessageOrigin(terminal, result);
+          }
           abortFailedResponse(result);
           const outputLimit = isResponsesOutputLimitToolCallError(result);
           if (outputLimit) {
@@ -413,8 +472,11 @@ export async function streamAgentResponse(
                     ? { errorCode: PROVIDER_FAILURE_WITH_OUTPUT_ERROR_CODE }
                     : {}),
               }),
+              committedScope,
+              isRestoredAgentMessage(result),
             ),
           );
+          copyRestoredAgentMessageOrigin(result, finalMessage);
           await commitFragment(finalMessage);
           if (executedIds.size > 0) {
             enqueueTools(finalMessage);

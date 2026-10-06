@@ -32,6 +32,7 @@ import {
   installSessionManagerIncognitoBinding,
 } from "./session-manager-incognito-scope.js";
 import { prepareSessionManagerHydration } from "./session-manager-incognito.js";
+import { markRestoredSessionMessages } from "./session-manager-invocation-origin.js";
 import type {
   FileEntry,
   NewSessionOptions,
@@ -271,6 +272,7 @@ export class SessionManagerCore extends SessionEntryNavigation<SessionEntry> {
       }
       this.cacheTtlProjectionPrefixes = bindCacheTtlProjectionPrefixes(bounded, this);
     }
+    markRestoredSessionMessages(this.fileEntries);
   }
 
   protected adoptSelectedTranscriptPath(
