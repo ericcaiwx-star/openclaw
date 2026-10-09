@@ -221,6 +221,85 @@ describe("Memory Wiki compiled cache lifecycle", () => {
     await expect(loadMemoryWikiCompiledCache(config)).resolves.not.toBeNull();
   });
 
+  it.each(["unchanged", "source-edit", "log-rollback"] as const)(
+    "checks an external publication against %s sources before rebuilding an uncached owner",
+    async (change) => {
+      const { rootDir, config } = await createPersistentVault({
+        initialize: true,
+        config: { vaultMode: "isolated", ingest: { autoCompile: true } },
+      });
+      await fs.writeFile(path.join(rootDir, "sources", "alpha.md"), "# Alpha\n\nLocal source.\n");
+      const logPath = path.join(rootDir, ".openclaw-wiki", "log.jsonl");
+      const initialLog = await fs.readFile(logPath, "utf8");
+      await compileMemoryWikiVault(config);
+      // Lifecycle activation keeps the publication identity without loading its payload.
+      deactivateMemoryWikiCompiledCacheOwnersExcept(new Set());
+      await activateVault(config);
+
+      // A distinct module graph models the external compiler's process-local owner.
+      // Both compilers persist through the real SQLite plugin blob store.
+      vi.resetModules();
+      const externalCache = await import("./compiled-cache.js");
+      const externalSourceState = await import("./source-sync-state.js");
+      const externalCompile = await import("./compile.js");
+      externalCache.configureMemoryWikiCompiledCacheStore(
+        externalCache.createMemoryWikiCompiledCacheStore(<T>(options: OpenBlobStoreOptions) =>
+          createPluginBlobStoreForTests<T>("memory-wiki", options, blobStoreEnv),
+        ),
+      );
+      externalSourceState.configureMemoryWikiSourceSyncStateStore({
+        read: async () => ({ version: 1, entries: {} }),
+        write: async () => {},
+      });
+      try {
+        await externalCompile.compileMemoryWikiVault(config);
+      } finally {
+        externalCache.configureMemoryWikiCompiledCacheStore(undefined);
+        externalSourceState.configureMemoryWikiSourceSyncStateStore(undefined);
+      }
+      const published = await loadMemoryWikiVaultIdentity(rootDir);
+      if (change === "source-edit") {
+        await fs.writeFile(
+          path.join(rootDir, "sources", "alpha.md"),
+          "# Alpha\n\nChanged source.\n",
+        );
+      } else if (change === "log-rollback") {
+        await fs.writeFile(logPath, initialLog);
+      }
+      await expect(readMemoryWikiDashboardState(config)).resolves.toMatchObject({
+        state: "rebuilding",
+      });
+      const beforeLog = await fs.readFile(
+        path.join(rootDir, ".openclaw-wiki", "log.jsonl"),
+        "utf8",
+      );
+
+      const result = await syncMemoryWikiImportedSources({ config });
+
+      if (change !== "unchanged") {
+        expect(result.indexesRefreshed).toBe(true);
+        expect((await loadMemoryWikiVaultIdentity(rootDir)).compiledCachePublicationId).not.toBe(
+          published.compiledCachePublicationId,
+        );
+        await expect(readMemoryWikiDashboardState(config)).resolves.toMatchObject({
+          state: "ready",
+        });
+        return;
+      }
+      expect(result).toMatchObject({
+        indexesRefreshed: false,
+        indexRefreshReason: "no-import-changes",
+      });
+      expect((await loadMemoryWikiVaultIdentity(rootDir)).compiledCachePublicationId).toBe(
+        published.compiledCachePublicationId,
+      );
+      expect(await fs.readFile(path.join(rootDir, ".openclaw-wiki", "log.jsonl"), "utf8")).toBe(
+        beforeLog,
+      );
+      await expect(readMemoryWikiDashboardState(config)).resolves.toMatchObject({ state: "ready" });
+    },
+  );
+
   it("reuses an active compiled owner during repeated initialization and exact page reads", async () => {
     const { rootDir, config } = await createPersistentVault({ initialize: true });
     await fs.writeFile(path.join(rootDir, "sources", "alpha.md"), "# Alpha\n\nRequested source.\n");

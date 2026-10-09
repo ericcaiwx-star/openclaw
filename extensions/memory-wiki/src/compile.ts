@@ -29,6 +29,7 @@ import {
   type WikiFreshnessLevel,
   type WikiPageContradictionCluster,
 } from "./claim-health.js";
+import { hasMissingWikiIndexes } from "./compile-indexes.js";
 import {
   readMemoryWikiDashboardState,
   resolveMemoryWikiCompiledCacheGeneration,
@@ -1209,23 +1210,6 @@ export async function compileMemoryWikiVault(
   }
 }
 
-async function hasMissingWikiIndexes(rootDir: string): Promise<boolean> {
-  const required = [
-    path.join(rootDir, "index.md"),
-    ...WIKI_PAGE_GROUPS.map((group) => path.join(rootDir, group.dir, "index.md")),
-  ];
-  for (const filePath of required) {
-    const exists = await fs
-      .access(filePath)
-      .then(() => true)
-      .catch(() => false);
-    if (!exists) {
-      return true;
-    }
-  }
-  return false;
-}
-
 export async function refreshMemoryWikiIndexesAfterImport(params: {
   config: ResolvedMemoryWikiConfig;
   syncResult: { importedCount: number; updatedCount: number; removedCount: number };
@@ -1236,7 +1220,13 @@ export async function refreshMemoryWikiIndexesAfterImport(params: {
     params.syncResult.importedCount > 0 ||
     params.syncResult.updatedCount > 0 ||
     params.syncResult.removedCount > 0;
-  const dashboardState = await readMemoryWikiDashboardState(params.config);
+  let dashboardState = await readMemoryWikiDashboardState(params.config);
+  if (!importChanged && dashboardState.state === "rebuilding") {
+    // An external compiler may have retired our uncached predecessor. Validate
+    // its durable replacement before treating this owner-local miss as a rebuild.
+    await activateExistingMemoryWikiVault(params.config, params.signal);
+    dashboardState = await readMemoryWikiDashboardState(params.config);
+  }
   params.signal?.throwIfAborted();
   const dashboardNeedsCompile = dashboardState.state !== "ready";
   if (!params.config.ingest.autoCompile) {
