@@ -11,7 +11,7 @@ import {
   extractToolAuthoredSourceReplyPayload,
   isDeliveredMessagingToolSendToCurrentSource,
 } from "../../embedded-agent-messaging-extraction.js";
-import type { AfterToolCallContext, Agent } from "../../runtime/index.js";
+import type { AfterToolCallContext, AfterToolCallResult, Agent } from "../../runtime/index.js";
 import {
   getInternalToolTurnCompletion,
   setInternalToolTurnCompletion,
