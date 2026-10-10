@@ -2,7 +2,13 @@ import { createInlineCodeState } from "../../packages/markdown-core/src/code-spa
 import { parseReplyDirectives } from "../auto-reply/reply/reply-directives.js";
 import { splitTrailingDirective } from "../auto-reply/reply/streaming-directives.js";
 import type { AssistantMessage } from "../llm/types.js";
+import {
+  assistantVisibleTextFilters,
+  toolCallXmlTextFilter,
+} from "../shared/text/assistant-visible-text.js";
 import { findCodeRegions } from "../shared/text/code-regions.js";
+import { applyTextFilters } from "../shared/text/text-projection.js";
+import { sanitizeUserFacingText } from "./embedded-agent-helpers/sanitize-user-facing-text.js";
 import {
   resolveAssistantStreamBlockIndex,
   resolveAssistantStreamItemId,
@@ -13,7 +19,6 @@ import type {
 } from "./embedded-agent-subscribe.handlers.types.js";
 import {
   prepareAssistantVisibleText,
-  sanitizeAssistantVisibleStreamText,
   stripDowngradedToolCallText,
 } from "./embedded-agent-utils.js";
 
@@ -68,10 +73,19 @@ export function extractAssistantStreamSnapshot(
     return preparedFinal ? part : visible;
   });
   const visibleBlockSource = finalAnswer
-    ? sanitizeAssistantVisibleStreamText(blockSource, "final_answer", {
-        preserveTrailingWhitespace: true,
-      })
-    : stripDowngradedToolCallText(blockSource, { preserveTrailingWhitespace: true });
+    ? sanitizeUserFacingText(
+        applyTextFilters(
+          blockSource,
+          assistantVisibleTextFilters("final-answer-delivery", options?.final === false, {
+            preserveTrailingWhitespace: true,
+          }),
+        ),
+        { streaming: options?.final === false },
+      )
+    : toolCallXmlTextFilter(
+        { stripFunctionCallsXmlPayloads: true },
+        options?.final === false,
+      ).transform(stripDowngradedToolCallText(blockSource, { preserveTrailingWhitespace: true }));
   const blockReply = parseReplyDirectives(
     options?.final === false
       ? splitTrailingDirective(visibleBlockSource, { preserveTrailingWhitespace: true }).text

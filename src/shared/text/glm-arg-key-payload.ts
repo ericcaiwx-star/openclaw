@@ -9,7 +9,11 @@ const GLM_ARG_KEY = "arg_key";
 // classified. Name-only and whitespace-only prefixes are stream-only: a later
 // replacement cannot unsay an emitted prefix, but a finished answer ending
 // `Use <tool_call>exec` is literal prose.
-export function isGlmArgPayload(rest: string, streaming: boolean): boolean {
+export function isGlmArgPayload(input: string, streaming: boolean): boolean {
+  const rest = input.trimStart();
+  if (!rest) {
+    return streaming;
+  }
   const name = GLM_TOOL_NAME_RE.exec(rest)?.[0];
   if (!name) {
     return false;

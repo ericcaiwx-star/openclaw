@@ -1,5 +1,3 @@
-// GLM <tool_call>exec<arg_key> cases live beside assistant-visible-text.test.ts,
-// which sits at the max-lines cap.
 import { describe, expect, it } from "vitest";
 import {
   sanitizeAssistantVisibleText,
@@ -97,5 +95,34 @@ describe("GLM arg_key assistant text", () => {
         ),
       ).toBe("Visible");
     }
+  });
+});
+
+describe("invocation XML", () => {
+  const invocation =
+    '<invoke name="exec"><parameter name="command">echo hidden</parameter></invoke>';
+
+  it("strips invocation blocks without allowing literal parameter tags to swallow prose", () => {
+    const input =
+      '<invoke name="exec"><parameter name="command">echo \'<parameter>\'</parameter></invoke>' +
+      "The answer is 42.\n" +
+      '<invoke name="exec"><parameter name="command">echo \'</parameter>\'</parameter></invoke>';
+    expect(sanitizeAssistantVisibleText(input)).toBe("The answer is 42.");
+  });
+
+  it.each([
+    `    ${invocation}`,
+    `\t${invocation}`,
+    `\`\`\`xml\n${invocation}\n\`\`\``,
+    `Use \`${invocation}\` in an example.`,
+    `Use ${invocation} in an example.`,
+  ])("preserves a literal invocation example %s", (example) => {
+    expect(sanitizeAssistantVisibleText(example)).toBe(example);
+  });
+
+  it("keeps protected code following an invocation artifact", () => {
+    expect(sanitizeAssistantVisibleText(`${invocation}\n\n    <invoke></invoke>`)).toBe(
+      "    <invoke></invoke>",
+    );
   });
 });

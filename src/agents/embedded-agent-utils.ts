@@ -156,9 +156,22 @@ function prepareEmbeddedAssistantTextForPhase(
       part.text = prepareText(part.text, index === parts.length - 1, part.phase, part.contentIndex);
     }
   }
+  // Adjacent blocks in the same phase share markup state; a phase boundary stays explicit.
+  const groupedParts: { text: string; phase?: AssistantPhase }[] = [];
+  for (const part of parts) {
+    const text = trimTextPreservingCode(part.text);
+    if (!text) {
+      continue;
+    }
+    const previous = groupedParts.at(-1);
+    if (previous && previous.phase === part.phase) {
+      previous.text += `\n${text}`;
+    } else {
+      groupedParts.push({ text, phase: part.phase });
+    }
+  }
   return prepareRender(selectedPhase, () =>
-    // A native block boundary can divide markup; finalize only the selected snapshot.
-    parts
+    groupedParts
       .map(({ text, phase }) => sanitizeAssistantText(text, phase))
       .filter((text) => text.trim())
       .join("\n")

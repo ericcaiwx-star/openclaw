@@ -65,7 +65,7 @@ describe("telegramPlugin outbound", () => {
     const shadow =
       "Visible\n<tool_call>exec<arg_key>command</arg_key><arg_value>echo redacted</arg_value></tool_call>\nDone.";
     const literal = "Use <tool_call>exec<arg_key> literally. Example: `</arg_key>`.";
-    const cfg = { channels: { telegram: { richMessages: true } } } as never;
+    const cfg = { channels: { telegram: { richMessages: true } } };
     expect(telegramOutbound.sanitizeText?.({ text: shadow, payload: { text: shadow } })).toBe(
       "Visible\n\nDone.",
     );

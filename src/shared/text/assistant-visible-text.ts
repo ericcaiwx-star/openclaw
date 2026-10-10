@@ -42,7 +42,7 @@ const INTERNAL_CHANNEL_TRACE_LINE_RE =
  * closing tag, or to end-of-string if the stream was truncated mid-tag.
  */
 const TOOL_CALL_QUICK_RE =
-  /<\s*\/?\s*(?:antml:)?(?:tool_call|tool_result|function_calls?|function_response|function|tool_calls|invoke|parameter)\b/i;
+  /<\s*(?:\/\s*)?(?:(?:antml|mm):)?(?:tool_call|tool_result|function_calls?|function_response|function|tool_calls|invoke|parameter)\b/i;
 const TOOL_CALL_TAG_NAMES = new Set([
   "tool_call",
   "tool_result",
@@ -51,16 +51,35 @@ const TOOL_CALL_TAG_NAMES = new Set([
   "function_response",
   "function",
   "tool_calls",
+  "invoke",
   "antml:invoke",
   "antml:parameter",
+  "antml:function_calls",
+  "mm:tool_call",
+  "mm:function_calls",
+  "mm:invoke",
+  "mm:parameter",
 ]);
+const TOOL_CALL_PREFIX_NAMES = [...TOOL_CALL_TAG_NAMES, "parameter", "parameters", "arguments"];
 const TOOL_CALL_JSON_PAYLOAD_START_RE =
   /^(?:\s+[A-Za-z_:][-A-Za-z0-9_:.]*\s*=\s*(?:"[^"]*"|'[^']*'|[^\s"'=<>`]+))*\s*(?:\r?\n\s*)?[[{]/;
 const TOOL_CALL_XML_PAYLOAD_START_RE =
-  /^\s*(?:\r?\n\s*)?<(?:antml:)?(?:function_call|tool_call|function|invoke|parameters?|arguments?)\b/i;
+  /^\s*(?:\r?\n\s*)?<(?:antml:|mm:)?(?:function_call|tool_call|function|invoke|parameters?|arguments?)\b/i;
 const NESTED_JSON_TOOL_CALL_PAYLOAD_START_RE = /^\s*(?:\r?\n\s*)?<(?:function_call|tool_call)\b/i;
 
 type ToolCallPayloadKind = "json" | "xml" | null;
+
+function isToolCallTagPrefix(text: string, start: number): boolean {
+  if (start < 0) {
+    return false;
+  }
+  const match = /^<\s*(?:\/\s*)?([\w:]*)$/.exec(text.slice(start));
+  if (!match) {
+    return false;
+  }
+  const name = (match[1] ?? "").toLowerCase();
+  return TOOL_CALL_PREFIX_NAMES.some((candidate) => candidate.startsWith(name));
+}
 
 function detectToolCallPayloadKind(
   text: string,
@@ -71,7 +90,10 @@ function detectToolCallPayloadKind(
   if (TOOL_CALL_JSON_PAYLOAD_START_RE.test(rest)) {
     return "json";
   }
-  if (TOOL_CALL_XML_PAYLOAD_START_RE.test(rest)) {
+  if (
+    TOOL_CALL_XML_PAYLOAD_START_RE.test(rest) ||
+    (streaming && isToolCallTagPrefix(text, skipWhitespace(text, start)))
+  ) {
     return "xml";
   }
   if (isGlmArgPayload(rest, streaming)) {
@@ -102,11 +124,11 @@ function isLikelyStandaloneFunctionToolCall(
   tagStart: number,
   tag: ParsedToolCallTag,
 ): boolean {
-  if (tag.tagName !== "function" || tag.isClose || tag.isSelfClosing || tag.isTruncated) {
+  if (tag.isClose || tag.isSelfClosing || tag.isTruncated) {
     return false;
   }
 
-  if (!/\bname\s*=/.test(text.slice(tag.contentStart, tag.end))) {
+  if (tag.tagName === "function" && !/\bname\s*=/.test(text.slice(tag.contentStart, tag.end))) {
     return false;
   }
 
@@ -291,12 +313,15 @@ export function stripToolCallXmlTags(input: string, options: StripToolCallXmlOpt
 }
 
 function stripToolCallXmlTagsInternal(
-  input: string,
+  text: string,
   options: StripToolCallXmlOptions,
   streaming: boolean,
 ): string {
-  const text = input;
-  if (!text || !TOOL_CALL_QUICK_RE.test(text)) {
+  if (
+    !text ||
+    (!TOOL_CALL_QUICK_RE.test(text) &&
+      !(streaming && isToolCallTagPrefix(text, text.lastIndexOf("<"))))
+  ) {
     return text;
   }
 
@@ -318,6 +343,13 @@ function stripToolCallXmlTagsInternal(
     }
 
     const tag = parseToolCallTagAt(text, idx);
+    if (
+      streaming &&
+      toolCallBlockTagName === null &&
+      ((tag?.isTruncated && !tag.isClose) || isToolCallTagPrefix(text, idx))
+    ) {
+      return unwrapStandaloneParameterTags(result + text.slice(lastIndex, idx));
+    }
     if (!tag) {
       continue;
     }
@@ -349,7 +381,7 @@ function stripToolCallXmlTagsInternal(
       }
       const payloadStart = tag.isTruncated ? tag.contentStart : tag.end;
       const isPluralToolCallWrapper =
-        tag.tagName === "function_calls" || tag.tagName === "tool_calls";
+        tag.tagName.endsWith("function_calls") || tag.tagName === "tool_calls";
       const matchingCloseStart = isPluralToolCallWrapper
         ? findMatchingToolCallCloseIndex(text, tag.end, tag.tagName)
         : -1;
@@ -362,9 +394,12 @@ function stripToolCallXmlTagsInternal(
         findAdjacentOpeningToolCallTag(text, matchingCloseTag.end, "function_response") !== null;
       const shouldDetectXmlPayload =
         tag.tagName === "tool_call" ||
+        tag.tagName === "mm:tool_call" ||
         tag.tagName === "function" ||
-        tag.tagName === "antml:invoke" ||
-        ((options.stripFunctionCallsXmlPayloads === true ||
+        tag.tagName.endsWith("invoke") ||
+        ((tag.tagName.includes(":") ||
+          isLineStartAt(text, idx) ||
+          options.stripFunctionCallsXmlPayloads === true ||
           shouldStripPluralWrapperBeforeResponse) &&
           isPluralToolCallWrapper);
       const payloadKind = shouldDetectXmlPayload
@@ -373,7 +408,8 @@ function stripToolCallXmlTagsInternal(
           ? "json"
           : null;
       const shouldStripStandaloneFunction =
-        tag.tagName !== "function" || isLikelyStandaloneFunctionToolCall(text, idx, tag);
+        (tag.tagName !== "function" && tag.tagName !== "invoke") ||
+        isLikelyStandaloneFunctionToolCall(text, idx, tag);
       const functionResponseCloseStart =
         tag.tagName === "function_response"
           ? findMatchingToolCallCloseIndex(text, tag.end, tag.tagName)
@@ -649,7 +685,7 @@ export function assistantVisibleTextFilters(
       transform: stripRelevantMemoriesTags,
       activationTokens: ["relevant-memories", "relevant_memories"],
     },
-    toolCallXmlProfileFilter(
+    toolCallXmlTextFilter(
       {
         stripFunctionCallsXmlPayloads: profile === "tool-progress",
         stripFunctionResponseAfterPluralToolCalls:
@@ -685,18 +721,14 @@ export const minimaxToolCallTextFilter: TextFilter = {
   activationTokens: ["minimax:tool_call", "<]minimax[>[<tool_call>"],
 };
 
-function toolCallXmlProfileFilter(
-  options: StripToolCallXmlOptions,
-  streaming: boolean,
+export function toolCallXmlTextFilter(
+  options: StripToolCallXmlOptions = {},
+  streaming = false,
 ): TextFilter {
   return {
     transform: (text) => stripToolCallXmlTagsInternal(text, options, streaming),
     activationTokens: ["<"],
   };
-}
-
-export function toolCallXmlTextFilter(options: StripToolCallXmlOptions = {}): TextFilter {
-  return toolCallXmlProfileFilter(options, false);
 }
 
 export const legacyBracketToolCallTextFilter: TextFilter = {
