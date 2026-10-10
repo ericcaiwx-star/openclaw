@@ -1,5 +1,7 @@
+import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import { pathToFileURL } from "node:url";
+import { promisify } from "node:util";
 import { deserialize } from "node:v8";
 import { MessageChannel, Worker } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
@@ -10,13 +12,20 @@ import {
   createDeferred,
   withinTest,
 } from "../../../test/helpers/promise.js";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { revokeCronStandingGrant } from "../../gateway/operator-approval-store.js";
 import { acquireFileLock } from "../../infra/file-lock.js";
 import { resolveRuntimeProcessEntrypointUrl } from "../../infra/runtime-process-url.js";
+import {
+  resolveRuntimeWorkerArgv,
+  resolveRuntimeWorkerUrl,
+} from "../../infra/runtime-worker-url.js";
 import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import * as workerCpu from "../../infra/worker-cpu.js";
 import { AsyncWorkScope, getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import { captureEffectAuthority, withEffectPreparation } from "../../shared/effect-authority.js";
+import { createOpenClawDatabaseMaintenanceScope } from "../../state/openclaw-state-db-async-lifecycle.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db-cache.js";
 import { executeExistingOpenClawStateRead } from "../../state/openclaw-state-db-readonly.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
@@ -26,6 +35,7 @@ import {
   withOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
+import { cronOwnerHardeningEntrypoints } from "../owner-hardening-runtime.test-support.js";
 import { runCronRuntimeMutation } from "../service/runtime-mutation.js";
 import { loadCronStore, saveCronStore } from "../store.js";
 import type { CronStoredJob } from "../types.js";
@@ -45,6 +55,24 @@ import {
 import { prepareCronStoreChanges } from "./save.kernel.js";
 
 afterEach(() => vi.restoreAllMocks());
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+it("reports rejected native settlement without releasing database or authority custody", async ({
+  signal,
+}) => {
+  const stateDir = tempDirs.make("cron-native-custody-");
+  const { stdout } = await promisify(execFile)(
+    process.execPath,
+    [
+      ...resolveRuntimeWorkerArgv(
+        resolveRuntimeWorkerUrl(cronOwnerHardeningEntrypoints.receiptAuthorityFailure),
+      ),
+      stateDir,
+    ],
+    { timeout: 30_000, killSignal: "SIGKILL", signal },
+  );
+  expect(stdout).toContain("retained-native-custody");
+});
 
 it("refuses first authority admission for a hardlinked database without SQL or a poisoned owner", async () => {
   await withOpenClawTestState({ label: "cron-authority-hardlink" }, async (fixture) => {
@@ -163,12 +191,10 @@ async function seed(fixture: OpenClawTestState, partition = "first", enabled = t
 /** Pauses the real worker after its commit grant, then after native settlement before its reply. */
 async function gateWriter(fixture: OpenClawTestState) {
   await closeOpenClawStateDatabaseAsync();
-  const gate = new Int32Array(new SharedArrayBuffer(20));
+  const gate = new Int32Array(new SharedArrayBuffer(16));
   Atomics.store(gate, 3, 1);
-  Atomics.store(gate, 4, 1);
   const granted = createDeferred();
   const committed = createDeferred();
-  const stale = createDeferred();
   const replied = createDeferred();
   const { port1, port2 } = new MessageChannel();
   port1.on("message", (phase) => {
@@ -177,9 +203,6 @@ async function gateWriter(fixture: OpenClawTestState) {
     }
     if (phase === "committed") {
       committed.resolve();
-    }
-    if (phase === "stale") {
-      stale.resolve();
     }
     if (phase === "reply") {
       replied.resolve();
@@ -195,7 +218,7 @@ async function gateWriter(fixture: OpenClawTestState) {
     const phase = workerData.authorityPhase;
     const post = MessagePort.prototype.postMessage;
     const load = Atomics.load;
-    let selected, decision, previousCommit;
+    let selected, decision;
     parentPort.on("message", (request) => {
       if (request.type === "execute" && load(gate, 0)) {
         const command = deserialize(request.input);
@@ -209,14 +232,8 @@ async function gateWriter(fixture: OpenClawTestState) {
           phase.postMessage("committed");
           Atomics.wait(gate, 3, 0);
         }
-        if (selected && previousCommit) {
-          post.call(this, previousCommit);
-          phase.postMessage("stale");
-          Atomics.wait(gate, 4, 0);
-        }
         post.call(this, message, ...args);
         if (selected) post.call(this, message);
-        previousCommit = message;
         return;
       }
       if (this === parentPort && message?.id === selected && message.ok) {
@@ -263,14 +280,11 @@ async function gateWriter(fixture: OpenClawTestState) {
   return {
     granted: granted.promise,
     committed: committed.promise,
-    stale: stale.promise,
     replied: replied.promise,
     arm: () => Atomics.store(gate, 0, 1),
     commit: () => release(1),
     holdNativeReceipt: () => Atomics.store(gate, 3, 0),
     publish: () => release(3),
-    holdStaleReceipt: () => Atomics.store(gate, 4, 0),
-    currentReceipt: () => release(4),
     reply: () => release(2),
     async terminate() {
       if (!worker) {
@@ -282,7 +296,6 @@ async function gateWriter(fixture: OpenClawTestState) {
       release(1);
       release(2);
       release(3);
-      release(4);
       factory.mockRestore();
       port1.close();
       port2.close();
@@ -290,7 +303,7 @@ async function gateWriter(fixture: OpenClawTestState) {
   };
 }
 
-it("suspends through commit and reply gaps, ignores stale/duplicate facts, and keeps partitions exact", async ({
+it("suspends through commit and reply gaps, ignores duplicate facts, and keeps partitions exact", async ({
   signal,
 }) => {
   await withOpenClawTestState({ label: "cron-authority-publication" }, async (fixture) => {
@@ -303,12 +316,11 @@ it("suspends through commit and reply gaps, ignores stale/duplicate facts, and k
       const sql = observeMainThreadSql();
       sql.calibrate();
       let checked = false;
-      let admission: workerAdmission.SqliteWorkerOperationAdmission | undefined;
       const create = workerAdmission.createSqliteWorkerOperationAdmission;
       const admissions = vi
         .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
-        .mockImplementation((admit, attachment) => {
-          admission = create((request, grant) => {
+        .mockImplementation((admit, attachment) =>
+          create((request, grant) => {
             if (request.stage === "commit") {
               sql.clear();
               expect(() => first.observation.readForPreparation()).toThrow("unavailable");
@@ -318,11 +330,10 @@ it("suspends through commit and reply gaps, ignores stale/duplicate facts, and k
             } else {
               admit(request, grant);
             }
-          }, attachment);
-          return admission;
-        });
+          }, attachment),
+        );
       gate.arm();
-      gate.holdStaleReceipt();
+      gate.holdNativeReceipt();
       pending = saveCronStore(first.storePath, {
         version: 1,
         jobs: [{ ...first.job, enabled: false }],
@@ -335,12 +346,11 @@ it("suspends through commit and reply gaps, ignores stale/duplicate facts, and k
       expect(() => first.observation.readForPreparation()).toThrow("unavailable");
       gate.commit();
       await withinTest(
-        awaitGateBeforeSettlement(gate.stale, pending, "Save missed the stale receipt gate"),
+        awaitGateBeforeSettlement(gate.committed, pending, "Save missed native COMMIT"),
         signal,
       );
-      admission!.service();
       expect(() => first.observation.readForPreparation()).toThrow("unavailable");
-      gate.currentReceipt();
+      gate.publish();
       await withinTest(
         awaitGateBeforeSettlement(gate.replied, pending, "Save missed the ordinary reply gate"),
         signal,
@@ -737,22 +747,65 @@ it.each(["mutation", "other database"] as const)(
   },
 );
 
+it.each([false, true])(
+  "joins native initiation acknowledgement after a throwing launch: %s",
+  async (throws) => {
+    await withOpenClawTestState({ label: "cron-native-initiation-close" }, async (fixture) => {
+      const owner = await seed(fixture);
+      const nativeReady = createDeferred();
+      const use = await owner.observation.acquireUse({
+        permission: "execution",
+        assertCurrent() {},
+      });
+      let drained = false;
+      let draining: Promise<void> | undefined;
+      try {
+        const initiate = () =>
+          use.initiate(() => {
+            if (throws) {
+              throw new Error("launch rejected");
+            }
+          }, nativeReady.promise);
+        if (throws) {
+          expect(initiate).toThrow("launch rejected");
+        } else {
+          initiate();
+        }
+        expect(() => use.initiate(() => undefined)).toThrow(CronReceiptAuthorityRefusal);
+        use.release();
+        expect(() => use.assertCurrent()).toThrow(CronReceiptAuthorityRefusal);
+        beginCronReceiptAuthorityClose();
+        draining = drainCronReceiptAuthority().then(() => {
+          drained = true;
+        });
+        await owner.read();
+        expect(drained).toBe(false);
+        nativeReady.resolve();
+        await draining;
+        expect(drained).toBe(true);
+      } finally {
+        nativeReady.resolve();
+        await draining;
+        use.release();
+        await owner.close();
+        await closeOpenClawStateDatabaseAsync();
+        startCronReceiptAuthorityHost();
+      }
+    });
+  },
+);
+
 it("enrolls approval mutations in the same physical receipt authority boundary", async () => {
   await withOpenClawTestState({ label: "cron-authority-approval-enrollment" }, async (fixture) => {
     const owner = await seed(fixture);
-    const create = workerAdmission.createSqliteWorkerOperationAdmission;
     const stages: string[] = [];
-    const factory = vi
-      .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
-      .mockImplementation((admit, attachment) =>
-        create((request, grant) => {
-          if (request.stage === "transaction" || request.stage === "commit") {
-            expect(() => owner.observation.readForPreparation()).toThrow("unavailable");
-            stages.push(request.stage);
-          }
-          admit(request, grant);
-        }, attachment),
-      );
+    const factory = probe.admission(workerAdmission, (request, grant, admit) => {
+      if (request.stage === "transaction" || request.stage === "commit") {
+        expect(() => owner.observation.readForPreparation()).toThrow("unavailable");
+        stages.push(request.stage);
+      }
+      admit(request, grant);
+    });
     try {
       await expect(
         revokeCronStandingGrant({
@@ -765,6 +818,26 @@ it("enrolls approval mutations in the same physical receipt authority boundary",
       expect(owner.observation.readForPreparation().messageRevoked).toBe(false);
     } finally {
       factory.mockRestore();
+      await owner.close();
+    }
+  });
+});
+
+it("keeps independently borrowed cron custody after the creating maintenance scope closes", async () => {
+  await withOpenClawTestState({ label: "cron-authority-maintenance-borrow" }, async (fixture) => {
+    const maintenance = createOpenClawDatabaseMaintenanceScope();
+    const owner = await maintenance.run(() => seed(fixture));
+    try {
+      await loadCronStore(owner.storePath);
+      await maintenance.close();
+      expect(owner.observation.readForPreparation().messageRevoked).toBe(false);
+      await saveCronStore(owner.storePath, {
+        version: 1,
+        jobs: [{ ...owner.job, enabled: false }],
+      });
+      expect(owner.observation.readForPreparation().messageRevoked).toBe(true);
+    } finally {
+      await maintenance.close();
       await owner.close();
     }
   });

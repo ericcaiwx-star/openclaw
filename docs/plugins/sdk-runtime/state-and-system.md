@@ -210,9 +210,9 @@ closing the connection.
     while the drain still owns the claim, shutdown reports the error and retains
     that ownership.
 
-    <Warning>
-    `openBlobStore`, `openKeyedStore`, `openSyncKeyedStore`, `openChannelIngressQueue`, and `openChannelIngressDrain` are available only to bundled plugins and trusted official plugin installations in this release. Refusals include the recorded reason, registry database path, origin, and install source/spec; `plugins inspect` reports the same trust facts. A load path selecting the recorded official installation preserves trust; an untracked local copy does not. See [Trusted plugin state refused](/tools/plugin#trusted-plugin-state-refused) for doctor migrations and cause-specific remedies. An untrusted channel's ingress monitor fails channel start instead of running without a durable queue.
-    </Warning>
+    `openBlobStore`, `openKeyedStore`, `openSyncKeyedStore`, `openChannelIngressQueue`, and `openChannelIngressDrain` are available to every loaded plugin, including workspace plugins, `plugins.load.paths`, and linked installs. The runtime binds each handle to the calling plugin's namespace; existing quotas, retention and overflow policies, scope checks, and worker ownership still apply. This change requires no provenance repair or data migration.
+
+    `plugins inspect` and startup provenance warnings still report trust information. Trust remains required for hook agent turns and Gateway scope elevation; see [Plugin runtime trust refused](/tools/plugin#plugin-runtime-trust-refused) for those capabilities.
 
   </Accordion>
 </AccordionGroup>
@@ -322,6 +322,85 @@ outside that decision. Never retry transport failures, unknown outcomes, or
 arbitrary callbacks. Check both optional methods before using this capability;
 there is no safe fallback consisting of a separate lookup and unconditional write.
 
+For a complete operation spanning keys or namespaces, use the optional
+`store.createOperation` capability. Its named plugin module runs inside the
+existing shared-state worker, with all reads and writes in one synchronous
+transaction. The factory captures the admitted plugin generation, physical state
+source, namespace handles, and live action authority before any await.
+
+```typescript
+type MoveOperations = {
+  move: { input: { key: string }; output: boolean };
+};
+const operation = source.createOperation<MoveOperations>(
+  [source, destination],
+  {
+    moduleName: "transfer-operation-api.js",
+    exportName: "executeTransfer",
+  },
+  { assertCurrent },
+);
+const receipt = await operation.execute(
+  { type: "move", input: { key } },
+  { writeStores: [0, 1], watchStores: [1] },
+);
+receipt.assertCurrent();
+```
+
+The worker export accepts the typed command and a
+`PluginStateOperationTransaction`. Its synchronous `lookup`, `lookupMany`,
+`entries`, `set`, and `delete` methods address the captured stores by index.
+Repeated reads share the transaction's row view; `lookupMany` selects uncached
+keys together. Writes update that view and preserve existing JSON limits,
+namespace quotas, eviction, and TTL rules. The host rejects writes outside
+`writeStores`, retained transaction methods used after return, and Promise or
+thenable handler results. A failure rolls back the whole operation.
+
+Put operation entrypoints at the plugin package root as `*-operation-api.ts`
+(or compiled JavaScript). They are captured with the admitted plugin generation
+and included by the existing bundled and standalone plugin build owners. The
+worker loads that captured module before entering the transaction. The captured
+plugin owner resolves the top-level filename within its selected source or build
+family, including `.js` references to TypeScript source. Paths and URLs are refused.
+It does not rediscover a current plugin by id, serialize a closure, or open another
+database owner. Plugins do not need a process-runtime import or their own knowledge
+of source, bundled-build, and standalone-package directory layouts.
+
+For bundled plugins, capture follows all operation entrypoints in the selected
+source or build family and their actual imports. Packages compiled into those
+files do not also need an installed runtime copy merely because the source
+manifest declares them. External imports still need their runtime dependencies.
+The entries share one captured generation, including their common dependencies,
+and recovery retains those bytes until the last owning instance releases them.
+Compiled entries can also capture shared chunks from their owning host package.
+This also applies when Doctor loads the plugin during an update.
+
+An empty `writeStores` array selects a noncreating read. Supply `missingValue`
+when an absent physical database has a defined result, including explicit
+`undefined`; the host returns that value without creating the database or
+executing the handler. An absent source without `missingValue` refuses the call.
+
+The Gateway owns online database mutation. Operation receipts use its in-process
+write publications, pending-mutation invalidation, expiry, and lifecycle state.
+They do not poll SQLite for foreign commits or reread rows on the main thread.
+Call `receipt.assertCurrent()` immediately before a later external effect.
+`watchStores` selects the namespaces on which that effect depends; unrelated
+writes to other namespaces do not invalidate it. A queued mutation invalidates
+older receipts before native commit. Unknown outcomes never authorize replay.
+Accepted writes still settle when their caller closes; a returned historical
+result does not grant permission for a new effect.
+
+When composing a continuation with more store handles, pass its original
+`sourceReceipt` in the factory's authority options. The host verifies that all
+participants belong to that captured source before awaiting; a new environment
+selection cannot redirect a recovery operation.
+
+`createOperation` remains optional in version 1 and version 2 store types so
+released hosts and third-party adapters remain source-compatible. Select a named
+compatibility path only when the capability is absent, before awaiting. A worker,
+authority, or module-loading failure never selects a synchronous fallback.
+No schema, retention, durability, or minimum-host version change is required.
+
 `registerIfAbsent` and the optional `deleteIfEqual(key, expected)` operation use
 the shared-state SQLite worker. `deleteIfEqual` accepts a string, finite number,
 boolean, or `null`, and compares it with the decoded live value in the same
@@ -360,9 +439,8 @@ never selects that compatibility path. The namespace, stored records, and
 retention remain unchanged, so this cutover requires no data migration.
 
 This deprecation adds editor annotations, documentation, and compatibility
-inventory metadata. It adds no runtime warning and changes no trust eligibility:
-the runtime openers remain limited to bundled plugins and trusted official
-installations. Runtime warnings should wait for an actionable supported upgrade.
+inventory metadata. It adds no runtime warning. Both runtime openers are available
+to every loaded plugin. Runtime deprecation warnings should wait for an actionable supported upgrade.
 Only the operations identified above execute on the worker. Callback execution
 is unchanged during this migration.
 

@@ -8,6 +8,7 @@ import {
 import {
   type SessionPlacementTurnParams,
   installSessionPlacementAdmissionProvider,
+  resolveSessionPlacementRuntimeOverride,
   withSessionPlacementTurnAdmission,
 } from "../../agents/session-placement-admission.js";
 import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
@@ -216,6 +217,83 @@ describe("initial worker setup admission", () => {
       }
     },
   );
+
+  it("keeps the worker runtime default when setup finishes during its read", async ({ signal }) => {
+    const fixture = await setup("worker-turn");
+    const reading = createDeferredCore();
+    const resumeRead = createDeferredCore();
+    const readProjection = placements.readProjection.bind(placements);
+    const read = vi.spyOn(placements, "readProjection").mockImplementationOnce(async (...args) => {
+      const projection = await readProjection(...args);
+      reading.resolve();
+      await resumeRead.promise;
+      return projection;
+    });
+    const environments = unusedEnvironments();
+    const uninstall = installSessionPlacementAdmissionProvider(
+      createWorkerSessionTurnPlacementProvider({ environments, placements }),
+    );
+    const runtime = resolveSessionPlacementRuntimeOverride(sessionTarget);
+    void runtime.catch(() => undefined);
+    try {
+      await withinTest(
+        awaitGateBeforeSettlement(reading.promise, runtime, "runtime selection skipped its read"),
+        signal,
+      );
+      fixture.finish.resolve();
+      await fixture.operation;
+      resumeRead.resolve();
+      await expect(runtime).resolves.toBe("openclaw");
+      expect(placements.get(SESSION_ID)).toMatchObject({ state: "active", turnClaim: null });
+      expect(environments.startTunnel).not.toHaveBeenCalled();
+    } finally {
+      resumeRead.resolve();
+      fixture.finish.resolve();
+      await Promise.allSettled([runtime, fixture.operation]);
+      uninstall();
+      read.mockRestore();
+    }
+  });
+
+  it("refreshes pending-result facts after waiting for initial setup", async ({ signal }) => {
+    const fixture = await setup("remote-exec", "syncing", async () => {
+      const claim = await placements.claimTurn({
+        ...sessionTarget,
+        claimId: "setup-result-claim",
+        runId: "setup-result-run",
+        owner: { kind: "local", environmentId: ENVIRONMENT_ID, ownerEpoch: OWNER_EPOCH },
+      });
+      await placements.markWorkspaceResultPending(claim);
+      placements.clearLocalTurnClaimsAfterRestart();
+    });
+    const claimTurn = vi.spyOn(placements, "claimTurn");
+    const runLocal = vi.fn(async () => ({ meta: { durationMs: 1 } }));
+    const provider = createWorkerSessionTurnPlacementProvider({
+      environments: unusedEnvironments(),
+      placements,
+      waitForInitialPlacement: fixture.waitForInitialPlacement,
+    });
+    const run = provider.executeTurn(
+      { ...sessionTarget, runId: "waiting-input" },
+      { ...turn("waiting-input"), abortSignal: signal },
+      runLocal,
+    );
+    void run.catch(() => undefined);
+    try {
+      await withinTest(
+        awaitGateBeforeSettlement(fixture.waiting, run, "turn skipped the setup wait"),
+        signal,
+      );
+      fixture.finish.resolve();
+      await fixture.operation;
+      await expect(run).rejects.toThrow("Workspace recovery is still pending");
+      expect(claimTurn.mock.calls.filter(([claim]) => claim.runId === "waiting-input")).toEqual([]);
+      expect(runLocal).not.toHaveBeenCalled();
+    } finally {
+      fixture.finish.resolve();
+      await Promise.allSettled([run, fixture.operation]);
+    }
+  });
 
   it.for([
     "failure",

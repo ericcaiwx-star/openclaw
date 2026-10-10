@@ -90,6 +90,17 @@ settlement receipts, output delivery, expiry, and cancellation. Missing or
 disabled executors fail explicitly; the host never substitutes a less isolated
 executor.
 
+The controller's `__openclaw*` hook protocol is experimental and changes with
+the controller source. Bridge settlement is host-only: before evaluating
+`CODE_MODE_CONTROLLER_SOURCE`, register an `__openclawHostTakeBridgeReply`
+callback next to `__openclawHostRequest` (the controller captures and removes
+both). To settle, stage the replies host-side and call `__openclawSettleBridge()`
+with no arguments; the controller pulls each reply from the callback until it
+returns `undefined`. Return each reply as an object with own data properties
+`id`, `ok`, and `json`, never through ordinary property assignment on a guest
+object. Executors that called `__openclawSettleBridge(id, ok, payload)` must
+move to this pull form.
+
 ## Native MCP App adapters
 
 An agent harness that owns MCP connections can implement `acquireMcpAppRuntime` alongside `loadMcpToolCatalog`. The acquisition receives the exact session identity, configured server names, session tool overrides, requester identity, and an `assertCurrent` invocation guard. Return a `SessionMcpRuntimeLease` over the existing connection; do not create a second client to launch an App.
@@ -290,3 +301,23 @@ the native operation.
 Use the plugin approval timeout independently of the agent-run timeout. Authenticated
 Control UI reviewers can inspect `detail`, while channel messages retain
 the bounded description. Oversized detail is rejected by the existing request schema.
+
+## Stateful CLI commands
+
+`openclaw/plugin-sdk/cli-state-owner` exports `runWithLocalStateOwner`. Supply the
+Gateway `method`, serializable `params`, a diagnostic `target`, and `runLocal`.
+Open databases and load mutation-capable runtime state only inside `runLocal`;
+its scope supplies the admitted config, environment, abort signal, and current
+owner assertion. Close plugin-owned stores before the callback returns.
+
+The helper routes to the local Gateway with its expected owner ID, or retains
+exclusive offline ownership through resource settlement. It never replays an
+uncertain Gateway mutation locally. Use `onForeignOwner: "refuse"` for commands
+that require an offline Gateway. Optional `scopes` preserves the command's
+existing authorization contract; the default is `operator.admin`.
+
+Gateway handlers can use `captureLocalStateMutationGuard` from
+`openclaw/plugin-sdk/gateway-runtime` to bind the expected owner and current
+request authority, then pass the returned assertion to their existing writer
+admission and privileged-effect boundaries. `isImplicitLocalGatewayTargetFromCli`
+from that same entrypoint preserves explicit and configured remote CLI targets.

@@ -36,6 +36,7 @@ import {
 } from "../infra/agent-run-registry.js";
 import { projectPluginSessionExtensionsSync } from "../plugins/host-hook-state.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
+import { resolveSessionCommunicationPolicy } from "../sessions/communication-policy.js";
 import { resolveActiveSessionAgentStatus } from "../sessions/session-agent-status.js";
 import { deriveSessionUnread } from "../shared/session-unread.js";
 import type { SessionRepositoryWorkspaceRecord } from "../state/session-repository-workspaces.types.js";
@@ -52,6 +53,7 @@ import {
   projectSessionOwner,
   projectSessionParticipants,
 } from "./session-identity-projection.js";
+import { sessionModelRevision } from "./session-model-revision.js";
 import { isSessionPermissionChangePending } from "./session-permission-change.js";
 import { projectSessionProviderReview } from "./session-provider-review-projection.js";
 import { readSessionRowModelFacts } from "./session-row-model-facts.js";
@@ -90,6 +92,7 @@ export function readSessionRowInputs(params: {
   active?: boolean;
   /** A supplied resident model avoids transcript reads; null uses only stored model facts. */
   activeModel?: { provider: string; model: string } | null;
+  terminalModel?: { modelProvider: string; model: string } | null;
   store: Record<string, SessionEntry>;
   modelSource?: GatewaySessionModelSource;
   key: string;
@@ -130,7 +133,7 @@ export function readSessionRowInputs(params: {
       modelCatalog: params.modelCatalog,
       lightweightListRow: lightweight,
     });
-  const freshSessionTotalTokens = asNonNegativeFiniteNumber(resolveFreshSessionTotalTokens(entry));
+  const freshSessionTotalTokens = resolveFreshSessionTotalTokens(entry);
   const usageByFallbackModel =
     params.skipTranscriptUsageFallback !== true
       ? resolveTranscriptUsageFallbacks({
@@ -155,6 +158,7 @@ export function readSessionRowInputs(params: {
     cfg,
     active: params.active,
     activeModel: params.activeModel,
+    terminalModel: params.terminalModel,
     storeAgentId: params.storeAgentId,
     selectedModel,
     projectedAgentRuns: (rowContext.projectedAgentRuns ??= buildProjectedAgentRunIndex()),
@@ -305,6 +309,7 @@ export function resolveGatewaySessionActiveModel(params: {
   cfg: OpenClawConfig;
   active?: boolean;
   activeModel?: { provider: string; model: string } | null;
+  terminalModel?: { modelProvider: string; model: string } | null;
   agentId: string;
   storeAgentId?: string;
   sessionId?: string;
@@ -319,7 +324,7 @@ export function resolveGatewaySessionActiveModel(params: {
     sessionId: params.sessionId,
     index: params.projectedAgentRuns,
   });
-  if (params.active ?? (liveModel !== undefined || params.entry?.status === "running")) {
+  if (params.active ?? liveModel !== undefined) {
     return liveModel ?? undefined;
   }
   if (!params.entry?.fallbackNotice) {
@@ -334,6 +339,7 @@ export function resolveGatewaySessionActiveModel(params: {
           selectedModel: selectedModel.model,
           sessionEntry: params.entry,
           config: params.cfg,
+          terminalModel: params.terminalModel,
           sessionScope: {
             agentId: params.storeAgentId ?? params.agentId,
             sessionKey: params.sessionKey,
@@ -417,6 +423,7 @@ export function projectSessionRowChildLinks(links: readonly SessionChildLink[] |
     entry: {
       sessionId: entry.sessionId,
       updatedAt: entry.updatedAt,
+      archivedAt: entry.archivedAt,
       status: entry.status,
       startedAt: entry.startedAt,
       endedAt: entry.endedAt,
@@ -450,6 +457,7 @@ export function materializeSessionRow(input: ReturnType<typeof readSessionRowInp
   // Reserve temporal fields in wire order; presentation fills a fresh copy.
   const row: GatewaySessionRow = {
     key,
+    sessionModelRevision: sessionModelRevision(entry),
     // Only explicitly requested summaries may clear swarm state in event merges.
     ...(input.includeSwarmSummary ? { swarm: input.swarm } : {}),
     visibility: entry ? (entry.visibility ?? "shared") : undefined,
@@ -462,6 +470,8 @@ export function materializeSessionRow(input: ReturnType<typeof readSessionRowInp
     workspaceDir: entry?.spawnedCwd ?? entry?.spawnedWorkspaceDir,
     projectId: entry?.projectId,
     permissionMode: entry?.permissionMode,
+    communication: entry?.communication,
+    effectiveCommunication: resolveSessionCommunicationPolicy({ config: input.cfg, entry }),
     sandboxMode: entry?.sandboxMode,
     nativeRuntimeConsent: entry?.nativeRuntimeConsent,
     permissionModePending: input.permissionModePending,
@@ -478,6 +488,7 @@ export function materializeSessionRow(input: ReturnType<typeof readSessionRowInp
     subagentRole: entry?.subagentRole,
     subagentControlScope: entry?.subagentControlScope,
     createdVia: entry?.createdVia,
+    createdSurface: entry?.createdSurface,
     ...projectSessionRowProfiles(input),
     createdAt: entry?.createdAt,
     forkSource: entry?.forkSource,
@@ -501,7 +512,6 @@ export function materializeSessionRow(input: ReturnType<typeof readSessionRowInp
     subject: entry?.subject,
     groupChannel: entry?.groupChannel,
     space: entry?.space,
-    conversationLink: entry?.conversationLink,
     chatType: entry?.chatType,
     origin: storedOrigin
       ? (({ avatar: _avatar, ...safeOrigin }) => safeOrigin)(storedOrigin)
@@ -511,6 +521,7 @@ export function materializeSessionRow(input: ReturnType<typeof readSessionRowInp
     archivedAt: entry?.archivedAt,
     archiveReason: entry?.archiveReason,
     pinned: pinnedAt !== undefined,
+    sidebarRoot: entry?.sidebarRoot === true,
     pinnedAt,
     snoozedUntil: pinnable ? entry?.snoozedUntil : undefined,
     snoozedAt: pinnable ? entry?.snoozedAt : undefined,
