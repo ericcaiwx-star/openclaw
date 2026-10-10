@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import type { AssistantMessage } from "../llm/types.js";
 import { consumePendingAssistantReplyDirectivesIntoReply } from "./embedded-agent-subscribe.handlers.messages.replies.js";
 import { extractAssistantStreamSnapshot } from "./embedded-agent-subscribe.handlers.messages.snapshot.js";
 import {
@@ -34,16 +35,35 @@ describe.each(["ollama", "openai-completions", "openai-responses"] as const)(
       };
     }
 
-    it("keeps markup context across adjacent native text blocks", () => {
+    it("keeps markup context across adjacent text and whitespace blocks", () => {
       const partial = message("");
       partial.content = [
         { type: "text", text: "Visible\n<tool_call>exec<arg_key>command</arg_key><arg_value>" },
+        { type: "text", text: " \n" },
         { type: "text", text: "hidden</arg_value></tool_call>\nDone." },
       ];
       const snapshot = extractAssistantStreamSnapshot(createMessageUpdateContext(), partial);
       expect(snapshot.text).toBe("Visible\n\nDone.");
       expect(snapshot.blockText).toBe("Visible\n\nDone.");
       expect(extractAssistantVisibleText(partial)).toBe("Visible\n\nDone.");
+    });
+
+    it.each([
+      { type: "toolCall", id: "call-1", name: "exec", arguments: {} },
+      { type: "thinking", thinking: "Private reasoning." },
+    ] as const)("ends XML context at a native $type block", (boundary) => {
+      const partial: AssistantMessage = {
+        ...message(""),
+        content: [
+          { type: "text", text: '<tool_call>{"name":"exec","arguments":{}}' },
+          boundary,
+          { type: "text", text: "Done." },
+        ],
+      };
+      const snapshot = extractAssistantStreamSnapshot(createMessageUpdateContext(), partial);
+      expect(snapshot.text).toBe("Done.");
+      expect(snapshot.blockText).toBe("Done.");
+      expect(extractAssistantVisibleText(partial)).toBe("Done.");
     });
 
     it.each(markup)(

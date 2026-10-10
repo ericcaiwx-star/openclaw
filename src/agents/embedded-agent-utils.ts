@@ -157,17 +157,21 @@ function prepareEmbeddedAssistantTextForPhase(
     }
   }
   // Adjacent blocks in the same phase share markup state; a phase boundary stays explicit.
-  const groupedParts: { text: string; phase?: AssistantPhase }[] = [];
+  const groupedParts: { text: string; phase?: AssistantPhase; contentIndex: number }[] = [];
   for (const part of parts) {
     const text = trimTextPreservingCode(part.text);
-    if (!text) {
-      continue;
-    }
     const previous = groupedParts.at(-1);
-    if (previous && previous.phase === part.phase) {
-      previous.text += `\n${text}`;
-    } else {
-      groupedParts.push({ text, phase: part.phase });
+    if (
+      previous &&
+      previous.phase === part.phase &&
+      previous.contentIndex + 1 === part.contentIndex
+    ) {
+      previous.contentIndex = part.contentIndex;
+      if (text) {
+        previous.text += `\n${text}`;
+      }
+    } else if (text) {
+      groupedParts.push({ text, phase: part.phase, contentIndex: part.contentIndex });
     }
   }
   return prepareRender(selectedPhase, () =>

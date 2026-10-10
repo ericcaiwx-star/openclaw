@@ -52,40 +52,60 @@ export function extractAssistantStreamSnapshot(
     inlineCode: createInlineCodeState(),
   };
   let rawText = "";
-  let blockSource = "";
-  let finalAnswer = true;
+  const blockSources: { text: string; separator: string; finalAnswer: boolean }[] = [];
   const parts: { separator: string; index?: number }[] = [];
   const renderText = prepareAssistantVisibleText(observedMessage, (part, final, phase, index) => {
     // Native blocks can divide a tag or fence; only complete visible parts get a separator.
     const separator =
       rawText && !state.pendingTagFragment && !state.pendingFenceFragment ? "\n" : "";
+    const previousIndex = parts.at(-1)?.index;
     parts.push({ separator, index });
     rawText += `${separator}${part}`;
     // Final prose preserves inline tag examples; generic streams still hide reasoning.
     const preparedFinal = phase === "final_answer" && !ctx.params.enforceFinalTag;
-    finalAnswer &&= preparedFinal;
     const visible = preparedFinal
       ? `${separator}${part}`
       : ctx.stripBlockTags(`${separator}${part}`, state, {
           final: final && options?.final !== false,
         });
-    blockSource += visible;
+    const previous = blockSources.at(-1);
+    if (
+      previous &&
+      previousIndex !== undefined &&
+      index === previousIndex + 1 &&
+      previous.finalAnswer === preparedFinal
+    ) {
+      previous.text += visible;
+    } else {
+      blockSources.push({
+        text: visible.startsWith(separator) ? visible.slice(separator.length) : visible,
+        separator,
+        finalAnswer: preparedFinal,
+      });
+    }
     return preparedFinal ? part : visible;
   });
-  const visibleBlockSource = finalAnswer
-    ? sanitizeUserFacingText(
-        applyTextFilters(
-          blockSource,
-          assistantVisibleTextFilters("final-answer-delivery", options?.final === false, {
-            preserveTrailingWhitespace: true,
-          }),
-        ),
-        { streaming: options?.final === false },
-      )
-    : toolCallXmlTextFilter(
-        { stripFunctionCallsXmlPayloads: true },
-        options?.final === false,
-      ).transform(stripDowngradedToolCallText(blockSource, { preserveTrailingWhitespace: true }));
+  const visibleBlockSource = blockSources
+    .map(({ text, separator, finalAnswer }) => ({
+      separator,
+      text: finalAnswer
+        ? sanitizeUserFacingText(
+            applyTextFilters(
+              text,
+              assistantVisibleTextFilters("final-answer-delivery", options?.final === false, {
+                preserveTrailingWhitespace: true,
+              }),
+            ),
+            { streaming: options?.final === false },
+          )
+        : toolCallXmlTextFilter(
+            { stripFunctionCallsXmlPayloads: true },
+            options?.final === false,
+          ).transform(stripDowngradedToolCallText(text, { preserveTrailingWhitespace: true })),
+    }))
+    .filter(({ text }) => text.trim())
+    .map(({ text, separator }, index) => `${index > 0 ? separator : ""}${text}`)
+    .join("");
   const blockReply = parseReplyDirectives(
     options?.final === false
       ? splitTrailingDirective(visibleBlockSource, { preserveTrailingWhitespace: true }).text
