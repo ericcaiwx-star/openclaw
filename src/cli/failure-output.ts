@@ -264,12 +264,16 @@ export function formatCliFailureLines(options: FormatCliFailureOptions): string[
   }
 
   // Default output stays terse; causes and stack traces require explicit debug intent.
+  // Contention keeps its existing two-line wait hint. Admission and maintenance
+  // refusals are the only new reason gate.
   const stateBusy = collectNestedErrorCandidates(options.error).some(
+    (error) => error instanceof Error && error.name === "GatewayStateOwnerContentionError",
+  );
+  const maintenanceRefusal = collectNestedErrorCandidates(options.error).some(
     (error) =>
       error instanceof StateDatabaseAdmissionPendingError ||
       (error instanceof Error &&
-        (error.name === "GatewayStateOwnerContentionError" ||
-          error.message.includes("undergoing offline maintenance") ||
+        (error.message.includes("undergoing offline maintenance") ||
           error.message.includes("could not be verified; retry after maintenance"))),
   );
   if (!showDebugDetails && !showUpdateDiagnostics) {
@@ -289,7 +293,7 @@ export function formatCliFailureLines(options: FormatCliFailureOptions): string[
     // Config validation owns actionable file/field details; some startup paths have not printed them.
     const showReason = isInvalidConfigError(options.error)
       ? !options.error.diagnosticEmitted
-      : isUpdateCommand || isPluginUpdateCommand || stateBusy;
+      : isUpdateCommand || isPluginUpdateCommand || maintenanceRefusal;
     return [
       `[openclaw] ${options.title}`,
       ...(showReason
@@ -297,7 +301,7 @@ export function formatCliFailureLines(options: FormatCliFailureOptions): string[
             `[openclaw] Reason: ${formatCliOperatorError(options.error, { argv: options.argv, env })}`,
           ]
         : []),
-      stateBusy
+      stateBusy || maintenanceRefusal
         ? "[openclaw] Another OpenClaw process is using your data. Wait for it to finish before trying again."
         : options.includeDoctorHint === false
           ? `[openclaw] For details, open Settings → Logs in the Control UI or run \`${formatCliCommand("openclaw logs --follow", env)}\`.`
