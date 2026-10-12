@@ -130,6 +130,18 @@ describe("prepared model runtime Gateway leases", () => {
     expect(mocks.loadAgentRuntimePluginRegistryHandle).toHaveBeenCalledTimes(loadsBeforeRun + 1);
     expect(getPreparedModelRuntimeSnapshot(input)).toBe(configured);
     expect(await loadPublishedGatewayReplyDispatchRuntime({ agentId: "default" })).toBe(published);
+
+    const loadsBeforeOutside = mocks.loadAgentRuntimePluginRegistryHandle.mock.calls.length;
+    await using outside = await acquireAgentRunPreparedModelRuntime({
+      ...input,
+      workspaceDir: "/tmp/outside-folder",
+      runtimePluginSelections: [
+        { provider: "configured-provider", modelId: "utility", runtime: "openclaw" },
+      ],
+    });
+    expect(outside.snapshot).toBe(configured);
+    expect(outside.pluginGeneration).toBe(published.pluginGeneration);
+    expect(mocks.loadAgentRuntimePluginRegistryHandle).toHaveBeenCalledTimes(loadsBeforeOutside);
   });
 
   it("evicts old idle gateway run owners while reusing recent selections", async () => {

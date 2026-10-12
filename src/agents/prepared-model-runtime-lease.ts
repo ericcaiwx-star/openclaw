@@ -1,11 +1,7 @@
 /** Agent-run lease admission for lifecycle-owned prepared model runtimes. */
 import { createAbortError, racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { withPluginMetadataSnapshotScope } from "../plugins/current-plugin-metadata-snapshot.js";
-import { resolveInstalledManifestRegistryIndexFingerprint } from "../plugins/manifest-registry-installed.js";
-import {
-  resolvePluginMetadataSnapshot,
-  resolvePluginMetadataSnapshotAsync,
-} from "../plugins/plugin-metadata-snapshot.js";
+import { resolvePluginMetadataSnapshotAsync } from "../plugins/plugin-metadata-snapshot.js";
 import { isReservedSystemAgentId } from "../system-agent/agent-id.js";
 import { assertPreparedModelRuntimeAdmissionCanWait } from "./prepared-model-runtime-admission.js";
 import { getPreparedModelRuntimeBorrowedSnapshot } from "./prepared-model-runtime-generation-scope.js";
@@ -45,53 +41,9 @@ function catalogOwnerKey(
     ...input,
     workspaceDir,
     loadRuntimePlugins: false,
-    // The selection names the model being executed. The published catalog is agent-scoped,
-    // so a discovery-model turn must still be able to read the configured agent's catalog.
+    // The selection names the model being executed. The published catalog is agent-scoped.
     runtimePluginSelections: undefined,
   });
-}
-
-function canonicalEffectivePluginIdentity(input: PreparedModelRuntimeInput): string | undefined {
-  try {
-    const snapshot = resolvePluginMetadataSnapshot({
-      config: input.config,
-      env: input.env,
-      ...(input.workspaceDir !== undefined ? { workspaceDir: input.workspaceDir } : {}),
-      allowCurrent: false,
-    });
-    return `${snapshot.policyHash}\n${resolveInstalledManifestRegistryIndexFingerprint(snapshot.index)}`;
-  } catch {
-    // An unresolved identity must not admit the configured workspace catalog.
-    return undefined;
-  }
-}
-
-/**
- * Same-directory catalog sharing stays on the historical owner key.
- * A different execution directory also needs the same agent, auth, and environment,
- * plus an independently resolved plugin artifact and policy identity.
- */
-export function preparedModelCatalogDonorMatches(
-  configured: PreparedModelRuntimeInput,
-  requested: PreparedModelRuntimeInput,
-): boolean {
-  if (
-    catalogOwnerKey(configured, configured.workspaceDir) ===
-    catalogOwnerKey(requested, requested.workspaceDir)
-  ) {
-    return true;
-  }
-  if ((configured.workspaceDir ?? "") === (requested.workspaceDir ?? "")) {
-    return false;
-  }
-  if (catalogOwnerKey(configured, undefined) !== catalogOwnerKey(requested, undefined)) {
-    return false;
-  }
-  const configuredIdentity = canonicalEffectivePluginIdentity(configured);
-  if (!configuredIdentity) {
-    return false;
-  }
-  return configuredIdentity === canonicalEffectivePluginIdentity(requested);
 }
 
 type PreparedModelRuntimeLeaseContext = {
@@ -271,6 +223,22 @@ export async function acquirePreparedModelRuntimeLeaseFromOwners(
       );
     }
 
+    // Gateway turns share the boot inventory already prepared for the configured agent.
+    // Another execution folder reuses that generation and catalog. Standalone hosts stay
+    // workspace-scoped and do not rediscover plugin identity during admission.
+    const sharesAdmittedGatewayInventory =
+      context.getGatewayLifecycleActive() &&
+      configuredOwner?.pluginGeneration !== undefined &&
+      !configuredOwner.needsRefresh &&
+      !configuredOwner.pending &&
+      !configuredOwner.refreshError &&
+      preparedPluginGenerationSupportsSelections(configuredOwner.pluginGeneration, input) &&
+      (options.pluginGeneration === undefined ||
+        preparedPluginGenerationReusesBase(
+          configuredOwner.pluginGeneration,
+          options.pluginGeneration,
+        )) &&
+      catalogOwnerKey(configuredOwner.input, undefined) === catalogOwnerKey(input, undefined);
     if (
       provenance === "run" &&
       context.getGatewayLifecycleActive() &&
@@ -286,8 +254,16 @@ export async function acquirePreparedModelRuntimeLeaseFromOwners(
       !configuredOwner.needsRefresh &&
       !configuredOwner.refreshError &&
       configuredOwner.snapshot.config === input.config &&
-      ownerKey({ ...configuredOwner.input, runtimePluginSelections: undefined }) ===
-        ownerKey({ ...input, runtimePluginSelections: undefined }) &&
+      ownerKey({
+        ...configuredOwner.input,
+        runtimePluginSelections: undefined,
+        ...(sharesAdmittedGatewayInventory ? { workspaceDir: undefined } : {}),
+      }) ===
+        ownerKey({
+          ...input,
+          runtimePluginSelections: undefined,
+          ...(sharesAdmittedGatewayInventory ? { workspaceDir: undefined } : {}),
+        }) &&
       preparedPluginGenerationSupportsSelections(configuredOwner.pluginGeneration, input)
     ) {
       owner = configuredOwner;
@@ -351,12 +327,12 @@ export async function acquirePreparedModelRuntimeLeaseFromOwners(
         `prepared model runtime publication was superseded for ${input.agentDir}`,
       );
     }
-    // Discovery rows are published for the configured agent. Execution cwd stays on the run snapshot.
-    // A different directory may reuse that catalog only when runtime selections and the
-    // independently resolved plugin identity match. Attached metadata is not that identity:
-    // preparation can inherit the donor snapshot, and the metadata cache key includes workspaceDir.
     const catalogOwner =
-      configuredOwner && preparedModelCatalogDonorMatches(configuredOwner.input, input)
+      configuredOwner &&
+      catalogOwnerKey(
+        configuredOwner.input,
+        sharesAdmittedGatewayInventory ? undefined : configuredOwner.input.workspaceDir,
+      ) === catalogOwnerKey(input, sharesAdmittedGatewayInventory ? undefined : input.workspaceDir)
         ? configuredOwner
         : owner;
     snapshot = capturePreparedModelRuntimeCatalog(snapshot, catalogOwner.snapshot);
