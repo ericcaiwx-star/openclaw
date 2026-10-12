@@ -6,6 +6,7 @@ import {
   GatewayExplicitAuthRequiredError,
   GatewayTransportError,
 } from "../gateway/call.js";
+import { StateDatabaseAdmissionPendingError } from "../infra/gateway-state-owner-record.js";
 import { UpdateSchemaRefusalError } from "../state/openclaw-update-schema-refusal.js";
 import {
   ExpectedCliError,
@@ -222,6 +223,36 @@ describe("formatCliFailureLines", () => {
     expect(output).toContain(reason);
     expect(output).not.toContain(token);
     expect(output).not.toContain("private nested diagnostic");
+    expect(output).not.toContain("Stack:");
+  });
+
+  it.each([
+    [
+      "typed admission",
+      new StateDatabaseAdmissionPendingError(
+        "/tmp/openclaw.sqlite",
+        "OpenClaw state at ~/.openclaw/state/openclaw.sqlite is undergoing offline maintenance; retry when it finishes.",
+      ),
+    ],
+    [
+      "plain maintenance refusal",
+      new Error(
+        "OpenClaw state at ~/.openclaw/state/openclaw.sqlite is undergoing offline maintenance; retry when it finishes. Authorization: Bearer sk-abcdefghijklmnopqrstuv",
+      ),
+    ],
+  ])("prints the plugins enable maintenance reason without debug: %s", (_label, error) => {
+    const output = formatCliFailureLines({
+      title: "The CLI command failed.",
+      error,
+      argv: ["node", "openclaw", "plugins", "enable", "github"],
+      env: {},
+    }).join("\n");
+
+    expect(output).toContain(
+      "OpenClaw state at ~/.openclaw/state/openclaw.sqlite is undergoing offline maintenance; retry when it finishes.",
+    );
+    expect(output).toContain("Wait for it to finish before trying again.");
+    expect(output).not.toContain("sk-abcdefghijklmnopqrstuv");
     expect(output).not.toContain("Stack:");
   });
 

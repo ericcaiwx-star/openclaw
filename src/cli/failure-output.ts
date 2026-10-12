@@ -5,6 +5,7 @@ import { getRootOptionAwareCommandPath } from "../infra/cli-root-options.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { collectNestedErrorCandidates } from "../infra/error-graph-internal.js";
 import { formatErrorMessage, formatUncaughtError } from "../infra/errors.js";
+import { StateDatabaseAdmissionPendingError } from "../infra/gateway-state-owner-record.js";
 import {
   UpdateSchemaRefusalError,
   type UpdateSchemaRefusalDatabase,
@@ -264,7 +265,12 @@ export function formatCliFailureLines(options: FormatCliFailureOptions): string[
 
   // Default output stays terse; causes and stack traces require explicit debug intent.
   const stateBusy = collectNestedErrorCandidates(options.error).some(
-    (error) => error instanceof Error && error.name === "GatewayStateOwnerContentionError",
+    (error) =>
+      error instanceof StateDatabaseAdmissionPendingError ||
+      (error instanceof Error &&
+        (error.name === "GatewayStateOwnerContentionError" ||
+          error.message.includes("undergoing offline maintenance") ||
+          error.message.includes("could not be verified; retry after maintenance"))),
   );
   if (!showDebugDetails && !showUpdateDiagnostics) {
     if (
@@ -283,7 +289,7 @@ export function formatCliFailureLines(options: FormatCliFailureOptions): string[
     // Config validation owns actionable file/field details; some startup paths have not printed them.
     const showReason = isInvalidConfigError(options.error)
       ? !options.error.diagnosticEmitted
-      : isUpdateCommand || isPluginUpdateCommand;
+      : isUpdateCommand || isPluginUpdateCommand || stateBusy;
     return [
       `[openclaw] ${options.title}`,
       ...(showReason
