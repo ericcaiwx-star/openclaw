@@ -7,29 +7,21 @@ import {
 import { createServer as createHttpsServer } from "node:https";
 import type { TlsOptions } from "node:tls";
 import {
-  buildSandboxHostContentSecurityPolicy,
-  buildSandboxHostProxyHtml,
+  buildSandboxHostDocument,
   decodeSandboxHostCsp,
   SANDBOX_HOST_PATH,
 } from "../agents/sandbox-host.js";
 import type { PluginBoardWidgetContentKind } from "../plugins/board-widget-content-kind.types.js";
-import {
-  capturePluginRegistryLifecycleEpoch,
-  isPluginRegistryLifecycleEpochActive,
-} from "../plugins/registry-lifecycle.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import { respondPlainText } from "./control-ui-http-utils.js";
 
-const MCP_APP_PERMISSIONS_POLICY = "camera=(), microphone=(), geolocation=(), clipboard-write=()";
 type PublicResourceReader = NonNullable<
   PluginBoardWidgetContentKind["resources"]["readPublicResource"]
 >;
 
 function handleMcpAppSandboxHttpRequest(req: IncomingMessage, res: ServerResponse): boolean {
-  let url: URL;
-  try {
-    url = new URL(req.url ?? "/", "http://localhost");
-  } catch {
+  const url = URL.parse(req.url ?? "/", "http://localhost");
+  if (!url) {
     respondPlainText(res, 400, "Bad Request");
     return true;
   }
@@ -45,16 +37,17 @@ function handleMcpAppSandboxHttpRequest(req: IncomingMessage, res: ServerRespons
     return true;
   }
 
+  const { html, headers, version } = buildSandboxHostDocument(csp);
   res.statusCode = 200;
-  res.setHeader("Content-Type", "text/html; charset=utf-8");
-  res.setHeader("Cache-Control", "no-store");
-  res.setHeader("Content-Security-Policy", buildSandboxHostContentSecurityPolicy(csp));
-  res.setHeader("Permissions-Policy", MCP_APP_PERMISSIONS_POLICY);
-  res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
-  res.setHeader("Origin-Agent-Cluster", "?1");
-  res.setHeader("Referrer-Policy", "no-referrer");
-  res.setHeader("X-Content-Type-Options", "nosniff");
-  const html = buildSandboxHostProxyHtml(csp);
+  for (const [name, value] of Object.entries(headers)) {
+    res.setHeader(name, value);
+  }
+  // A mismatched URL can come from another Gateway version sharing this host.
+  // Serve the current shell, but never retain it under a different content hash.
+  res.setHeader(
+    "Cache-Control",
+    url.searchParams.get("v") === version ? "public, max-age=31536000, immutable" : "no-store",
+  );
   // Keep GET and HEAD representation metadata aligned while suppressing the HEAD body.
   res.setHeader("Content-Length", String(Buffer.byteLength(html)));
   res.end(req.method === "HEAD" ? undefined : html);
@@ -66,16 +59,15 @@ export function createSandboxHostHttpServer(
   tlsOptions?: TlsOptions,
   resolvePluginRegistry?: () => PluginRegistry,
 ): HttpServer {
-  // One activation owns each prepared map; reactivation cannot revive stale readers.
-  const readersByEpoch = new WeakMap<object, Map<string, PublicResourceReader>>();
+  // Public static assets may finish an in-flight read across plugin reloads.
+  const readersByRegistry = new WeakMap<PluginRegistry, Map<string, PublicResourceReader>>();
   const serveResource = async (req: IncomingMessage, res: ServerResponse) => {
     const registry = resolvePluginRegistry?.();
-    const epoch = registry ? capturePluginRegistryLifecycleEpoch(registry) : undefined;
-    if (!registry || !epoch || (req.method !== "GET" && req.method !== "HEAD")) {
+    if (!registry || (req.method !== "GET" && req.method !== "HEAD")) {
       respondPlainText(res, 404, "Not Found");
       return;
     }
-    let readers = readersByEpoch.get(epoch);
+    let readers = readersByRegistry.get(registry);
     if (!readers) {
       readers = new Map();
       for (const { definition } of registry.boardWidgetContentKinds.values()) {
@@ -86,16 +78,12 @@ export function createSandboxHostHttpServer(
           }
         }
       }
-      readersByEpoch.set(epoch, readers);
+      readersByRegistry.set(registry, readers);
     }
     const pathname = new URL(req.url ?? "/", "http://localhost").pathname;
     const reader = readers.get(pathname);
     const resource = reader ? await reader(pathname) : undefined;
-    if (
-      !resource ||
-      resolvePluginRegistry?.() !== registry ||
-      !isPluginRegistryLifecycleEpochActive(registry, epoch)
-    ) {
+    if (!resource) {
       respondPlainText(res, 404, "Not Found");
       return;
     }

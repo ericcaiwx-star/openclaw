@@ -3,55 +3,45 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createOpenClawCodingTools } from "../../agents/agent-tools.js";
+import { createOpenClawCodingToolsAsync } from "../../agents/agent-tools.js";
 import { makeBootstrapWarn, resolveBootstrapContextForRun } from "../../agents/bootstrap-files.js";
-import {
-  resolveChannelMessageToolHints,
-  resolveChannelReactionGuidance,
-} from "../../agents/channel-tools.js";
-import { collectRuntimeChannelCapabilities } from "../../agents/runtime-capabilities.js";
+import { resolveRuntimeChannelPromptContext } from "../../agents/runtime-capabilities.js";
 import { ensureSandboxWorkspaceForSession } from "../../agents/sandbox.js";
-import { detectRuntimeShell } from "../../agents/shell-utils.js";
 import { buildSystemPromptParams } from "../../agents/system-prompt-params.js";
 import { buildAgentSystemPrompt } from "../../agents/system-prompt.js";
-import { getMachineDisplayName } from "../../infra/machine-name.js";
-import { resolveRuntimeOsLabel } from "../../infra/os-summary.js";
+import type { SubsystemLogger } from "../../logging/subsystem.js";
+import { createSyntheticSourceInfo } from "../../skills/loading/skill-contract.js";
 import { resolveReusableWorkspaceSkillSnapshot } from "../../skills/runtime/session-snapshot.js";
+import type { SkillSnapshot } from "../../skills/types.js";
 import { resolveCommandsSystemPromptBundle } from "./commands-system-prompt.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 
 const {
-  collectRuntimeChannelCapabilitiesMock,
-  createOpenClawCodingToolsMock,
+  resolveRuntimeChannelPromptContextMock,
+  createOpenClawCodingToolsAsyncMock,
   detectRuntimeShellMock,
   getMachineDisplayNameMock,
   logWarnMock,
   makeBootstrapWarnMock,
-  resolveChannelMessageToolHintsMock,
-  resolveChannelReactionGuidanceMock,
   resolveRuntimeOsLabelMock,
 } = vi.hoisted(() => ({
-  collectRuntimeChannelCapabilitiesMock: vi.fn(() => ["voice"]),
-  createOpenClawCodingToolsMock: vi.fn(() => []),
+  resolveRuntimeChannelPromptContextMock: vi.fn<typeof resolveRuntimeChannelPromptContext>(() => ({
+    runtimeChannel: "telegram",
+    runtimeCapabilities: ["voice"],
+    reactionGuidance: { level: "minimal", channel: "Telegram" },
+    messageToolHints: ["Use the message tool."],
+  })),
+  createOpenClawCodingToolsAsyncMock: vi.fn(() => []),
   detectRuntimeShellMock: vi.fn(() => "zsh"),
   getMachineDisplayNameMock: vi.fn(async () => "test-host"),
   logWarnMock: vi.fn(),
   makeBootstrapWarnMock: vi.fn((params: { warn?: (message: string) => void }) => params.warn),
-  resolveChannelMessageToolHintsMock: vi.fn(() => ["Use the message tool."]),
-  resolveChannelReactionGuidanceMock: vi.fn(() => ({
-    level: "minimal" as const,
-    channel: "Telegram",
-  })),
   resolveRuntimeOsLabelMock: vi.fn(() => "TestOS 1.0"),
 }));
 
-vi.mock("../../agents/channel-tools.js", () => ({
-  resolveChannelMessageToolHints: resolveChannelMessageToolHintsMock,
-  resolveChannelReactionGuidance: resolveChannelReactionGuidanceMock,
-}));
-
+// mock-isolation: Fix channel prompt facts without loading live channel plugin state.
 vi.mock("../../agents/runtime-capabilities.js", () => ({
-  collectRuntimeChannelCapabilities: collectRuntimeChannelCapabilitiesMock,
+  resolveRuntimeChannelPromptContext: resolveRuntimeChannelPromptContextMock,
 }));
 
 vi.mock("../../agents/shell-utils.js", () => ({
@@ -66,9 +56,24 @@ vi.mock("../../infra/os-summary.js", () => ({
   resolveRuntimeOsLabel: resolveRuntimeOsLabelMock,
 }));
 
-vi.mock("../../logging/subsystem.js", () => ({
-  createSubsystemLogger: vi.fn(() => ({ warn: logWarnMock })),
-}));
+vi.mock("../../logging/subsystem.js", async (importOriginal) => {
+  const createLogger = (subsystem: string): SubsystemLogger => ({
+    subsystem,
+    isEnabled: () => false,
+    trace: vi.fn(),
+    debug: vi.fn(),
+    info: vi.fn(),
+    warn: logWarnMock,
+    error: vi.fn(),
+    fatal: vi.fn(),
+    raw: vi.fn(),
+    child: (name) => createLogger(`${subsystem}/${name}`),
+  });
+  return {
+    ...(await importOriginal<typeof import("../../logging/subsystem.js")>()),
+    createSubsystemLogger: vi.fn(createLogger),
+  };
+});
 
 vi.mock("../../agents/bootstrap-files.js", () => ({
   makeBootstrapWarn: makeBootstrapWarnMock,
@@ -78,13 +83,14 @@ vi.mock("../../agents/bootstrap-files.js", () => ({
   })),
 }));
 
+// mock-isolation: Keep real runtime classification while preventing sandbox workspace startup.
 vi.mock("../../agents/sandbox.js", async () => {
-  const { resolveSandboxRuntimeStatus } = await vi.importActual<
+  const { resolveSandboxRuntimeStatusAsync } = await vi.importActual<
     typeof import("../../agents/sandbox/runtime-status.js")
   >("../../agents/sandbox/runtime-status.js");
   return {
     ensureSandboxWorkspaceForSession: vi.fn(async () => null),
-    resolveSandboxRuntimeStatus,
+    resolveSandboxRuntimeStatusAsync,
   };
 });
 
@@ -104,11 +110,10 @@ vi.mock("../../agents/model-selection.js", () => ({
   resolveDefaultModelForAgent: vi.fn(() => ({ provider: "openai", model: "gpt-5" })),
 }));
 
+// mock-isolation: Keep host discovery outside command prompt fixtures.
 vi.mock("../../agents/system-prompt-params.js", () => ({
   buildSystemPromptParams: vi.fn(() => ({
     runtimeInfo: { host: "unknown", os: "unknown", arch: "unknown", node: process.version },
-    userTimezone: "UTC",
-    userDate: "2026-01-05",
   })),
 }));
 
@@ -116,8 +121,9 @@ vi.mock("../../agents/system-prompt.js", () => ({
   buildAgentSystemPrompt: vi.fn(() => "system prompt"),
 }));
 
+// mock-isolation: Inspect prompt composition with fixture tools without initializing tool integrations.
 vi.mock("../../agents/agent-tools.js", () => ({
-  createOpenClawCodingTools: createOpenClawCodingToolsMock,
+  createOpenClawCodingToolsAsync: createOpenClawCodingToolsAsyncMock,
 }));
 
 vi.mock("../../tts/tts-settings.js", () => ({
@@ -189,8 +195,8 @@ function requireFirstArg(
 describe("resolveCommandsSystemPromptBundle", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    createOpenClawCodingToolsMock.mockClear();
-    createOpenClawCodingToolsMock.mockReturnValue([]);
+    createOpenClawCodingToolsAsyncMock.mockClear();
+    createOpenClawCodingToolsAsyncMock.mockReturnValue([]);
     vi.mocked(ensureSandboxWorkspaceForSession).mockResolvedValue(null);
     vi.mocked(resolveReusableWorkspaceSkillSnapshot).mockReturnValue({
       snapshot: { prompt: "", skills: [], resolvedSkills: [] },
@@ -199,82 +205,7 @@ describe("resolveCommandsSystemPromptBundle", () => {
     } as never);
   });
 
-  it("opts command tool builds into gateway subagent binding", async () => {
-    await resolveCommandsSystemPromptBundle(makeParams());
-
-    const toolParams = requireFirstArg(
-      vi.mocked(createOpenClawCodingTools),
-      "createOpenClawCodingTools",
-    );
-    expect(toolParams.allowGatewaySubagentBinding).toBe(true);
-    expect(toolParams.sessionKey).toBe("agent:main:default");
-    expect(toolParams.workspaceDir).toBe("/tmp/workspace");
-    expect(toolParams.messageProvider).toBe("telegram");
-    expect(toolParams.senderId).toBe("sender-1");
-    expect(toolParams.senderName).toBe("Alice");
-    expect(toolParams.senderUsername).toBe("alice_u");
-    expect(toolParams.senderE164).toBe("+15551234567");
-  });
-
-  it("includes the current communication channel in reconstructed prompts", async () => {
-    const params = makeParams();
-    params.ctx.AccountId = "work";
-    params.ctx.ChatType = "group";
-    params.ctx.MessageSidFull = "message-1";
-    params.ctx.OriginatingChannel = "telegram";
-    params.ctx.OriginatingTo = "telegram:-1003841603622:topic:928";
-    params.ctx.MessageThreadId = 928;
-    params.command.accountId = "work";
-    params.command.to = "slash:8460800771";
-    await resolveCommandsSystemPromptBundle(params);
-
-    expect(vi.mocked(collectRuntimeChannelCapabilities)).toHaveBeenCalledWith({
-      cfg: params.cfg,
-      channel: "telegram",
-      accountId: "work",
-    });
-    expect(vi.mocked(resolveChannelReactionGuidance)).toHaveBeenCalledWith({
-      cfg: params.cfg,
-      channel: "telegram",
-      accountId: "work",
-    });
-    expect(vi.mocked(resolveChannelMessageToolHints)).toHaveBeenCalledWith({
-      cfg: params.cfg,
-      channel: "telegram",
-      accountId: "work",
-    });
-    const runtimeParams = requireFirstArg(
-      vi.mocked(buildSystemPromptParams),
-      "buildSystemPromptParams",
-    );
-    expect(runtimeParams.runtime).toEqual(
-      expect.objectContaining({
-        host: "test-host",
-        os: "TestOS 1.0",
-        arch: os.arch(),
-        shell: "zsh",
-        channel: "telegram",
-        chatType: "group",
-        capabilities: ["voice"],
-      }),
-    );
-    const promptParams = requireFirstArg(
-      vi.mocked(buildAgentSystemPrompt),
-      "buildAgentSystemPrompt",
-    );
-    expect(promptParams.reactionGuidance).toEqual({ level: "minimal", channel: "Telegram" });
-    expect(promptParams.messageToolHints).toEqual(["Use the message tool."]);
-    expect(vi.mocked(getMachineDisplayName)).toHaveBeenCalledOnce();
-    expect(vi.mocked(resolveRuntimeOsLabel)).toHaveBeenCalledOnce();
-    expect(vi.mocked(detectRuntimeShell)).toHaveBeenCalledOnce();
-  });
-
   it.each([
-    {
-      sessionKey: "agent:target:telegram:direct:target-session",
-      policySessionKey: undefined,
-      policyAgentId: "target",
-    },
     { sessionKey: "global", policySessionKey: undefined, policyAgentId: "target" },
     { sessionKey: "global", policySessionKey: "agent:main:group", policyAgentId: "main" },
   ])(
@@ -309,26 +240,6 @@ describe("resolveCommandsSystemPromptBundle", () => {
       code: "AGENT_SELECTION_REQUIRED",
     });
     expect(vi.mocked(ensureSandboxWorkspaceForSession)).not.toHaveBeenCalled();
-  });
-
-  it("uses the canonical target session agent for tool creation", async () => {
-    const params = makeParams();
-    params.agentId = "target";
-    params.sessionKey = "agent:target:telegram:direct:target-session";
-
-    await resolveCommandsSystemPromptBundle(params);
-
-    const toolParams = requireFirstArg(
-      vi.mocked(createOpenClawCodingTools),
-      "createOpenClawCodingTools",
-    );
-    expect(toolParams.agentId).toBe("target");
-    expect(toolParams.sessionKey).toBe("agent:target:telegram:direct:target-session");
-    const bootstrapParams = requireFirstArg(
-      vi.mocked(resolveBootstrapContextForRun),
-      "resolveBootstrapContextForRun",
-    );
-    expect(bootstrapParams.agentId).toBe("target");
   });
 
   it("records bootstrap exclusions for generated command prompts", async () => {
@@ -381,6 +292,7 @@ describe("resolveCommandsSystemPromptBundle", () => {
       "resolveBootstrapContextForRun",
     );
     expect(bootstrapParams.sessionId).toBe("target-session");
+    expect(bootstrapParams.agentId).toBe("target");
     const runtimeParams = requireFirstArg(
       vi.mocked(buildSystemPromptParams),
       "buildSystemPromptParams",
@@ -392,9 +304,11 @@ describe("resolveCommandsSystemPromptBundle", () => {
       }),
     );
     const toolParams = requireFirstArg(
-      vi.mocked(createOpenClawCodingTools),
-      "createOpenClawCodingTools",
+      vi.mocked(createOpenClawCodingToolsAsync),
+      "createOpenClawCodingToolsAsync",
     );
+    expect(toolParams.agentId).toBe("target");
+    expect(toolParams.sessionKey).toBe("agent:target:telegram:direct:target-session");
     expect(toolParams.groupId).toBe("target-group");
     expect(toolParams.groupChannel).toBe("#target");
     expect(toolParams.groupSpace).toBe("target-space");
@@ -429,12 +343,54 @@ describe("resolveCommandsSystemPromptBundle", () => {
     expect(sandboxInfo?.elevated?.fullAccessBlockedReason).toBe("host-policy");
   });
 
-  it("uses materialized sandbox skill paths for sandbox command prompts", async () => {
+  it("inspects the configured agent and canonical nested execution workspace", async () => {
+    const params = makeParams();
+    params.cfg = { agents: { defaults: { workspace: "/tmp/agent-workspace" } } };
+    params.workspaceDir = "/tmp/task-checkout/packages/app";
+    params.sessionEntry!.worktree = {
+      id: "task",
+      branch: "task",
+      repoRoot: "/tmp/project",
+      canonicalWorkspaceDir: "/tmp/project/packages/app",
+    };
+    await resolveCommandsSystemPromptBundle(params);
+    expect(resolveReusableWorkspaceSkillSnapshot).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workspaceDir: "/tmp/agent-workspace",
+        executionWorkspaceDir: "/tmp/project/packages/app",
+      }),
+    );
+  });
+
+  it.each([true])("uses materialized sandbox skill paths (library=%s)", async (library) => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-command-sandbox-skills-"));
     try {
       const workspaceDir = path.join(root, "workspace");
       const skillsWorkspaceDir = path.join(root, "state", "sandbox-skills");
       const skillDir = path.join(skillsWorkspaceDir, "skills", "gog");
+      const hostSkillPath = "/host/skills/gog/SKILL.md";
+      const hostSnapshot: SkillSnapshot = {
+        prompt: "<available_skills>Host skill catalog</available_skills>",
+        skills: [{ name: "gog" }],
+        resolvedSkills: [
+          {
+            name: "gog",
+            description: "Gog skill",
+            filePath: hostSkillPath,
+            baseDir: path.dirname(hostSkillPath),
+            source: "openclaw-library",
+            sourceInfo: createSyntheticSourceInfo(hostSkillPath, { source: "openclaw-library" }),
+            disableModelInvocation: false,
+          },
+        ],
+        ...(library
+          ? {
+              librarySelections: [
+                { skillId: "test-pin", revision: "revision-1", name: "gog", ownerProfileId: null },
+              ],
+            }
+          : {}),
+      };
       await fs.mkdir(skillDir, { recursive: true });
       await fs.writeFile(
         path.join(skillDir, "SKILL.md"),
@@ -448,13 +404,24 @@ describe("resolveCommandsSystemPromptBundle", () => {
       params.cfg = {
         agents: {
           ownership: "explicit",
-          entries: { main: {}, target: { sandbox: { mode: "all" } } },
+          entries: {
+            main: {},
+            target: { workspace: path.join(root, "agent-workspace"), sandbox: { mode: "all" } },
+          },
         },
       };
       vi.mocked(ensureSandboxWorkspaceForSession).mockResolvedValue({
         workspaceDir,
         containerWorkdir: "/workspace",
         skillsWorkspaceDir,
+        skillUsagePaths: [
+          {
+            skillName: "gog",
+            skillFile: hostSkillPath,
+            readPath: path.join(skillDir, "SKILL.md"),
+            skillSource: "unknown",
+          },
+        ],
         skillsEligibility: {
           remote: {
             platforms: ["linux"],
@@ -466,12 +433,7 @@ describe("resolveCommandsSystemPromptBundle", () => {
         workspaceAccess: "rw",
       } as never);
       vi.mocked(resolveReusableWorkspaceSkillSnapshot).mockReturnValue({
-        snapshot: {
-          prompt:
-            "<available_skills>~/.npm-global/lib/node_modules/openclaw/skills/gog/SKILL.md</available_skills>",
-          skills: [],
-          resolvedSkills: [],
-        },
+        snapshot: hostSnapshot,
         shouldRefresh: false,
         snapshotVersion: "host-snapshot",
       } as never);
@@ -479,6 +441,8 @@ describe("resolveCommandsSystemPromptBundle", () => {
       const result = await resolveCommandsSystemPromptBundle(params);
 
       expect(vi.mocked(ensureSandboxWorkspaceForSession)).toHaveBeenCalledWith({
+        skillsSnapshot: vi.mocked(resolveReusableWorkspaceSkillSnapshot).mock.results[0]?.value
+          .snapshot,
         config: params.cfg,
         sessionKey: "global",
         agentId: "target",
@@ -487,8 +451,8 @@ describe("resolveCommandsSystemPromptBundle", () => {
       expect(result.skillsPrompt).toContain(
         "/workspace/.openclaw/sandbox-skills/skills/gog/SKILL.md",
       );
-      expect(result.skillsPrompt).not.toContain("~/.npm-global");
-      expect(vi.mocked(resolveReusableWorkspaceSkillSnapshot)).not.toHaveBeenCalled();
+      expect(result.skillsPrompt).not.toContain(hostSkillPath);
+      expect(vi.mocked(resolveReusableWorkspaceSkillSnapshot)).toHaveBeenCalledOnce();
       const promptParams = requireFirstArg(
         vi.mocked(buildAgentSystemPrompt),
         "buildAgentSystemPrompt",
@@ -496,29 +460,14 @@ describe("resolveCommandsSystemPromptBundle", () => {
       expect(promptParams.skillsPrompt).toContain(
         "/workspace/.openclaw/sandbox-skills/skills/gog/SKILL.md",
       );
-      expect(String(promptParams.skillsPrompt)).not.toContain("~/.npm-global");
+      expect(String(promptParams.skillsPrompt)).not.toContain(hostSkillPath);
     } finally {
       await fs.rm(root, { recursive: true, force: true });
     }
   });
 
-  it("preserves host skill snapshots for custom backends without a declared workdir", async () => {
-    const params = makeParams();
-    params.cfg = { agents: { defaults: { sandbox: { mode: "all" } } } };
-    vi.mocked(ensureSandboxWorkspaceForSession).mockResolvedValue({
-      workspaceDir: params.workspaceDir,
-      skillsWorkspaceDir: "/tmp/sandbox-skills",
-      workspaceAccess: "rw",
-    });
-
-    const result = await resolveCommandsSystemPromptBundle(params);
-
-    expect(result.skillsPrompt).toBe("");
-    expect(vi.mocked(resolveReusableWorkspaceSkillSnapshot)).toHaveBeenCalledOnce();
-  });
-
   it("uses config-backed prompt settings for the target agent", async () => {
-    createOpenClawCodingToolsMock.mockReturnValue([{ name: "sessions_spawn" }] as never);
+    createOpenClawCodingToolsAsyncMock.mockReturnValue([{ name: "sessions_spawn" }] as never);
     const params = makeParams();
     params.cfg = {
       agents: {

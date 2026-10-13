@@ -1,5 +1,7 @@
 /* @vitest-environment jsdom */
 import { afterAll, afterEach, beforeAll, expect, it, vi } from "vitest";
+import { normalizeAgentModelRefForConfig } from "../../../src/config/model-input.js";
+import { createPrimaryModelExclusion } from "../lib/agents/display.ts";
 import { MultiSelect, type MultiSelectOption } from "./multi-select.ts";
 
 const MULTI_SELECT_TEST_TAG = `test-openclaw-multi-select-${crypto.randomUUID()}`;
@@ -7,7 +9,8 @@ const MULTI_SELECT_TEST_TAG = `test-openclaw-multi-select-${crypto.randomUUID()}
 type MultiSelectElement = HTMLElement & {
   options: readonly MultiSelectOption[];
   value: readonly string[];
-  exclude: readonly string[];
+  isExcluded: (value: string) => boolean;
+  getValueKey: (value: string) => string;
   placeholder: string;
   allowCustom: boolean;
   disabled: boolean;
@@ -55,7 +58,7 @@ async function createMultiSelect(
   const element = document.createElement(MULTI_SELECT_TEST_TAG) as MultiSelectElement;
   element.options = options;
   element.value = [sonnet];
-  element.exclude = [primary];
+  element.isExcluded = (value) => value === primary;
   element.placeholder = "Add fallback…";
   element.allowCustom = true;
   element.onChange = vi.fn();
@@ -111,68 +114,65 @@ async function clickField(element: MultiSelectElement) {
   await element.updateComplete;
 }
 
-it("renders chips with option labels and lists only unchosen, unexcluded options once opened", async () => {
-  const element = await createMultiSelect();
-
-  expect(chipValues(element)).toEqual([sonnet]);
-  const chip = element.querySelector(".multi-select__chip");
-  expect(chip?.querySelector(".multi-select__chip-label")?.textContent?.trim()).toBe(
-    "Claude Sonnet 4.6",
-  );
-  expect(chip?.querySelector(".multi-select__chip-icon")).not.toBeNull();
-  expect(isOpen(element)).toBe(false);
-
+it("does not commit a disabled choice but keeps available choices usable", async () => {
+  const element = await createMultiSelect({
+    value: [],
+    isExcluded: () => false,
+    options: [
+      { value: "fixture/blocked", label: "Blocked", disabled: true },
+      { value: "fixture/ready", label: "Ready" },
+    ],
+  });
   await clickField(element);
-
-  expect(isOpen(element)).toBe(true);
-  expect(element.onOpen).toHaveBeenCalledTimes(1);
-  expect(rowValues(element)).toEqual([opus, gemini]);
-});
-
-it("filters rows by typed text and appends the highlighted row on Enter", async () => {
-  const element = await createMultiSelect();
-
-  await typeText(element, "gem");
-  // Matches lead and stay highlighted; the custom entry trails them so Enter
-  // never adds a partial search term by accident.
-  expect(rowValues(element)).toEqual([gemini, "gem"]);
-  expect(element.querySelector(".multi-select__option")?.getAttribute("aria-selected")).toBe(
-    "true",
-  );
-
-  await pressKey(element, "Enter");
-
-  expect(element.onChange).toHaveBeenCalledWith([sonnet, gemini]);
-  expect(input(element).value).toBe("");
-});
-
-it("offers typed text as a custom row and commits it with Enter or comma", async () => {
-  const element = await createMultiSelect();
-  const custom = "openrouter/mistral/mistral-large";
-
-  await typeText(element, custom);
-  expect(rowValues(element)).toEqual([custom]);
-  const row = element.querySelector(".multi-select__option");
-  expect(row?.hasAttribute("data-custom")).toBe(true);
-  expect(row?.textContent).toContain(`Add “${custom}”`);
-
-  await pressKey(element, "Enter");
-  expect(element.onChange).toHaveBeenLastCalledWith([sonnet, custom]);
-
-  await typeText(element, "vendor/model");
-  await pressKey(element, ",");
-  expect(element.onChange).toHaveBeenLastCalledWith([sonnet, "vendor/model"]);
-});
-
-it("does not offer custom rows for values already chosen or excluded", async () => {
-  const element = await createMultiSelect();
-
-  await typeText(element, primary);
-
-  expect(rowValues(element)).toEqual([]);
-  expect(element.querySelector(".multi-select__empty")?.textContent?.trim()).toBe("No matches");
-  await pressKey(element, "Enter");
+  const blocked = element.querySelector<HTMLElement>('[data-value="fixture/blocked"]');
+  blocked?.click();
   expect(element.onChange).not.toHaveBeenCalled();
+  expect(blocked?.getAttribute("aria-disabled")).toBe("true");
+
+  await pressKey(element, "Enter");
+  expect(element.onChange).toHaveBeenCalledWith(["fixture/ready"]);
+});
+
+it("keeps disabled choices out of typed additions without discarding saved chips", async () => {
+  const element = await createMultiSelect({
+    value: ["fixture/saved"],
+    isExcluded: () => false,
+    options: [
+      { value: "fixture/saved", label: "Saved", disabled: true },
+      { value: "fixture/blocked", label: "Blocked", disabled: true },
+      { value: "fixture/ready", label: "Ready" },
+    ],
+  });
+  await typeText(element, "fixture/blocked, fixture/ready");
+  await pressKey(element, ",");
+  expect(element.onChange).toHaveBeenCalledWith(["fixture/saved", "fixture/ready"]);
+  expect(chipValues(element)).toEqual(["fixture/saved"]);
+  element.querySelector<HTMLButtonElement>(".chip-remove")?.click();
+  expect(element.onChange).toHaveBeenLastCalledWith([]);
+});
+
+it("skips disabled choices in both keyboard directions", async () => {
+  const element = await createMultiSelect({
+    value: [],
+    isExcluded: () => false,
+    options: [
+      { value: "fixture/first", label: "First" },
+      { value: "fixture/blocked", label: "Blocked", disabled: true },
+      { value: "fixture/last", label: "Last" },
+    ],
+  });
+  await clickField(element);
+  await pressKey(element, "ArrowDown");
+  expect(element.querySelector('[aria-selected="true"]')?.getAttribute("data-value")).toBe(
+    "fixture/last",
+  );
+  await pressKey(element, "ArrowUp");
+  expect(element.querySelector('[aria-selected="true"]')?.getAttribute("data-value")).toBe(
+    "fixture/first",
+  );
+  await pressKey(element, "ArrowUp");
+  await pressKey(element, "Enter");
+  expect(element.onChange).toHaveBeenCalledExactlyOnceWith(["fixture/last"]);
 });
 
 it("removes chips with Backspace on empty text and with the chip button", async () => {
@@ -210,35 +210,68 @@ it("moves the highlight with arrow keys and closes on Escape", async () => {
   expect(element.onChange).not.toHaveBeenCalled();
 });
 
-it.each(["Tab", ",", "blur"])("commits typed references on %s", async (action) => {
+it("discards unconfirmed search text on blur", async () => {
   const outside = document.createElement("button");
   document.body.append(outside);
-  for (const value of ["openrouter/pending", gemini]) {
+  for (const value of ["gem", "openrouter/pending", gemini]) {
     const element = await createMultiSelect();
     input(element).focus();
     await typeText(element, value);
 
-    if (action !== "blur") {
-      await pressKey(element, action);
-    }
-    if (action !== ",") {
-      outside.focus();
-      await element.updateComplete;
-      expect(isOpen(element)).toBe(false);
-    }
+    outside.focus();
+    await element.updateComplete;
 
-    expect(element.onChange).toHaveBeenCalledExactlyOnceWith([sonnet, value]);
+    expect(element.onChange).not.toHaveBeenCalled();
+    expect(chipValues(element)).toEqual([sonnet]);
+    expect(isOpen(element)).toBe(false);
     expect(input(element).value).toBe("");
   }
 });
 
-it("appends pasted references in order without duplicating or adding excluded models", async () => {
-  const element = await createMultiSelect();
+it.each(["Enter"])("preserves explicitly confirmed alias bindings on %s", async (action) => {
+  const target = "custom/Model-A";
+  const element = await createMultiSelect({
+    options: [{ value: target, label: "Uppercase model" }],
+    value: [],
+    isExcluded: createPrimaryModelExclusion(
+      { agents: { defaults: { models: { [target]: { alias: "backup" } } } } },
+      primary,
+    ),
+    getValueKey: normalizeAgentModelRefForConfig,
+  });
 
-  await typeText(element, `${gemini}, openrouter/pending, ${primary}, ${gemini.toUpperCase()}`);
+  await typeText(element, action === "," ? "backup" : `backup, ${target}`);
+  await pressKey(element, action);
+
+  expect(element.onChange).toHaveBeenCalledExactlyOnceWith(
+    action === "," ? ["backup"] : ["backup", target],
+  );
+});
+
+it.each([
+  {
+    name: "a bare fallback",
+    existing: "gpt-5.4-mini",
+    alternate: "local/gpt-5.4-mini",
+    models: { "local/gpt-5.4-mini": {} },
+  },
+])("keeps $name separate from a real alternate model", async ({ existing, alternate, models }) => {
+  const primaryModelRef = "openai/gpt-5.4";
+  const element = await createMultiSelect({
+    options: [{ value: alternate, label: "Alternate model" }],
+    value: [existing],
+    isExcluded: createPrimaryModelExclusion(
+      { agents: { defaults: { model: { primary: primaryModelRef }, models } } },
+      primaryModelRef,
+    ),
+    getValueKey: normalizeAgentModelRefForConfig,
+  });
+
+  await clickField(element);
+  expect(rowValues(element)).toEqual([alternate]);
   await pressKey(element, "Enter");
 
-  expect(element.onChange).toHaveBeenCalledExactlyOnceWith([sonnet, gemini, "openrouter/pending"]);
+  expect(element.onChange).toHaveBeenCalledExactlyOnceWith([existing, alternate]);
 });
 
 it("selects the visible highlight when a catalog refresh shortens the open list", async () => {
