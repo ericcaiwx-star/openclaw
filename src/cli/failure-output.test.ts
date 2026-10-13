@@ -6,7 +6,16 @@ import {
   GatewayExplicitAuthRequiredError,
   GatewayTransportError,
 } from "../gateway/call.js";
-import { StateDatabaseAdmissionPendingError } from "../infra/gateway-state-owner-record.js";
+import {
+  StateDatabaseAccessError,
+  StateDatabaseAdmissionPendingError,
+  StateDatabaseOfflineMaintenanceError,
+} from "../infra/gateway-state-owner-record.js";
+import {
+  encodeOpenClawStateWorkerError,
+  hydrateOpenClawStateWorkerError,
+  retainOpenClawStateWorkerErrorPayload,
+} from "../state/openclaw-state-worker-error.js";
 import { UpdateSchemaRefusalError } from "../state/openclaw-update-schema-refusal.js";
 import {
   ExpectedCliError,
@@ -239,17 +248,21 @@ describe("formatCliFailureLines", () => {
       ["plugins", "enable", "github"],
     ],
     [
-      "plain maintenance refusal",
-      new Error(`${maintenanceReason} Authorization: Bearer sk-abcdefghijklmnopqrstuv`, {
-        cause: new Error("private nested diagnostic"),
-      }),
+      "offline maintenance refusal",
+      Object.assign(
+        new StateDatabaseOfflineMaintenanceError(
+          "/tmp/openclaw.sqlite",
+          `${maintenanceReason} Authorization: Bearer sk-abcdefghijklmnopqrstuv`,
+        ),
+        { cause: new Error("private nested diagnostic") },
+      ),
       maintenanceReason,
       ["plugins", "disable", "github"],
     ],
     [
       "wrapped ownership verification refusal",
       new AggregateError(
-        [new Error("private sibling diagnostic"), new Error(unavailableReason)],
+        [new Error("private sibling diagnostic"), new StateDatabaseAccessError(unavailableReason)],
         "Could not prepare command",
       ),
       unavailableReason,
@@ -271,6 +284,24 @@ describe("formatCliFailureLines", () => {
     expect(output).not.toContain("private sibling diagnostic");
     expect(output).not.toContain("Stack:");
     expect(output).not.toContain("openclaw doctor");
+  });
+
+  it.each([
+    new StateDatabaseAdmissionPendingError("/tmp/openclaw.sqlite", "Admission pending; retry."),
+    new StateDatabaseOfflineMaintenanceError("/tmp/openclaw.sqlite", "Maintenance active; retry."),
+    new StateDatabaseAccessError("State owner unavailable; restart the Gateway."),
+  ])("preserves reworded $name guidance across worker transport", (error) => {
+    const payload = encodeOpenClawStateWorkerError(error, { includeOrdinary: true });
+    const received = new Error("Worker request failed");
+    retainOpenClawStateWorkerErrorPayload(received, structuredClone(payload));
+
+    expect(
+      formatCliFailureLines({
+        title: "The CLI command failed.",
+        error: hydrateOpenClawStateWorkerError(received, { includeOrdinary: true }),
+        env: {},
+      }),
+    ).toEqual(["[openclaw] The CLI command failed.", `[openclaw] Reason: ${error.message}`]);
   });
 
   it("emits expected guidance only when not already written even with debug output", () => {

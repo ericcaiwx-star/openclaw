@@ -267,13 +267,9 @@ export function formatCliFailureLines(options: FormatCliFailureOptions): string[
   const stateBusy = errors.some(
     (error) => error instanceof Error && error.name === "GatewayStateOwnerContentionError",
   );
-  // Match the admission owner's messages without loading its filesystem/lock runtime.
+  // Names survive worker transport without loading the state owner's runtime here.
   const stateRefusal = errors.find(
-    (error): error is Error =>
-      error instanceof Error &&
-      error.message.startsWith("OpenClaw state ") &&
-      (error.message.includes("undergoing offline maintenance") ||
-        error.message.includes("could not be verified")),
+    (error): error is Error => error instanceof Error && error.name === "StateDatabaseAccessError",
   );
   const reason = (error: unknown) =>
     `[openclaw] Reason: ${formatCliOperatorError(error, { argv, env })}`;
