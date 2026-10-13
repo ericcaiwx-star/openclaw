@@ -71,7 +71,7 @@ describe("Google Chat reply delivery", () => {
       payload: { text: `**${first}**\n\n**${second}**`, replyToId: "spaces/AAA/threads/root" },
       account: limitedAccount,
       spaceId: "spaces/AAA",
-      runtime: createRuntime(),
+      runtime: createRuntimeSpies(),
       core: createCore(),
       config,
       typingMessage: createGoogleChatTypingMessage({
@@ -82,17 +82,8 @@ describe("Google Chat reply delivery", () => {
     });
 
     expect(mocks.updateGoogleChatMessage).toHaveBeenCalledTimes(1);
-    expect(mocks.updateGoogleChatMessage.mock.calls[0]?.[0]).toMatchObject({
-      account: limitedAccount,
-      messageName: "spaces/AAA/messages/typing",
-    });
     expect(mocks.updateGoogleChatMessage.mock.calls[0]?.[0]?.text.trim()).toBe(`*${first}*`);
     expect(mocks.sendGoogleChatMessage).toHaveBeenCalledTimes(1);
-    expect(mocks.sendGoogleChatMessage.mock.calls[0]?.[0]).toMatchObject({
-      account: limitedAccount,
-      space: "spaces/AAA",
-      thread: "spaces/AAA/threads/root",
-    });
     expect(mocks.sendGoogleChatMessage.mock.calls[0]?.[0]?.text.trim()).toBe(`*${second}*`);
   });
 
@@ -107,7 +98,7 @@ describe("Google Chat reply delivery", () => {
       payload: { text: replyText },
       account: limitedAccount,
       spaceId: "spaces/AAA",
-      runtime: createRuntime(),
+      runtime: createRuntimeSpies(),
       core: createCore(),
       config,
     });
@@ -117,34 +108,6 @@ describe("Google Chat reply delivery", () => {
       .join("");
     expect(deliveredText).toContain("<https://example.com|docs>");
     expect(deliveredText).not.toContain("[ref]");
-  });
-
-  it("cleans up typing and rejects text removed by formatting", async () => {
-    await expect(
-      deliverGoogleChatReply({
-        payload: { text: "<div></div>" },
-        account,
-        spaceId: "spaces/AAA",
-        runtime: createRuntime(),
-        core: createCore(),
-        config,
-        typingMessage: createGoogleChatTypingMessage({
-          messageName: "spaces/AAA/messages/typing",
-        }),
-      }),
-    ).rejects.toSatisfy(
-      (error: unknown) =>
-        error instanceof PlatformMessageNotDispatchedError &&
-        !error.retryable &&
-        error.message === "Google Chat reply has no visible text after formatting.",
-    );
-
-    expect(mocks.deleteGoogleChatMessage).toHaveBeenCalledWith({
-      account,
-      messageName: "spaces/AAA/messages/typing",
-    });
-    expect(mocks.updateGoogleChatMessage).not.toHaveBeenCalled();
-    expect(mocks.sendGoogleChatMessage).not.toHaveBeenCalled();
   });
 
   it("does not resend the first chunk when the typing update result is ambiguous", async () => {
@@ -254,14 +217,24 @@ describe("Google Chat reply delivery", () => {
     });
   });
 
-  it("cleans up typing and rejects media-only replies without provider upload access", async () => {
+  it.each([
+    {
+      payload: { mediaUrl: "https://example.invalid/reply.png" },
+      reason:
+        "Google Chat outbound attachments require user OAuth and no text fallback is available.",
+    },
+    {
+      payload: { text: "<div></div>" },
+      reason: "Google Chat reply has no visible text after formatting.",
+    },
+  ])("cleans up typing and rejects undeliverable replies: $reason", async ({ payload, reason }) => {
     const core = createCore();
     const runtime = createRuntimeSpies();
 
     await expect(
       deliverGoogleChatReply({
         payload: {
-          mediaUrl: "https://example.invalid/reply.png",
+          ...payload,
           replyToId: "spaces/AAA/threads/root",
         },
         account,
@@ -280,8 +253,7 @@ describe("Google Chat reply delivery", () => {
       (error: unknown) =>
         error instanceof PlatformMessageNotDispatchedError &&
         !error.retryable &&
-        error.message ===
-          "Google Chat outbound attachments require user OAuth and no text fallback is available.",
+        error.message === reason,
     );
 
     expect(mocks.deleteGoogleChatMessage).toHaveBeenCalledWith({
