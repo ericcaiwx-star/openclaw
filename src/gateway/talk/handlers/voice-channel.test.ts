@@ -182,10 +182,17 @@ describe("channel-owned voice selection RPC", () => {
         }),
       );
 
-      await talkVoiceInstance.run(() => invoke("talk.voice.set", { voice: "cedar" }, call.client));
+      expect(
+        await talkVoiceInstance.run(() =>
+          invoke("talk.voice.set", { voice: "cedar" }, call.client),
+        ),
+      ).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({ voice: "cedar", status: "applied" }),
+        undefined,
+      );
 
       expect(call.currentVoice()).toBe("cedar");
-      expect(consult).toBeDefined();
       expect(consult?.()).toBe("discord-runtime");
     } finally {
       await Promise.all([discordInstance.dispose(), talkVoiceInstance.dispose()]);
