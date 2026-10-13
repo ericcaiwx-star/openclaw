@@ -519,6 +519,10 @@ describe("prepared model runtime snapshots", () => {
       const latestConfig = { agents: { defaults: { model: "openai/gpt-5.5" } } };
       await publishGateway(initialConfig);
       const replacementWrite = holdNextCatalogWrite();
+      const executionFolder = canonical
+        ? "/tmp/old-workspace-dir"
+        : "/tmp/dynamic-replacement-workspace";
+      const catalogBuildsBeforeAdmission = mocks.prepareStaticCatalog.mock.calls.length;
 
       let leasePending: ReturnType<typeof acquireAgentRunPreparedModelRuntime> | undefined;
       let refresh: ReturnType<typeof refreshPreparedModelRuntimeSnapshots> | undefined;
@@ -528,7 +532,7 @@ describe("prepared model runtime snapshots", () => {
         });
         leasePending = acquireAgentRunPreparedModelRuntime({
           ...fixture.agentInput("default", initialConfig),
-          workspaceDir: canonical ? "/tmp/old-workspace-dir" : "/tmp/dynamic-replacement-workspace",
+          workspaceDir: executionFolder,
           ...(canonical
             ? {
                 agentDir: "/tmp/old-agent-dir",
@@ -548,14 +552,14 @@ describe("prepared model runtime snapshots", () => {
         const lease = await leasePending;
 
         expect(lease.snapshot.config).toBe(latestConfig);
-        expect(lease.snapshot.workspaceDir).toBe(
-          canonical ? "/tmp/unused-workspace" : "/tmp/dynamic-replacement-workspace",
-        );
+        // Gateway inventory stays on the configured workspace. The queued run still
+        // names its own execution folder; that folder is not a second catalog build.
+        expect(lease.snapshot.workspaceDir).toBe("/tmp/unused-workspace");
         expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledTimes(2);
         if (canonical) {
           expect(lease.snapshot.agentDir).toBe(fixture.state.agentDir("default"));
         } else {
-          expect(mocks.prepareStaticCatalog).toHaveBeenCalledOnce();
+          expect(mocks.prepareStaticCatalog).toHaveBeenCalledTimes(catalogBuildsBeforeAdmission);
         }
         await lease[Symbol.asyncDispose]();
       } finally {
