@@ -68,6 +68,12 @@ Replacement files also require new admission; migration and repair owners publis
 replacement facts after committed DDL. Doctor and explicit verification retain
 their checks. See [integrity admission](/reference/database-schemas/integrity-and-recovery).
 
+Retained task workers request admission facts through their existing relay when
+needed. Task messages must not copy the global admission snapshot: its session
+write receipts can grow with every session, making unrelated reads expensive to
+dispatch. Shared receipts still invalidate cached facts, and replacement files
+still require admission through the same owner.
+
 For row data, hydrate once and update or invalidate the owner's in-memory facts
 from committed write receipts. Every writer must participate. A receipt may
 supply a postimage or explicit absence; missing coverage is unknown, not absence.
@@ -395,7 +401,12 @@ visibility, membership, and conversation authority that the destination worker
 cannot validate. These changes add no schema, retention, or update migration.
 
 Cold session creation uses the existing session-entry worker for requested-key
-and parent lookups. Personal default selection reads profile links and its selected
+and parent lookups. The Gateway's `snapshot` timing includes scope preparation and
+its writer-queue reservation before the worker read; it does not clone the session
+store. That reservation preserves earlier queued writes when adopting an existing
+key and protects shared-store discovery from concurrent cold registration. Creation
+commits acquire their own writer admission and revalidate current authority.
+Personal default selection reads profile links and its selected
 credential through the existing shared-state and auth-store readers; credential
 authority still applies at the creation effect. Default cron loads resolve their
 saved partition in the same worker operation that loads the jobs. A queued load
@@ -6362,6 +6373,12 @@ The manager adopts that receipt before publishing pending-tool changes. Each
 event still commits before the runtime advances; bulk transcript imports reuse
 their transaction-local append cursor. Root checks read metadata without saved
 prompt payloads. No cross-transaction root cache is introduced.
+
+Transcript rewrite preparation and publication copy mutable view containers while
+retaining already-owned string values, so old tool results and image payloads do
+not require another full byte copy on the main thread. Prepared views remain
+independently mutable. Opaque structured-cloneable SDK data retains native snapshot
+semantics. Worker write ordering, atomic publication, and stored bytes are unchanged.
 
 Append receipts read active identity, projection readiness, and the latest sequence
 in one transaction-local query. A clean latest message shares that result with
