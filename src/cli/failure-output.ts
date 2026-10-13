@@ -5,7 +5,6 @@ import { getRootOptionAwareCommandPath } from "../infra/cli-root-options.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { collectNestedErrorCandidates } from "../infra/error-graph-internal.js";
 import { formatErrorMessage, formatUncaughtError } from "../infra/errors.js";
-import { StateDatabaseAdmissionPendingError } from "../infra/gateway-state-owner-record.js";
 import {
   UpdateSchemaRefusalError,
   type UpdateSchemaRefusalDatabase,
@@ -264,18 +263,20 @@ export function formatCliFailureLines(options: FormatCliFailureOptions): string[
   }
 
   // Default output stays terse; causes and stack traces require explicit debug intent.
-  // Contention keeps its existing two-line wait hint. Admission and maintenance
-  // refusals are the only new reason gate.
-  const stateBusy = collectNestedErrorCandidates(options.error).some(
+  const errors = collectNestedErrorCandidates(options.error);
+  const stateBusy = errors.some(
     (error) => error instanceof Error && error.name === "GatewayStateOwnerContentionError",
   );
-  const maintenanceRefusal = collectNestedErrorCandidates(options.error).some(
-    (error) =>
-      error instanceof StateDatabaseAdmissionPendingError ||
-      (error instanceof Error &&
-        (error.message.includes("undergoing offline maintenance") ||
-          error.message.includes("could not be verified; retry after maintenance"))),
+  // Match the admission owner's messages without loading its filesystem/lock runtime.
+  const stateRefusal = errors.find(
+    (error): error is Error =>
+      error instanceof Error &&
+      error.message.startsWith("OpenClaw state ") &&
+      (error.message.includes("undergoing offline maintenance") ||
+        error.message.includes("could not be verified")),
   );
+  const reason = (error: unknown) =>
+    `[openclaw] Reason: ${formatCliOperatorError(error, { argv, env })}`;
   if (!showDebugDetails && !showUpdateDiagnostics) {
     if (
       options.error instanceof UpdateSchemaRefusalError ||
@@ -284,37 +285,26 @@ export function formatCliFailureLines(options: FormatCliFailureOptions): string[
           options.error.name === "OpenClawDatabaseSchemaPreflightError"))
     ) {
       // Doctor cannot repair these refusals; their producers own the required recovery steps.
-      const lines = ["[openclaw] OpenClaw needs a manual recovery step."];
-      lines.push(
-        `[openclaw] Reason: ${formatCliOperatorError(options.error, { argv: options.argv, env })}`,
-      );
-      return lines;
+      return ["[openclaw] OpenClaw needs a manual recovery step.", reason(options.error)];
+    }
+    if (stateRefusal) {
+      return [`[openclaw] ${options.title}`, reason(stateRefusal)];
     }
     // Config validation owns actionable file/field details; some startup paths have not printed them.
     const showReason = isInvalidConfigError(options.error)
       ? !options.error.diagnosticEmitted
-      : isUpdateCommand || isPluginUpdateCommand || maintenanceRefusal;
+      : isUpdateCommand || isPluginUpdateCommand;
     return [
       `[openclaw] ${options.title}`,
-      ...(showReason
-        ? [
-            `[openclaw] Reason: ${formatCliOperatorError(options.error, { argv: options.argv, env })}`,
-          ]
-        : []),
-      stateBusy || maintenanceRefusal
+      ...(showReason ? [reason(options.error)] : []),
+      stateBusy
         ? "[openclaw] Another OpenClaw process is using your data. Wait for it to finish before trying again."
         : options.includeDoctorHint === false
           ? `[openclaw] For details, open Settings → Logs in the Control UI or run \`${formatCliCommand("openclaw logs --follow", env)}\`.`
           : `[openclaw] For help, run \`${formatCliCommand("openclaw doctor", env)}\`.`,
     ];
   }
-  const lines = [
-    `[openclaw] ${options.title}`,
-    `[openclaw] Reason: ${formatCliOperatorError(options.error, {
-      argv: options.argv,
-      env,
-    })}`,
-  ];
+  const lines = [`[openclaw] ${options.title}`, reason(options.error)];
 
   if (showDebugDetails) {
     lines.push("[openclaw] Stack:");

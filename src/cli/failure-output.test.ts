@@ -202,6 +202,11 @@ describe("formatCliJsonFailure", () => {
 });
 
 describe("formatCliFailureLines", () => {
+  const maintenanceReason =
+    "OpenClaw state at ~/.openclaw/state/openclaw.sqlite is undergoing offline maintenance; retry when it finishes.";
+  const unavailableReason =
+    "OpenClaw state ownership at ~/.openclaw/state/openclaw.sqlite could not be verified from ~/.openclaw/state/openclaw.sqlite.owner; restart the Gateway.";
+
   it.each([
     ["--profile", "work", "update", "--json"],
     ["plugins", "update", "--all"],
@@ -229,31 +234,43 @@ describe("formatCliFailureLines", () => {
   it.each([
     [
       "typed admission",
-      new StateDatabaseAdmissionPendingError(
-        "/tmp/openclaw.sqlite",
-        "OpenClaw state at ~/.openclaw/state/openclaw.sqlite is undergoing offline maintenance; retry when it finishes.",
-      ),
+      new StateDatabaseAdmissionPendingError("/tmp/openclaw.sqlite", maintenanceReason),
+      maintenanceReason,
+      ["plugins", "enable", "github"],
     ],
     [
       "plain maintenance refusal",
-      new Error(
-        "OpenClaw state at ~/.openclaw/state/openclaw.sqlite is undergoing offline maintenance; retry when it finishes. Authorization: Bearer sk-abcdefghijklmnopqrstuv",
-      ),
+      new Error(`${maintenanceReason} Authorization: Bearer sk-abcdefghijklmnopqrstuv`, {
+        cause: new Error("private nested diagnostic"),
+      }),
+      maintenanceReason,
+      ["plugins", "disable", "github"],
     ],
-  ])("prints the plugins enable maintenance reason without debug: %s", (_label, error) => {
-    const output = formatCliFailureLines({
+    [
+      "wrapped ownership verification refusal",
+      new AggregateError(
+        [new Error("private sibling diagnostic"), new Error(unavailableReason)],
+        "Could not prepare command",
+      ),
+      unavailableReason,
+      ["config", "get", "plugins"],
+    ],
+  ])("prints the actionable state refusal without debug: %s", (_label, error, reason, args) => {
+    const lines = formatCliFailureLines({
       title: "The CLI command failed.",
       error,
-      argv: ["node", "openclaw", "plugins", "enable", "github"],
+      argv: ["node", "openclaw", ...args],
       env: {},
-    }).join("\n");
+    });
+    const output = lines.join("\n");
 
-    expect(output).toContain(
-      "OpenClaw state at ~/.openclaw/state/openclaw.sqlite is undergoing offline maintenance; retry when it finishes.",
-    );
-    expect(output).toContain("Wait for it to finish before trying again.");
+    expect(output).toContain(`[openclaw] Reason: ${reason}`);
+    expect(lines).toHaveLength(2);
     expect(output).not.toContain("sk-abcdefghijklmnopqrstuv");
+    expect(output).not.toContain("private nested diagnostic");
+    expect(output).not.toContain("private sibling diagnostic");
     expect(output).not.toContain("Stack:");
+    expect(output).not.toContain("openclaw doctor");
   });
 
   it("emits expected guidance only when not already written even with debug output", () => {
