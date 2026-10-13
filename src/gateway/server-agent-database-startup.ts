@@ -122,10 +122,22 @@ export function activateGatewayAgentDatabaseStartup(params: {
       }),
     publishAgent: ({ agentId, paths, env, signal, assertCurrent, phase }) =>
       runWithSpawnBroker(broker, async () => {
+        const { listConfiguredOwnerInputs } =
+          await import("../agents/prepared-model-runtime.configured.js");
+        assertCurrent();
+        const beforeConfig = params.getConfig();
+        assertAgentDatabaseConfiguration(beforeConfig, agentId, paths, env);
+        if (
+          !listConfiguredOwnerInputs(beforeConfig, undefined, true).some(
+            (input) => input.agentId === agentId,
+          )
+        ) {
+          // ACP-only session-store owners have no native secrets or model runtime to publish.
+          return;
+        }
         phase("secrets");
         const [
           { refreshPreparedModelRuntimeSnapshots, getPreparedModelRuntimeSnapshot },
-          { listConfiguredOwnerInputs },
           {
             getActiveSecretsRuntimeSnapshot,
             getActiveSecretsRuntimeSnapshotRevision,
@@ -133,14 +145,11 @@ export function activateGatewayAgentDatabaseStartup(params: {
           },
         ] = await Promise.all([
           import("../agents/prepared-model-runtime.js"),
-          import("../agents/prepared-model-runtime.configured.js"),
           import("../secrets/runtime.js"),
         ]);
         assertCurrent();
-        const beforeConfig = params.getConfig();
         const previousSecretsRevision = getActiveSecretsRuntimeSnapshotRevision();
         const previousSecrets = getActiveSecretsRuntimeSnapshot();
-        assertAgentDatabaseConfiguration(beforeConfig, agentId, paths, env);
         if (
           !previousSecrets ||
           !(await refreshActiveSecretsRuntimeSnapshotForConfig({
