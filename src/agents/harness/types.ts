@@ -105,6 +105,7 @@ type AgentHarnessAttemptParamsBase = Omit<
   | "assistantErrorTranscript"
   | "contextEngineLogicalTurnLease"
   | "onContextEngineTurnCandidate"
+  | "onCompletedSourceReplyDelivered"
   | "trajectoryRecorder"
   | "inputAttachmentMedia"
   | "supportsTurnScopedToolRestrictions"
