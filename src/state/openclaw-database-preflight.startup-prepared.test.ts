@@ -220,6 +220,57 @@ it("keeps pending startup stores fenced without inspecting or copying them again
   });
 });
 
+it("defers a slow ACP-only session store during gateway startup", async () => {
+  const fleet = createFleet();
+  fleet.config.acp = { enabled: true, allowedAgents: ["codex"] };
+  const pathname = openOpenClawAgentDatabase({ agentId: "codex", env: fleet.env }).path;
+  closeOpenClawAgentDatabasesForTest();
+  closeOpenClawStateDatabaseForTest();
+  const raw = new (requireNodeSqlite().DatabaseSync)(pathname);
+  raw.exec("PRAGMA journal_mode=WAL;");
+  raw.close();
+
+  const entered = createDeferred();
+  const release = createDeferred();
+  const createReader = schemaInspection.createAgentSchemaInspectionWorker;
+  let paused = false;
+  vi.spyOn(schemaInspection, "createAgentSchemaInspectionWorker").mockImplementation(() => {
+    const reader = createReader();
+    const inspect = reader.inspect;
+    return Object.assign(reader, {
+      inspect: async (...args: Parameters<typeof inspect>) => {
+        if (args[0].pathname === pathname && !paused) {
+          paused = true;
+          entered.resolve();
+          await release.promise;
+        }
+        return inspect(...args);
+      },
+    });
+  });
+
+  await withAgentDatabaseStartupAdmission(async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+    const readiness = fleet.ready();
+    let settled = false;
+    void readiness.then(() => {
+      settled = true;
+    });
+    try {
+      await entered.promise;
+      await vi.advanceTimersByTimeAsync(5_000);
+      await Promise.resolve();
+      expect(settled).toBe(true);
+      const refusal = readAgentDatabaseAdmissionRefusal("codex", { env: fleet.env });
+      expect(refusal?.code).toBe("agent-database-inspection-pending");
+    } finally {
+      vi.useRealTimers();
+      release.resolve();
+      await Promise.allSettled([readiness]);
+    }
+  });
+});
+
 it("carries fleet compatibility once into bootstrap while readiness always inspects fresh", async () => {
   const fleet = createFleet();
   await withAgentDatabaseStartupAdmission(
