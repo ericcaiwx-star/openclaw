@@ -32,20 +32,21 @@ describe("buildCliRespawnPlan", () => {
     ).toBeNull();
   });
 
-  it.each([["gateway", "--ambient-channels", "run"]])(
-    "keeps foreground Gateway ambient channel options in process: %j",
-    (...args) => {
-      for (const platform of ["darwin", "linux", "win32"] as const) {
-        expect(
-          buildPlan({
-            argv: ["node", "openclaw", ...args],
-            autoNodeExtraCaCerts: "/etc/ssl/certs/ca-certificates.crt",
-            platform,
-          }),
-        ).toBeNull();
-      }
-    },
-  );
+  it.each([
+    ["gateway", "--ambient-channels", "run"],
+    ["gateway", "--port", "18789", "--task-supervisor"],
+    ["gateway", "--port", "18789", "--task-supervisor-child=65536"],
+  ])("keeps foreground Gateway options in process: %j", (...args) => {
+    for (const platform of ["darwin", "linux", "win32"] as const) {
+      expect(
+        buildPlan({
+          argv: ["node", "openclaw", ...args],
+          autoNodeExtraCaCerts: "/etc/ssl/certs/ca-certificates.crt",
+          platform,
+        }),
+      ).toBeNull();
+    }
+  });
 
   it("does not detach native hook relays through a startup respawn", () => {
     expect(
