@@ -150,7 +150,8 @@ export async function runCodexAppServerAttempt(
               // Rejected cleanup admission must not hide the model permission loss
               // behind a secondary subscription-release error.
               connection.assertModelExecutionCurrent();
-              const completedSourceReply = finalizedResult?.sourceReplyDelivered === true;
+              const completedSourceReply =
+                attemptTools.toolBridge.telemetry.finalSourceReplyDelivered === true;
               if (
                 !finalizedResult ||
                 (!turnRuntime.state.pluginRuntimeRefreshStop && !completedSourceReply)
