@@ -239,13 +239,13 @@ export async function prepareEmbeddedAttemptAgentSession(input: {
   let didDeliverSourceReplyViaMessageTool = false;
   const markSourceReplyDelivered = () => {
     didDeliverSourceReplyViaMessageTool = true;
-    attempt.onSourceReplyDelivered?.();
   };
   installMessageToolTerminalHook({
     agent: activeSession.agent,
     sourceReplyDeliveryMode: attempt.sourceReplyDeliveryMode,
     messageToolFinalByDefault: attempt.messageToolFinalByDefault,
     onDeliveredSourceReply: markSourceReplyDelivered,
+    onCompletedSourceReply: attempt.onCompletedSourceReplyDelivered,
     config: attempt.config,
     currentProvider: attempt.messageChannel ?? attempt.messageProvider,
     currentAccountId: attempt.agentAccountId,

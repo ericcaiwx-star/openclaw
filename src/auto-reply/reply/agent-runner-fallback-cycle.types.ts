@@ -66,7 +66,7 @@ export type AgentFallbackCandidateCommonParams = RunEntryCandidateOptions &
 
 export type AgentFallbackCycleState = {
   /** Canonical current-source message-tool delivery completed during this logical turn. */
-  sourceReplyDelivered?: boolean;
+  completedSourceReplyDelivered?: boolean;
   maintenanceAuthProfile?: CompletedAgentAuthSelection;
   sessionWriter?: Extract<AgentTurnInternalResult, { kind: "settled" }>["sessionWriter"];
   compactionRequestBudget?: CompactionRequestBudget;

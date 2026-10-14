@@ -387,7 +387,7 @@ export type EmbeddedAgentParams = Pick<
   prompt?: string;
   transcriptPrompt?: string;
   lifecycleGeneration?: string;
-  onSourceReplyDelivered?: () => void;
+  onCompletedSourceReplyDelivered?: () => void;
   onBlockReply?: (payload: { text?: string; mediaUrls?: string[] }) => Promise<void> | void;
   onPartialReply?: (payload: { text?: string; mediaUrls?: string[] }) => Promise<void> | void;
   onToolResult?: (payload: { text?: string; mediaUrls?: string[] }) => Promise<void> | void;

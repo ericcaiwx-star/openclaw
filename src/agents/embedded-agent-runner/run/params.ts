@@ -199,7 +199,7 @@ export type RunEmbeddedAgentParams = Pick<
   conversationRecall?: ConversationRecallContext;
   onExecutionStarted?: (info?: { lifecycleGeneration?: string; backend?: string }) => unknown;
   /** Reports canonical completion of a settled current-source message-tool reply. */
-  onSourceReplyDelivered?: () => void;
+  onCompletedSourceReplyDelivered?: () => void;
   onExecutionPhase?: (info: {
     phase: EmbeddedAgentExecutionPhase;
     provider?: string;

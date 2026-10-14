@@ -228,7 +228,7 @@ it("keeps progress callbacks active after message-tool-only reads", async () => 
   it("does not fallback or surface an error after a completed source reply", async () => {
     state.runEmbeddedAgentMock
       .mockImplementationOnce(async (params: EmbeddedAgentParams) => {
-        params.onSourceReplyDelivered?.();
+        params.onCompletedSourceReplyDelivered?.();
         throw new Error("plugin state failed after delivery");
       })
       .mockRejectedValueOnce(new Error("401 Unauthorized"));
