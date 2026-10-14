@@ -279,7 +279,7 @@ describe("message-tool-only source replies", () => {
     const agent = {} as unknown as Agent;
     const onDeliveredSourceReply = vi.fn();
     const onCompletedSourceReply = vi.fn();
-    installMessageToolOnlyTerminalHook({
+    installMessageToolTerminalHook({
       agent,
       sourceReplyDeliveryMode: "message_tool_only",
       onDeliveredSourceReply,
@@ -351,8 +351,8 @@ describe("message-tool-only source replies", () => {
           },
         }),
       ),
-    ).resolves.toEqual({ terminate: true });
-    expect(onDeliveredSourceReply).toHaveBeenCalledTimes(1);
+    ).resolves.toBeUndefined();
+    expect(onDeliveredSourceReply).not.toHaveBeenCalled();
     expect(onCompletedSourceReply).not.toHaveBeenCalled();
   });
 
