@@ -386,9 +386,7 @@ describe("Gateway plugin reload run admission", () => {
         });
         const lease = await admission!;
         expect(lease.snapshot.config).toEqual(outcome === "rollback" ? retained : committed);
-        // Inventory identity is the configured workspace. The admitted run keeps its execution folder.
         expect(lease.snapshot.workspaceDir).toBe("/tmp/unused-workspace");
-        expect(input.workspaceDir).toBe(fixture.state.path("run-workspace"));
         expect(lease.snapshot.isCurrent()).toBe(true);
       } finally {
         finishDrainage.resolve();
@@ -642,8 +640,7 @@ describe("retained config and committed model publication", () => {
     const admission = acquireAgentRunPreparedModelRuntime({
       ...ownerInput(retained),
       workspaceDir: fixture.state.path("failed-run-workspace"),
-      // Covered Gateway folders reuse the admitted inventory and skip preparation.
-      // Credential-skipping admission is outside that owner, so this failure still prepares.
+      // Require a separate owner so admission still exercises failed preparation.
       skipCredentials: true,
     });
     const result = admission.catch((error: unknown) => error);

@@ -552,8 +552,6 @@ describe("prepared model runtime snapshots", () => {
         const lease = await leasePending;
 
         expect(lease.snapshot.config).toBe(latestConfig);
-        // Gateway inventory stays on the configured workspace. The queued run still
-        // names its own execution folder; that folder is not a second catalog build.
         expect(lease.snapshot.workspaceDir).toBe("/tmp/unused-workspace");
         expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledTimes(2);
         if (canonical) {

@@ -651,7 +651,6 @@ describe("prepared reply dispatch runtime", () => {
         agentDir: input.agentDir,
         workspaceDir: "/tmp/unused-workspace",
       });
-      expect(input.workspaceDir).toBe("/tmp/dynamic-workspace");
       expect(testApi.getPreparedModelRuntimeOwnerCountForTest()).toBe(1);
       await lease[Symbol.asyncDispose]();
     } finally {

@@ -33,19 +33,6 @@ import {
 } from "./prepared-model-runtime.retention.js";
 import type { PreparedModelRuntimeLeaseOptions } from "./prepared-model-runtime.types.js";
 
-function catalogOwnerKey(
-  input: PreparedModelRuntimeInput,
-  workspaceDir: string | undefined,
-): string {
-  return ownerKey({
-    ...input,
-    workspaceDir,
-    loadRuntimePlugins: false,
-    // The selection names the model being executed. The published catalog is agent-scoped.
-    runtimePluginSelections: undefined,
-  });
-}
-
 type PreparedModelRuntimeLeaseContext = {
   captureLifetime(): () => void;
   owners: Map<string, PreparedModelRuntimeOwner>;
@@ -223,22 +210,10 @@ export async function acquirePreparedModelRuntimeLeaseFromOwners(
       );
     }
 
-    // Gateway turns share the boot inventory already prepared for the configured agent.
-    // Another execution folder reuses that generation and catalog. Standalone hosts stay
-    // workspace-scoped and do not rediscover plugin identity during admission.
-    const sharesAdmittedGatewayInventory =
-      context.getGatewayLifecycleActive() &&
-      configuredOwner?.pluginGeneration !== undefined &&
-      !configuredOwner.needsRefresh &&
-      !configuredOwner.pending &&
-      !configuredOwner.refreshError &&
-      preparedPluginGenerationSupportsSelections(configuredOwner.pluginGeneration, input) &&
-      (options.pluginGeneration === undefined ||
-        preparedPluginGenerationReusesBase(
-          configuredOwner.pluginGeneration,
-          options.pluginGeneration,
-        )) &&
-      catalogOwnerKey(configuredOwner.input, undefined) === catalogOwnerKey(input, undefined);
+    // Gateway inventory belongs to the configured agent; the session cwd only controls execution.
+    const inventoryInput = context.getGatewayLifecycleActive()
+      ? { ...input, workspaceDir: configuredOwner?.input.workspaceDir }
+      : input;
     if (
       provenance === "run" &&
       context.getGatewayLifecycleActive() &&
@@ -254,17 +229,9 @@ export async function acquirePreparedModelRuntimeLeaseFromOwners(
       !configuredOwner.needsRefresh &&
       !configuredOwner.refreshError &&
       configuredOwner.snapshot.config === input.config &&
-      ownerKey({
-        ...configuredOwner.input,
-        runtimePluginSelections: undefined,
-        ...(sharesAdmittedGatewayInventory ? { workspaceDir: undefined } : {}),
-      }) ===
-        ownerKey({
-          ...input,
-          runtimePluginSelections: undefined,
-          ...(sharesAdmittedGatewayInventory ? { workspaceDir: undefined } : {}),
-        }) &&
-      preparedPluginGenerationSupportsSelections(configuredOwner.pluginGeneration, input)
+      ownerKey({ ...configuredOwner.input, runtimePluginSelections: undefined }) ===
+        ownerKey({ ...inventoryInput, runtimePluginSelections: undefined }) &&
+      preparedPluginGenerationSupportsSelections(configuredOwner.pluginGeneration, inventoryInput)
     ) {
       owner = configuredOwner;
     }
@@ -329,10 +296,16 @@ export async function acquirePreparedModelRuntimeLeaseFromOwners(
     }
     const catalogOwner =
       configuredOwner &&
-      catalogOwnerKey(
-        configuredOwner.input,
-        sharesAdmittedGatewayInventory ? undefined : configuredOwner.input.workspaceDir,
-      ) === catalogOwnerKey(input, sharesAdmittedGatewayInventory ? undefined : input.workspaceDir)
+      ownerKey({
+        ...configuredOwner.input,
+        loadRuntimePlugins: false,
+        runtimePluginSelections: undefined,
+      }) ===
+        ownerKey({
+          ...inventoryInput,
+          loadRuntimePlugins: false,
+          runtimePluginSelections: undefined,
+        })
         ? configuredOwner
         : owner;
     snapshot = capturePreparedModelRuntimeCatalog(snapshot, catalogOwner.snapshot);
