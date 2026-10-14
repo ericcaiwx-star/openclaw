@@ -92,7 +92,7 @@ export function resolveIngressWorkspaceOverrideForSessionRun(
     | (Pick<SpawnedRunMetadata, "spawnedBy" | "workspaceDir"> & {
         cwd?: string | null;
         execHost?: string | null;
-        /** Provider that owns this turn's agent runtime, matching CLI backend selection. */
+        /** Execution runtime that owns this turn, independent of its model provider. */
         runtimeBackendId?: string | null;
       })
     | null,

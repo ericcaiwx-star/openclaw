@@ -260,7 +260,7 @@ export async function prepareAgentRunDispatch(
     workspaceDir: params.sessionEntry?.spawnedWorkspaceDir,
     cwd: params.sessionEntry?.spawnedCwd,
     execHost: params.sessionEntry?.execHost,
-    runtimeBackendId: resolvedRuntime.provider,
+    runtimeBackendId: resolvedRuntime.harness,
   });
   let preparedModelRuntimeLease: PreparedModelRuntimeLease | undefined;
   let dispatchRuntimeLease: ReturnType<typeof scopePreparedModelRuntimeLease> | undefined;
