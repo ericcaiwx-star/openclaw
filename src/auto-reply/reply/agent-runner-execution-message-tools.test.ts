@@ -224,3 +224,37 @@ it("keeps progress callbacks active after message-tool-only reads", async () => 
     expect.objectContaining({ output: "failed command output", status: "failed" }),
   );
 });
+
+  it("does not fallback or surface an error after a completed source reply", async () => {
+    state.runEmbeddedAgentMock
+      .mockImplementationOnce(async (params: EmbeddedAgentParams) => {
+        params.onSourceReplyDelivered?.();
+        throw new Error("plugin state failed after delivery");
+      })
+      .mockRejectedValueOnce(new Error("401 Unauthorized"));
+    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => {
+      try {
+        return {
+          result: await params.run("anthropic", "primary", initialFallbackAttemptOptions(params)),
+          provider: "anthropic",
+          model: "primary",
+          attempts: [],
+        };
+      } catch (error) {
+        if (params.canFallbackAfterError?.() === false) {
+          throw error;
+        }
+        return {
+          result: await params.run("xai", "fallback", fallbackAttemptOptions(params, "unknown")),
+          provider: "xai",
+          model: "fallback",
+          attempts: [],
+        };
+      }
+    });
+
+    const result = await executeAgentTurn(messageTurn());
+
+    expect(state.runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
+    expect(result).toMatchObject({ kind: "final", payload: { text: "NO_REPLY" } });
+  });
