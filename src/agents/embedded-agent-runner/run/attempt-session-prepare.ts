@@ -242,6 +242,7 @@ export async function prepareEmbeddedAttemptAgentSession(input: {
   let didDeliverSourceReplyViaMessageTool = false;
   const markSourceReplyDelivered = () => {
     didDeliverSourceReplyViaMessageTool = true;
+    attempt.onSourceReplyDelivered?.();
   };
   installMessageToolTerminalHook({
     agent: activeSession.agent,

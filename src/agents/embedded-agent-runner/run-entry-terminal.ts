@@ -22,6 +22,7 @@ export type RunEntryTerminalBehavior =
         hasRetryBlockedDelivery: boolean;
         hasDirectlySentBlockReply: boolean;
         hasBlockReplyPipelineOutput: boolean;
+        hasCompletedSourceReply?: boolean;
       };
     }
   | { kind: "followup-delivery" }
