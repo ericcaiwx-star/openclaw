@@ -1,5 +1,5 @@
 import { formatSystemTurnPrompt } from "../../sessions/system-turn-prompt.js";
-import { SkillLibraryError } from "../../skills/library/errors.js";
+import { SkillLibraryError } from "../../skills/skill-library-error.js";
 import type { FollowupRun } from "./queue/types.js";
 import type { ReplyOperation } from "./reply-run-registry.js";
 
@@ -27,11 +27,11 @@ export function isReplyOperationStalledBeforeOutput(
 }
 
 /** Builds the one recovery run that answers a stalled turn over its persisted transcript. */
-export function buildStalledTurnRecoveryRun(base: FollowupRun): FollowupRun {
+export function buildStalledTurnRecoveryRun(base: FollowupRun, guidance?: string): FollowupRun {
   const source = base.queuedFollowupReplyDisposition;
   return {
     ...base,
-    prompt: formatSystemTurnPrompt(STALLED_TURN_GUIDANCE),
+    prompt: formatSystemTurnPrompt(guidance ?? STALLED_TURN_GUIDANCE),
     summaryLine: "stalled-turn-recovery",
     stalledTurnRecovery: true,
     disableCollectBatching: true,

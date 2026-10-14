@@ -8,15 +8,11 @@ import path from "node:path";
 import { createInterface } from "node:readline";
 import { DatabaseSync, type SQLInputValue } from "node:sqlite";
 import type { Readable } from "node:stream";
-import { setTimeout as waitForProcessTick } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { withTimeout } from "@openclaw/fs-safe/advanced";
 import { expectDefined } from "@openclaw/normalization-core";
 import { asOptionalRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
-import {
-  inspectManagedProcessGroup,
-  terminateManagedChild,
-} from "../../scripts/lib/managed-child-process.mts";
+import { formatCliCommand } from "../../src/cli/command-format.js";
 import {
   readSessionArchiveContentSync,
   stripSessionArchiveCompressionSuffix,
@@ -42,6 +38,7 @@ import { closeOpenClawStateDatabaseForTest } from "../../src/state/openclaw-stat
 import { sleep } from "../../src/utils.js";
 import {
   createOpenClawTestInstance,
+  GatewayAgentAdmissionError,
   GatewayStartupRefusedError,
 } from "./openclaw-test-instance.js";
 import { withinTest } from "./promise.js";
@@ -436,7 +433,6 @@ function isBuiltCliEntrypoint(entrypoint: readonly string[]): boolean {
 function buildProofContext(stateDir: string, signal?: AbortSignal) {
   const agentDir = path.join(stateDir, "agents", AGENT_ID);
   const activeSessionsDir = path.join(agentDir, "sessions");
-  const legacySessionsDir = path.join(stateDir, "sessions");
   return {
     activeSessionsDir,
     cleanups: new Set<ProofCleanup>(),
@@ -449,7 +445,6 @@ function buildProofContext(stateDir: string, signal?: AbortSignal) {
     deleteSessionKey: DELETE_SESSION_KEY,
     fullTurnAssistantText: FULL_TURN_ASSISTANT_TEXT,
     fullTurnSessionKey: FULL_TURN_SESSION_KEY,
-    legacySessionsDir,
     legacySessionId: "sqlite-legacy-main",
     mockOpenAiRequestLog: path.join(stateDir, "mock-openai-requests.ndjson"),
     oldStateSessionKeys: [...OLD_STATE_SESSION_KEYS],
@@ -657,7 +652,6 @@ function ownProofChild(context: ProofContext, child: ProofChildProcess): () => P
 
 async function seedLegacySessionStore(context: ProofContext): Promise<void> {
   await fs.mkdir(context.activeSessionsDir, { recursive: true });
-  await fs.mkdir(context.legacySessionsDir, { recursive: true });
   await fs.mkdir(path.join(context.stateDir, "agent"), { recursive: true });
   const now = Date.now();
   const firstSharedSessionKey = expectDefined(
@@ -678,28 +672,24 @@ async function seedLegacySessionStore(context: ProofContext): Promise<void> {
     [secondSharedSessionKey]: legacyEntry("sqlite-shared-session", now - 3_000, {
       sessionFile: "sqlite-shared-b.jsonl",
     }),
-  };
-  const oldStateEntries = {
-    main: legacyEntry(context.legacySessionId, now - 4_000),
-    "+15551234567": legacyEntry("sqlite-old-direct", now - 5_000),
-    "group:legacy-room": legacyEntry("sqlite-old-group", now - 6_000, {
+    [context.resetSessionKey]: legacyEntry(context.legacySessionId, now - 4_000),
+    "agent:main:+15551234567": legacyEntry("sqlite-old-direct", now - 5_000),
+    "agent:main:unknown:group:legacy-room": legacyEntry("sqlite-old-group", now - 6_000, {
       groupChannel: "legacy-room",
     }),
-    "partial-direct": legacyEntry("sqlite-partial-import", now - 7_000),
+    "agent:main:partial-direct": legacyEntry("sqlite-partial-import", now - 7_000),
   };
   for (const [index, sessionKey] of SCALE_SESSION_KEYS.entries()) {
     entries[sessionKey] = legacyEntry(scaleSessionId(index), now - 20_000 - index);
   }
   await writeJsonFile(context.storePath, entries, 2);
-  await writeJsonFile(path.join(context.legacySessionsDir, "sessions.json"), oldStateEntries, 2);
   await writeJsonFile(path.join(context.stateDir, "agent", "old-settings.json"), {
     source: "old-agent-layout",
   });
-  const legacyDir = context.legacySessionsDir;
   const activeDir = context.activeSessionsDir;
-  await writeMessageTranscript(legacyDir, context.legacySessionId, "sqlite-user-1", "legacy hello");
-  await writeMessageTranscript(legacyDir, "sqlite-old-direct", "sqlite-old-direct-1", "old dm");
-  await writeMessageTranscript(legacyDir, "sqlite-old-group", "sqlite-old-group-1", "old group");
+  await writeMessageTranscript(activeDir, context.legacySessionId, "sqlite-user-1", "legacy hello");
+  await writeMessageTranscript(activeDir, "sqlite-old-direct", "sqlite-old-direct-1", "old dm");
+  await writeMessageTranscript(activeDir, "sqlite-old-group", "sqlite-old-group-1", "old group");
   await writeMessageTranscript(activeDir, "sqlite-delete-session", "sqlite-delete-1", "delete me");
   await writeMessageTranscript(
     activeDir,
@@ -741,10 +731,10 @@ async function seedLegacySessionStore(context: ProofContext): Promise<void> {
     ]);
   }
   await writeJsonFile(
-    path.join(context.legacySessionsDir, `${context.legacySessionId}.trajectory.jsonl`),
+    path.join(context.activeSessionsDir, `${context.legacySessionId}.trajectory.jsonl`),
     { type: "trajectory", sessionId: context.legacySessionId },
   );
-  await writeJsonFile(path.join(context.legacySessionsDir, "old-orphan.deleted.jsonl"), {
+  await writeJsonFile(path.join(context.activeSessionsDir, "old-orphan.deleted.jsonl"), {
     type: "event",
     id: "old-orphan",
   });
@@ -849,19 +839,17 @@ async function importProofSession(
 }
 
 async function requireLegacyStartupRefusal(inst: OpenClawTestInstance, context: ProofContext) {
-  const legacyStorePath = path.join(context.legacySessionsDir, "sessions.json");
+  const legacyStorePath = context.storePath;
   const validStore = await fs.readFile(legacyStorePath);
-  // Valid stores can migrate during startup. A refused source must remain visible
-  // to the next startup instead of being moved outside migration discovery.
+  // Startup must leave the refused per-agent index and every transcript intact
+  // so the same source remains available for the next attempt and Doctor repair.
   await fs.writeFile(legacyStorePath, `${validStore.toString("utf8")}\n<<<invalid legacy store>>>`);
   const sources = new Map<string, Buffer>();
-  for (const directory of [context.activeSessionsDir, context.legacySessionsDir]) {
-    await walkFiles(directory, async (filePath) => {
-      sources.set(filePath, await fs.readFile(filePath));
-    });
-    if (!sources.has(path.join(directory, "sessions.json"))) {
-      throw new Error(`missing seeded legacy session store in ${directory}`);
-    }
+  await walkFiles(context.activeSessionsDir, async (filePath) => {
+    sources.set(filePath, await fs.readFile(filePath));
+  });
+  if (!sources.has(legacyStorePath)) {
+    throw new Error(`missing seeded legacy session store at ${legacyStorePath}`);
   }
   let message = "";
   for (const attempt of [1, 2]) {
@@ -873,11 +861,24 @@ async function requireLegacyStartupRefusal(inst: OpenClawTestInstance, context: 
       refusal = error;
       message = error instanceof Error ? error.message : String(error);
     }
-    if (
-      !(refusal instanceof GatewayStartupRefusedError) ||
-      refusal.reason !== "legacy-migration-required" ||
-      refusal.legacyStorePath !== legacyStorePath
-    ) {
+    const legacyProcessRefusal =
+      refusal instanceof GatewayStartupRefusedError &&
+      refusal.reason === "legacy-migration-required" &&
+      refusal.legacyStorePath === legacyStorePath;
+    const deferredAdmissionRefusal =
+      refusal instanceof GatewayAgentAdmissionError &&
+      refusal.refusals.some(
+        (entry) =>
+          entry.code === "agent-database-inspection-failed" &&
+          entry.agentId === context.agentId &&
+          Array.isArray(entry.paths) &&
+          entry.paths.includes(context.agentDbPath) &&
+          entry.reason ===
+            `Legacy session store requires migration: ${legacyStorePath}. Run "${formatCliCommand("openclaw doctor --fix", inst.env)}" against the same state/config before starting OpenClaw.` &&
+          typeof entry.repairHint === "string" &&
+          entry.repairHint.includes("doctor --fix"),
+      );
+    if (!legacyProcessRefusal && !deferredAdmissionRefusal) {
       throw new Error(
         `expected legacy session migration refusal on startup ${attempt}, got: ${message || "ready Gateway"}`,
       );
@@ -1401,13 +1402,9 @@ async function runAbruptRestartProof(
   // The caller has joined agent.wait and observed both committed messages. This
   // covers completed-turn durability, not an interrupted transaction or active run.
   const before = await snapshot(client);
-  const child = expectDefined(inst.child, "running Gateway before abrupt restart");
   await disconnect();
-  const forcedExit = await forceGatewayExit(child, context.signal);
+  const forcedExit = await forceGatewayExit(inst, context.signal);
   await record("after-abrupt-gateway-exit");
-  // Release the existing owner only after forced exit and tree closure are proven;
-  // its graceful stop must not turn a failed kill into a passing recovery test.
-  await inst.stopGateway();
   await inst.startGateway();
   await record("after-abrupt-gateway-restart");
   const restarted = await connectProofClient(inst, context, "sqlite-abrupt-restart");
@@ -1444,7 +1441,8 @@ async function runAbruptRestartProof(
   return await proof;
 }
 
-async function forceGatewayExit(child: ProofChildProcess, abortSignal?: AbortSignal) {
+async function forceGatewayExit(instance: OpenClawTestInstance, abortSignal?: AbortSignal) {
+  const child = expectDefined(instance.child, "running Gateway before abrupt restart");
   if (child.exitCode !== null || child.signalCode !== null) {
     throw new Error("Gateway already exited before the abrupt-restart proof");
   }
@@ -1455,33 +1453,30 @@ async function forceGatewayExit(child: ProofChildProcess, abortSignal?: AbortSig
     once(child, "close", { signal: abort.signal }),
   ]);
   try {
-    const termination = terminateManagedChild(child, "SIGKILL");
+    child.kill("SIGKILL");
     const [[code, signal], [closeCode, closeSignal]] = await (abortSignal
       ? withinTest(observed, abortSignal)
       : observed);
     if (
       (process.platform === "win32"
-        ? termination?.processTreeState !== "terminated" || code === null || code === 0
+        ? code === null || code === 0
         : code !== null || signal !== "SIGKILL") ||
       closeCode !== code ||
       closeSignal !== signal
     ) {
-      throw new Error(
-        `Gateway did not exit forcibly: ${JSON.stringify({ code, signal, termination })}`,
-      );
+      throw new Error(`Gateway did not exit forcibly: ${JSON.stringify({ code, signal })}`);
     }
-    // Child close cannot report descendants without inherited pipes. The managed
-    // owner exposes a census, not an extinction event; only cancellation bounds this check.
-    let processTreeState = inspectManagedProcessGroup(child, { errorPolicy: "indeterminate" });
-    while (processTreeState !== "dead") {
-      try {
-        await waitForProcessTick(10, undefined, { signal: abortSignal });
-      } catch (cause) {
-        throw new Error("Gateway process tree remained alive after SIGKILL", { cause });
-      }
-      processTreeState = inspectManagedProcessGroup(child, { errorPolicy: "indeterminate" });
-    }
-    return { code, signal, closeCode, closeSignal, platform: process.platform, processTreeState };
+    // Root exit and output closure do not certify descendants. Join the fixture's
+    // exact custody owner after proving SIGKILL, before admitting another Gateway.
+    await instance.stopGateway();
+    return {
+      code,
+      signal,
+      closeCode,
+      closeSignal,
+      platform: process.platform,
+      processTreeState: "dead" as const,
+    };
   } finally {
     abort.abort();
     await Promise.allSettled([observed]);
@@ -1750,7 +1745,7 @@ async function waitForAgentRunSettled(client: GatewayClient, runId: string): Pro
   if (result.status === "ok") {
     return;
   }
-  // Deletion can settle with its action or an admission/runtime abort reason.
+  // Deletion can settle with its action or the runtime's terminal abort error.
   // A wait deadline has no endedAt and must still fail this proof.
   const terminalLifecycleStatus = result.status === "timeout" || result.status === "error";
   if (
@@ -2014,7 +2009,6 @@ async function captureCheckpoint(
     ...(options.doctor ? { doctor: options.doctor } : {}),
     gatewayLogTail: tail(options.gatewayLogTail ?? ""),
     label,
-    legacyStateJsonl: await inventoryActiveJsonl(context.legacySessionsDir),
     sqlite: readSqliteEvidence(context.agentDbPath, context.trackedSessionKeys),
   };
 }
@@ -2256,19 +2250,16 @@ function validateCheckpointInvariants(
   checkpoint: ProofCheckpoint,
   failures: string[],
 ): void {
-  if (checkpoint.label !== "seeded-legacy-store" && checkpoint.label !== "after-startup-refusal") {
-    for (const [description, inventory] of [
-      ["active sessions directory", checkpoint.activeJsonl],
-      ["old sessions directory", checkpoint.legacyStateJsonl],
-    ] as const) {
-      if (inventory.length > 0) {
-        failures.push(
-          `${checkpoint.label}: ${description} still has JSONL files: ${inventory
-            .map((entry) => entry.path)
-            .join(", ")}`,
-        );
-      }
-    }
+  if (
+    checkpoint.label !== "seeded-legacy-store" &&
+    checkpoint.label !== "after-startup-refusal" &&
+    checkpoint.activeJsonl.length > 0
+  ) {
+    failures.push(
+      `${checkpoint.label}: active sessions directory still has JSONL files: ${checkpoint.activeJsonl
+        .map((entry) => entry.path)
+        .join(", ")}`,
+    );
   }
   const doctor = checkpoint.doctor;
   if (checkpoint.label.startsWith("after-doctor") && doctor?.code !== 0) {
@@ -2443,7 +2434,7 @@ function printCheckpoint(checkpoint: ProofCheckpoint): void {
     [
       `[sqlite-sessions-transcripts-flip-proof] ${checkpoint.label}`,
       `  sqlite sessions=${checkpoint.sqlite.sessions} entries=${checkpoint.sqlite.sessionEntries} transcriptEvents=${checkpoint.sqlite.transcriptEvents}`,
-      `  activeJsonl=${checkpoint.activeJsonl.length} legacyStateJsonl=${checkpoint.legacyStateJsonl.length} archiveArtifacts=${checkpoint.archiveArtifacts.length}`,
+      `  activeJsonl=${checkpoint.activeJsonl.length} archiveArtifacts=${checkpoint.archiveArtifacts.length}`,
       checkpoint.doctor
         ? `  doctor ${checkpoint.doctor.mode} code=${String(checkpoint.doctor.code)} totals=${JSON.stringify(
             checkpoint.doctor.totals ?? {},

@@ -1,12 +1,14 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import { normalizeGitPathForFilesystem } from "../../infra/git-exec.js";
 import { WorktreeRepositoryError } from "./errors.js";
-import { insideGitCheckout, runGit } from "./git.js";
+import { commandError, insideGitCheckout, resolveGitRepositoryPaths, runGit } from "./git.js";
+import { timeWorktreePreparationPhase } from "./preparation-timing.js";
 
 export async function resolveCheckoutRootFromRealPath(
   requested: string,
   requestedLabel: string,
-): Promise<string> {
+): Promise<{ root: string; commit: string }> {
   const rootResult = await runGit(requested, [
     "rev-parse",
     "--show-toplevel",
@@ -45,5 +47,53 @@ export async function resolveCheckoutRootFromRealPath(
   if (!root) {
     throw new WorktreeRepositoryError(`not a git checkout: ${requestedLabel}`);
   }
-  return await fs.realpath(normalizeGitPathForFilesystem(root));
+  return {
+    root: await fs.realpath(normalizeGitPathForFilesystem(root)),
+    commit: output.slice(separator + 1),
+  };
+}
+
+export type ResolvedRepository = {
+  repoRoot: string;
+  sourceRoot: string;
+  commonDir: string;
+  originUrl: string;
+  fingerprint: string;
+};
+
+export async function resolveRepositoryFromRealPath(
+  requested: string,
+  requestedLabel: string,
+): Promise<ResolvedRepository> {
+  const { root: sourceRoot } = await resolveCheckoutRootFromRealPath(requested, requestedLabel);
+  const { canonicalRoot, commonDir } = await resolveGitRepositoryPaths(sourceRoot);
+  const origin = await runGit(canonicalRoot, ["config", "--get", "remote.origin.url"]);
+  if (origin.termination !== "exit" || (origin.code !== 0 && origin.code !== 1)) {
+    throw commandError("git config --get remote.origin.url", origin);
+  }
+  const originUrl = origin.code === 0 ? origin.stdout.trim() : "";
+  const fingerprint = createHash("sha256")
+    .update(`${commonDir}\n${originUrl}`)
+    .digest("hex")
+    .slice(0, 16);
+  return { repoRoot: canonicalRoot, sourceRoot, commonDir, originUrl, fingerprint };
+}
+
+export async function resolveRepository(repoRoot: string): Promise<ResolvedRepository> {
+  return await timeWorktreePreparationPhase("repository", async () => {
+    const requested = await fs.realpath(repoRoot).catch(() => {
+      throw new Error(`repository does not exist: ${repoRoot}`);
+    });
+    return await resolveRepositoryFromRealPath(requested, repoRoot);
+  });
+}
+
+export async function resolveRepositoryIdentity(repoRoot: string) {
+  const resolved = await resolveRepository(repoRoot);
+  return {
+    checkoutRoot: resolved.sourceRoot,
+    repoRoot: resolved.repoRoot,
+    originUrl: resolved.originUrl,
+    fingerprint: resolved.fingerprint,
+  };
 }

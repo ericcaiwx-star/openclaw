@@ -18,7 +18,11 @@ import {
   type ContextEngineLogicalTurnLease,
 } from "./harness/context-engine-logical-turn.js";
 import { shellQuoteArgs } from "./harness/native-hook-relay-utils.js";
-import { isLiveTestEnabled, logLiveProgress } from "./live-test-helpers.js";
+import {
+  isLiveTestEnabled,
+  logLiveProgress,
+  useLiveTestRuntimeConfig,
+} from "./live-test-helpers.js";
 import { SessionManager } from "./sessions/session-manager.js";
 
 const describeLive =
@@ -106,7 +110,7 @@ describeLive("embedded Responses output-limit recovery live", () => {
           },
         },
         agents: {
-          list: [{ id: "main", default: true, workspace: state.workspaceDir }],
+          entries: { main: { workspace: state.workspaceDir } },
           defaults: {
             skipBootstrap: true,
             models: { [`openai/${modelId}`]: { params: { transport: "sse" } } },
@@ -116,6 +120,7 @@ describeLive("embedded Responses output-limit recovery live", () => {
         plugins: { allow: ["openai"], slots: { memory: "none" } },
       } satisfies OpenClawConfig;
       await state.writeConfig(config);
+      using _ = useLiveTestRuntimeConfig(config);
       const sessionManager = SessionManager.inMemory(state.workspaceDir);
       const events: EmbeddedAgentEvent[] = [];
       const requests: ResponseCreateParamsStreaming[] = [];

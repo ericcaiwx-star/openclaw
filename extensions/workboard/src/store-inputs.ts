@@ -3,6 +3,7 @@ import type {
   WorkboardCard,
   WorkboardDiagnostic,
   WorkboardEvent,
+  WorkboardLaunchState,
   WorkboardWorkspace,
   WorkboardWorkspaceAccess,
 } from "@openclaw/workboard-contract";
@@ -38,8 +39,12 @@ type WorkboardCardInput = {
 };
 
 export type WorkboardCardPatch = WorkboardCardInput;
+/** Internal builders carry launch state separately from untrusted metadata. */
+export type WorkboardOwnedCardPatch = WorkboardCardPatch & {
+  ownedLaunch?: WorkboardLaunchState;
+};
 export type WorkboardUpdateCardOptions = {
-  allowAutomationLaunch?: boolean;
+  automationLaunch?: WorkboardLaunchState;
   allowMetadataDependencyLinks?: boolean;
   enforceStatusHolds?: boolean;
   event?: Omit<WorkboardEvent, "id" | "at">;
@@ -176,7 +181,6 @@ export type WorkboardBoardInput = {
 export type WorkboardSpecifyInput = WorkboardCardPatch & {
   summary?: unknown;
 };
-export type WorkboardDecomposeChildInput = WorkboardLinkedCreateInput;
 export type WorkboardDecomposeInput = {
   summary?: unknown;
   children?: unknown;

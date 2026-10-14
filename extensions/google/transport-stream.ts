@@ -43,6 +43,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { safeParseJson } from "openclaw/plugin-sdk/text-utility-runtime";
 import { parseGeminiAuth } from "./gemini-auth.js";
 import { stripGoogleProviderPrefix } from "./model-id.js";
 import { isGoogleNativeVideoModelId } from "./provider-models.js";
@@ -51,6 +52,7 @@ import {
   isGoogleGemini25ThinkingBudgetModel,
   isGoogleGemini3FlashModel,
   isGoogleGemini3ProModel,
+  isGoogleGemini3ThinkingLevelModel,
   resolveGoogleGemini3ThinkingLevel,
   stripInvalidGoogleThinkingBudget,
   type GoogleThinkingInputLevel,
@@ -123,9 +125,6 @@ const GOOGLE_VERTEX_MODEL_RESOURCE_PREFIX =
 const GOOGLE_VERTEX_DEFAULT_API_VERSION = "v1";
 
 let toolCallCounter = 0;
-function requiresToolCallThoughtSignature(modelId: string): boolean {
-  return isGoogleGemini3ProModel(modelId) || isGoogleGemini3FlashModel(modelId);
-}
 
 function normalizeGoogleTransportRouteApi(
   api: string | undefined,
@@ -194,14 +193,10 @@ function mapToolChoice(
 }
 
 function mapStopReasonString(reason: string): "stop" | "length" | "error" {
-  switch (reason) {
-    case "STOP":
-      return "stop";
-    case "MAX_TOKENS":
-      return "length";
-    default:
-      return "error";
+  if (reason === "STOP") {
+    return "stop";
   }
+  return reason === "MAX_TOKENS" || reason === "CONTINUATION" ? "length" : "error";
 }
 
 function normalizeToolCallId(id: string): string {
@@ -367,7 +362,7 @@ function resolveGoogleThinkingConfig(
     return getDisabledThinkingConfig(model.id);
   }
   if (isAdaptiveReasoningLevel(options.reasoning)) {
-    if (isGoogleGemini3ProModel(model.id) || isGoogleGemini3FlashModel(model.id)) {
+    if (isGoogleGemini3ThinkingLevelModel(model.id)) {
       return { includeThoughts: true };
     }
     if (isGoogleGemini25ThinkingBudgetModel(model.id)) {
@@ -377,7 +372,7 @@ function resolveGoogleThinkingConfig(
       });
     }
   }
-  if (isGoogleGemini3ProModel(model.id) || isGoogleGemini3FlashModel(model.id)) {
+  if (isGoogleGemini3ThinkingLevelModel(model.id)) {
     return {
       includeThoughts: true,
       thinkingLevel: resolveThinkingLevel(options.reasoning, model.id),
@@ -410,10 +405,10 @@ function convertGoogleMessages(
       normalizeGoogleTransportMessageRoutes(context.messages as Context["messages"]),
       canonicalGoogleModel(routeModel),
       (id) => (requiresGoogleToolCallId(model.id) ? normalizeToolCallId(id) : id),
-      { preserveCrossModelToolCallThoughtSignature: requiresToolCallThoughtSignature(model.id) },
+      { preserveCrossModelToolCallThoughtSignature: isGoogleGemini3ThinkingLevelModel(model.id) },
     ) as ProviderContext["messages"],
     replay: "managed",
-    requiresToolCallSignature: requiresToolCallThoughtSignature(model.id),
+    requiresToolCallSignature: isGoogleGemini3ThinkingLevelModel(model.id),
     videoPart: (video) => {
       const placeholder = { text: GOOGLE_VIDEO_SLOT_OMISSION };
       videoSlots?.set(placeholder, video);
@@ -634,8 +629,8 @@ function buildGoogleTransportRequestUrl(
     : buildGoogleGenerativeAiRequestUrl(model);
 }
 
-function resolveGoogleGemini3FirstResponseRetryMs(env = process.env): number {
-  const raw = env[GOOGLE_GEMINI3_FIRST_RESPONSE_RETRY_ENV];
+function resolveGoogleGemini3FirstResponseRetryMs(): number {
+  const raw = process.env[GOOGLE_GEMINI3_FIRST_RESPONSE_RETRY_ENV];
   return parseStrictNonNegativeInteger(raw) ?? GOOGLE_GEMINI3_FIRST_RESPONSE_RETRY_DEFAULT_MS;
 }
 
@@ -726,24 +721,22 @@ function createChildSignal(parent: AbortSignal | undefined, timeoutMs: number) {
   };
 }
 
-function iteratorToAsyncGenerator<T>(
-  iterator: AsyncIterator<T>,
+async function* iterateGoogleSseChunks(
+  iterator: AsyncIterator<GoogleSseChunk>,
   cleanup?: () => void,
-): AsyncGenerator<T> {
-  return (async function* () {
-    try {
-      for (;;) {
-        const next = await iterator.next();
-        if (next.done) {
-          return;
-        }
-        yield next.value;
+): AsyncGenerator<GoogleSseChunk> {
+  try {
+    for (;;) {
+      const next = await iterator.next();
+      if (next.done) {
+        return;
       }
-    } finally {
-      cleanup?.();
-      await iterator.return?.();
+      yield next.value;
     }
-  })();
+  } finally {
+    cleanup?.();
+    await iterator.return?.();
+  }
 }
 
 type GoogleSseAttempt =
@@ -817,7 +810,7 @@ async function openGoogleSseAttempt(params: {
   return {
     type: "ready",
     ...(!first.done ? { firstChunk: first.value } : {}),
-    chunks: iteratorToAsyncGenerator(iterator, attemptSignal?.cleanup),
+    chunks: iterateGoogleSseChunks(iterator, attemptSignal?.cleanup),
   };
 }
 
@@ -922,12 +915,7 @@ async function* parseGoogleSseChunks(
           completed = true;
           break;
         }
-        let trailingChunk: unknown;
-        try {
-          trailingChunk = JSON.parse(trailingPayload);
-        } catch {
-          throw new Error("Google SSE stream ended with an incomplete frame");
-        }
+        const trailingChunk = safeParseJson(trailingPayload);
         if (!isRecord(trailingChunk) || !isRecord(trailingChunk.error)) {
           throw new Error("Google SSE stream ended with an incomplete frame");
         }

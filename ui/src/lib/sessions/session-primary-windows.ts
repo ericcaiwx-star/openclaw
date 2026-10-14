@@ -11,7 +11,7 @@ import {
   type ManagedSessionList,
 } from "./session-list-query.ts";
 import { publishManagedList } from "./session-managed-list-refresh.ts";
-import { normalizeManagedSessionListQuery } from "./session-requests.ts";
+import { sessionListQueryKey } from "./session-requests.ts";
 
 /** Manage presentation leases on the roster owner's existing managed-list entries. */
 export function createSessionPrimaryWindows(
@@ -59,6 +59,10 @@ export function createSessionPrimaryWindows(
       }
       // Keep invalidation dormant until observed again, without runnable queued work.
       entry.coordinator.setActive(false, entry.queued !== null);
+      if (entry.queued?.immediate) {
+        // Keep an unserved create invalidation urgent if this query is observed again.
+        entry.coordinator.schedule(true);
+      }
       entry.queued = null;
       const release = () => {
         if (
@@ -130,22 +134,17 @@ export function createSessionPrimaryWindows(
     get revision() {
       return invalidationRevision;
     },
-    /** Fence active reads without invalidating the query supplying an accepted row. */
-    invalidate(
-      matches: (entry: ManagedSessionList) => boolean,
-      activeQuery: SessionListScope,
-      excludedKey?: string,
-    ) {
-      const key = JSON.stringify(normalizeManagedSessionListQuery(activeQuery));
-      const active = managedLists.get(key);
-      if (key !== excludedKey && (!active || matches(active))) {
+    /** Fence active reads and retire matching presentation leases. */
+    invalidate(matches: (entry: ManagedSessionList) => boolean, activeQuery: SessionListScope) {
+      const active = managedLists.get(sessionListQueryKey(activeQuery));
+      if (!active || matches(active)) {
         invalidationRevision += 1;
       }
-      retireWarmLists((entry) => entry.key !== excludedKey && matches(entry));
+      retireWarmLists(matches);
     },
     /** Capture one accepted primary window without changing an observed query's membership. */
     capture(scope: SessionListScope, result: SessionsListResult, epoch: number) {
-      const key = JSON.stringify(normalizeManagedSessionListQuery(scope));
+      const key = sessionListQueryKey(scope);
       retireWarmLists((entry) => entry.scope.agentId === scope.agentId && entry.key !== key);
       const entry = open(scope);
       if (entry.listeners.size > 0 || entry.pending) {

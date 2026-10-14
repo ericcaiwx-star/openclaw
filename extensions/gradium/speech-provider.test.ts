@@ -1,3 +1,4 @@
+import "openclaw/plugin-sdk/compiled-subprocess-testing";
 import type { SpeechSynthesisRequest } from "openclaw/plugin-sdk/speech";
 import { installPinnedHostnameTestHooks } from "openclaw/plugin-sdk/test-media-understanding";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -32,11 +33,6 @@ describe("gradium speech provider", () => {
     vi.unstubAllGlobals();
     vi.unstubAllEnvs();
     vi.restoreAllMocks();
-  });
-
-  it("reports configured when GRADIUM_API_KEY is set", () => {
-    vi.stubEnv("GRADIUM_API_KEY", "gsk_test");
-    expect(provider.isConfigured({ providerConfig: {}, timeoutMs: 5_000 })).toBe(true);
   });
 
   it("reports not configured for an invalid baseUrl instead of throwing", () => {

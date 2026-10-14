@@ -253,6 +253,7 @@ describe("Control UI performance budgets", () => {
     writeAsset("chat-e.css", { rawBytes: 25, gzipBytes: 10, brotliBytes: 8 });
     writeAsset("new-f.js", { rawBytes: 150, gzipBytes: 60, brotliBytes: 45 });
     writeAsset("lazy-g.js", { rawBytes: 300, gzipBytes: 90, brotliBytes: 65 });
+    fs.writeFileSync(path.join(distDir, "assets/art.webp"), Buffer.alloc(17));
 
     const metrics = collectControlUiPerformanceMetrics(distDir);
 
@@ -283,8 +284,7 @@ describe("Control UI performance budgets", () => {
     expect(report).toContain("chat boot JS: 3 requests, 135 B gzip");
     expect(report).toContain("70 B beyond initial-entry JS");
     expect(report).toContain("new boot JS: 3 requests, 125 B gzip");
-
-    writeAsset("chat-d.js", { rawBytes: 200, gzipBytes: 50, brotliBytes: 40 });
+    writeAsset("chat-d.js", { rawBytes: 180, gzipBytes: 50, brotliBytes: 40 });
     const smaller = collectControlUiPerformanceMetrics(distDir);
     expect(formatControlUiPerformanceReport(smaller, looseBudgets, null, 512, metrics)).toContain(
       "chat boot JS gzip vs base: 135 B -> 115 B (-20 B); requests 3 -> 3",
@@ -678,6 +678,42 @@ describe("Control UI performance budgets", () => {
       expect.objectContaining({ metric: "startup Mermaid JS assets" }),
     ]);
     expect(result.stderr).not.toContain("::warning");
+  });
+
+  it.each(["chat", "new"])("enforces the %s boot request limit in Actions", (route) => {
+    const { rootDir, scriptPath, distDir } = createCliFixture();
+    const links = Array.from({ length: 35 }, (_, index) => {
+      const file = `route-${index}.js`;
+      for (const suffix of ["", ".gz", ".br"]) {
+        fs.writeFileSync(path.join(distDir, "assets", `${file}${suffix}`), "x");
+      }
+      return `<link rel="modulepreload" href="./assets/${file}">`;
+    });
+    const indexPath = path.join(distDir, "index.html");
+    const initial = fs.readFileSync(indexPath, "utf8");
+    const writeRoute = (count: number) =>
+      fs.writeFileSync(
+        indexPath,
+        `${initial}<template data-openclaw-route-preloads="${route}">${links.slice(0, count).join("")}</template>`,
+      );
+    writeRoute(35);
+    const actions = { GITHUB_ACTIONS: "true" };
+    const over = runControlUiPerformanceCli(scriptPath, ["--json"], rootDir, actions);
+    expect(JSON.parse(over.stdout).violations).toEqual([
+      expect.objectContaining({ metric: `${route} boot JS requests`, actual: 36, limit: 35 }),
+    ]);
+    expect(over.status, over.stderr).toBe(1);
+    const reported = runControlUiPerformanceCli(
+      scriptPath,
+      ["--json", "--report-only"],
+      rootDir,
+      actions,
+    );
+    expect(reported.status, reported.stderr).toBe(0);
+    writeRoute(34);
+    const atLimit = runControlUiPerformanceCli(scriptPath, ["--json"], rootDir, actions);
+    expect(atLimit.status, atLimit.stderr).toBe(0);
+    expect(JSON.parse(atLimit.stdout).violations).toEqual([]);
   });
 
   it.each(["missing baseline", "malformed baseline", "missing sidecar", "missing base dist"])(
