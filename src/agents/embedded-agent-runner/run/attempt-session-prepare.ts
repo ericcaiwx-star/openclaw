@@ -242,11 +242,10 @@ export async function prepareEmbeddedAttemptAgentSession(input: {
     didDeliverSourceReplyViaMessageTool = true;
   };
   const markCompletedSourceReplyDelivered = () => {
-    if (didReportCompletedSourceReply) {
-      return;
+    if (!didReportCompletedSourceReply) {
+      didReportCompletedSourceReply = true;
+      attempt.onCompletedSourceReplyDelivered?.();
     }
-    didReportCompletedSourceReply = true;
-    attempt.onCompletedSourceReplyDelivered?.();
   };
   installMessageToolTerminalHook({
     agent: activeSession.agent,

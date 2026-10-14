@@ -410,8 +410,8 @@ describe("message-tool-only source replies", () => {
           },
         }),
       ),
-    ).resolves.toEqual({ terminate: true });
-    expect(onDeliveredSourceReply).toHaveBeenCalledTimes(1);
+    ).resolves.toBeUndefined();
+    expect(onDeliveredSourceReply).not.toHaveBeenCalled();
     expect(onCompletedSourceReply).not.toHaveBeenCalled();
   });
 

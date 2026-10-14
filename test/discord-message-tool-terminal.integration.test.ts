@@ -5,7 +5,7 @@ import {
   sendMessageDiscord,
 } from "../extensions/discord/test-api.js";
 import { readEmbeddedMessageDeliveryFact } from "../src/agents/embedded-agent-message-delivery.js";
-import { installMessageToolOnlyTerminalHook } from "../src/agents/embedded-agent-runner/run/message-tool-terminal.js";
+import { installMessageToolTerminalHook } from "../src/agents/embedded-agent-runner/run/message-tool-terminal.js";
 import type { AfterToolCallContext, Agent } from "../src/agents/runtime/index.js";
 import { createMessageTool } from "../src/agents/tools/message-tool-execution.js";
 import {
@@ -98,7 +98,7 @@ describe("Discord message-tool terminal delivery", () => {
           sourceReplyDelivered: true,
         });
         const agent = {} as Agent;
-        installMessageToolOnlyTerminalHook({
+        installMessageToolTerminalHook({
           agent,
           sourceReplyDeliveryMode: "message_tool_only",
           onCompletedSourceReply: params.onCompletedSourceReplyDelivered,
