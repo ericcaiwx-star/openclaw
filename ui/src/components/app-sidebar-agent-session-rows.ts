@@ -286,7 +286,7 @@ export type SidebarHomeSession = SidebarRecentSession & {
   metadataVisible: boolean;
 };
 
-/** Home navigation owns its own state; persistent child conversations own separate rows. */
+/** Home is a navigation root even when its persisted lineage points to itself. */
 export function projectSidebarHomeSession({
   host,
   row,
@@ -322,7 +322,6 @@ export function projectSidebarHomeSession({
     archiveVisibility: (key) => host.sessionDataContext?.sessions.archiveVisibility(key),
   });
   const { rows, childSessionRowsByParent, isChildSessionVisible } = visibility;
-  // Home is always a navigation root, even when its persisted lineage points to itself.
   const scopedRow = { ...row, agentId, sidebarRoot: true };
   const own = navigationState.toSidebarSession(scopedRow);
   const home = projectSessionTree({
