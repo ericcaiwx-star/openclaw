@@ -85,11 +85,17 @@ for await (const line of createInterface({ input: process.stdin })) {
   if (message.type === "control_request" && message.request.subtype === "initialize") {
     initialize = message.request;
     hooks = initialize.hooks;
+    if (scenario === "startup-hooks" || scenario === "startup-hooks-cancel") {
+      for (let index = 0; index < 34; index++) {
+        send({ type: "system", subtype: index % 2 ? "hook_response" : "hook_started", hook_id: String(index) });
+      }
+    }
     if (scenario === "revoked-initialize") {
       writeFileSync("initialize.ready", "ready");
       sendReceipt(path.join(process.cwd(), "initialize.ready"), "ready");
       while (!existsSync("initialize.release")) await delay(5);
     }
+    if (scenario === "startup-hooks-cancel") continue;
     assert.ok(hooks.PreToolUse[0].hookCallbackIds[0]);
     assert.ok(hooks.UserPromptSubmit[0].hookCallbackIds[0]);
     send({ type: "control_response", response: {
