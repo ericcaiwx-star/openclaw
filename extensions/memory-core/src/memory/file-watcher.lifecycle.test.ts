@@ -51,17 +51,23 @@ describe("Memory observation lifecycle", () => {
   function owner(
     onChange = vi.fn<() => void | Promise<void>>(),
     debounce = 0,
-    extraPaths: string[] = [],
+    extraPaths: ConstructorParameters<typeof MemoryFileWatcher>[0]["settings"]["extraPaths"] = [],
+    agentId = "main",
+    images = false,
   ) {
     const onDirty = vi.fn();
     const onUnavailable = vi.fn();
     const watcher = new MemoryFileWatcher({
       runInBackgroundContext: AsyncLocalStorage.snapshot(),
       workspaceDir: state.workspaceDir,
-      agentId: "main",
+      agentId,
       settings: {
         extraPaths,
-        multimodal: { enabled: false, modalities: [], maxFileBytes: 10485760 },
+        multimodal: {
+          enabled: images,
+          modalities: images ? ["image"] : [],
+          maxFileBytes: 10485760,
+        },
         sync: { watchDebounceMs: debounce },
       },
       onChange,
@@ -89,6 +95,7 @@ describe("Memory observation lifecycle", () => {
       for (const entry of observer.observations) {
         expect(entry.options.mode).toBe(poll === "true" ? "poll" : "auto");
         expect(entry.options.pollIntervalMs).toBe(expected);
+        expect(entry.options.intervalMs).toBe(300_000);
         entry.health({ state: "ready", mode: "poll" });
       }
       expect(watcher.health()).toEqual(
@@ -102,6 +109,107 @@ describe("Memory observation lifecycle", () => {
       );
     },
   );
+
+  it("shares roots across agents, fans out selected events, and joins the last release", async () => {
+    const extra = state.path("shared", "notes");
+    await fs.mkdir(extra, { recursive: true });
+    const indexed = Array.from({ length: 3 }, () => createDeferred<void>());
+    const agents = indexed.map((done, index) =>
+      owner(
+        vi.fn(() => done.resolve()),
+        0,
+        [extra],
+        `agent-${index}`,
+      ),
+    );
+    await Promise.all(agents.map(({ watcher }) => watcher.start()));
+    const shared = observer.observations.filter((entry) =>
+      entry.options.scopes.some((scope) => path.resolve(entry.root.rootDir, scope.path) === extra),
+    );
+    expect(shared).toHaveLength(1);
+    expect(observer.observations).toHaveLength(2);
+    const entry = shared[0]!;
+    const invalidate = () =>
+      entry.dirty([
+        {
+          path: path.relative(entry.root.rootDir, path.join(extra, "deleted.md")),
+          type: "structural",
+        },
+      ]);
+    invalidate();
+    expect(agents.map(({ onDirty }) => onDirty.mock.calls.length)).toEqual([1, 1, 1]);
+    await vi.advanceTimersByTimeAsync(0);
+    await Promise.all(indexed.map((done) => done.promise));
+    await agents[0]!.watcher.close();
+    expect(entry.close).not.toHaveBeenCalled();
+    invalidate();
+    expect(agents.map(({ onDirty }) => onDirty.mock.calls.length)).toEqual([1, 2, 2]);
+    await agents[1]!.watcher.close();
+    expect(entry.close).not.toHaveBeenCalled();
+    const joined = createDeferred<void>();
+    entry.close.mockImplementationOnce(() => joined.promise);
+    let closed = false;
+    const closing = agents[2]!.watcher.close().then(() => {
+      closed = true;
+    });
+    expect(entry.close).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(closed).toBe(false);
+    invalidate();
+    expect(agents.map(({ onDirty }) => onDirty.mock.calls.length)).toEqual([1, 2, 2]);
+    joined.resolve();
+    await closing;
+    const replacement = owner(undefined, 0, [extra]);
+    await replacement.watcher.start();
+    expect(observer.observations).toHaveLength(4);
+  });
+
+  it("does not share a replaced root with an agent admitted to the new directory", async () => {
+    const parent = state.path("shared");
+    const notes = path.join(parent, "notes");
+    await fs.mkdir(notes, { recursive: true });
+    const original = owner(undefined, 0, [notes], "original");
+    await original.watcher.start();
+    await fs.rename(parent, state.path("retired"));
+    await fs.mkdir(notes, { recursive: true });
+    const replacement = owner(undefined, 0, [notes], "replacement");
+    await replacement.watcher.start();
+    const entries = observer.observations.filter((entry) => entry.root.rootDir === parent);
+    expect(entries).toHaveLength(2);
+    entries[1]!.dirty([{ path: "notes/new.md", type: "content" }]);
+    expect(replacement.onDirty).toHaveBeenCalledOnce();
+    expect(original.onDirty).not.toHaveBeenCalled();
+    expect(replacement.onUnavailable).not.toHaveBeenCalled();
+  });
+
+  it("unions shared scopes and exclusions without widening an agent's selections", async () => {
+    const notes = state.path("shared", "notes");
+    const images = state.path("shared", "images");
+    await fs.mkdir(notes, { recursive: true });
+    await fs.mkdir(images);
+    const text = owner(undefined, 0, [{ path: notes, pattern: "text/*.md" }], "text");
+    await text.watcher.start();
+    const media = owner(undefined, 0, [notes, images], "media", true);
+    await media.watcher.start();
+    const entry = observer.observations.find(
+      (observation) => observation.root.rootDir === path.dirname(notes),
+    )!;
+    expect(observer.observations).toHaveLength(2);
+    expect(entry.options.scopes.map((scope) => scope.path).toSorted()).toEqual(["images", "notes"]);
+    const image = { path: "notes/photo.png", kind: "file" as const };
+    expect(entry.options.exclude?.(image)).toBe(false);
+    entry.dirty([{ path: image.path, type: "content" }]);
+    entry.dirty([{ path: "images/photo.png", type: "content" }]);
+    entry.dirty([{ path: "notes/other.md", type: "content" }]);
+    expect(text.onDirty).not.toHaveBeenCalled();
+    expect(media.onDirty).toHaveBeenCalledTimes(3);
+    entry.dirty([{ path: "notes/text/shared.md", type: "content" }]);
+    expect(text.onDirty).toHaveBeenCalledOnce();
+    expect(media.onDirty).toHaveBeenCalledTimes(4);
+    await media.watcher.close();
+    expect(entry.options.exclude?.(image)).toBe(true);
+    expect(entry.close).not.toHaveBeenCalled();
+  });
 
   it.each([undefined, "ENOTSUP"])("reports fallback polling once with reason %s", async (code) => {
     const { watcher, onUnavailable } = owner();

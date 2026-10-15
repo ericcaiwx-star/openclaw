@@ -226,7 +226,11 @@ especially for large memory trees. Native events
 still trigger prompt, debounced updates. Native watchers also perform a full
 recovery scan every five minutes, so a missed native event can take that long to
 be detected. This recovery interval does not change polling cadence. Automatic
-fallback logs one warning per watcher lifetime. A running memory manager exposes each local observation's
+fallback logs one warning per watcher lifetime. Agents in the same process share
+observations of the same admitted root, retaining each agent's file-selection
+rules. More than 128 combined scopes use additional bounded subscriptions. The
+last agent to stop observing a root closes its subscription. A running memory
+manager exposes each local observation's
 mode, polling interval, and `pollingFallback` in its status under `custom.watcher`;
 standalone status inspection does not start a watcher. The filesystem
 library does not currently retain the fallback reason or retry native selection;
