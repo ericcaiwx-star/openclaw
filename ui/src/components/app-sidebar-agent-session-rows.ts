@@ -322,7 +322,8 @@ export function projectSidebarHomeSession({
     archiveVisibility: (key) => host.sessionDataContext?.sessions.archiveVisibility(key),
   });
   const { rows, childSessionRowsByParent, isChildSessionVisible } = visibility;
-  const scopedRow = { ...row, agentId };
+  // Home is always a navigation root, even when its persisted lineage points to itself.
+  const scopedRow = { ...row, agentId, sidebarRoot: true };
   const own = navigationState.toSidebarSession(scopedRow);
   const home = projectSessionTree({
     roots: [scopedRow],
