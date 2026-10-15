@@ -1,5 +1,6 @@
 import {
   watch,
+  FS_RECONCILE_MS,
   resolveFsObservationMode,
   resolveFsObservationIntervalMs,
   ObservationSampleCloseError,
@@ -177,6 +178,7 @@ export class MemoryFileWatcher {
               subscription: watch(group.root, {
                 scopes,
                 mode,
+                intervalMs: FS_RECONCILE_MS,
                 pollIntervalMs,
                 maxDirectories: 1_000_000,
                 maxEntries: 1_000_000,

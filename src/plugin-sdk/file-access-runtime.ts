@@ -61,6 +61,7 @@ export {
   type WatchSubscription,
 } from "@openclaw/fs-safe/watch";
 export {
+  FS_RECONCILE_MS,
   resolveFsObservationMode,
   resolveFsObservationIntervalMs,
 } from "../infra/fs-observation-mode.js";

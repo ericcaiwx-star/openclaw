@@ -223,8 +223,10 @@ with a 30-second default interval, including when polling is explicitly enabled
 with `CHOKIDAR_USEPOLLING`. A valid `CHOKIDAR_INTERVAL` overrides this default,
 with a 20 ms minimum. Shorter intervals increase background scanning cost,
 especially for large memory trees. Native events
-still trigger prompt, debounced updates. Automatic fallback logs one warning per
-watcher lifetime. A running memory manager exposes each local observation's
+still trigger prompt, debounced updates. Native watchers also perform a full
+recovery scan every five minutes, so a missed native event can take that long to
+be detected. This recovery interval does not change polling cadence. Automatic
+fallback logs one warning per watcher lifetime. A running memory manager exposes each local observation's
 mode, polling interval, and `pollingFallback` in its status under `custom.watcher`;
 standalone status inspection does not start a watcher. The filesystem
 library does not currently retain the fallback reason or retry native selection;
