@@ -665,7 +665,7 @@ export async function* executeClaudeCli(
           activeTurn(session) === turn,
         queueMessage: (text, withCurrent) => injectInput(session, turn, text, withCurrent),
       });
-    })().catch((error) => session.handle.close("abort", error));
+    })().catch((error: unknown) => session.handle.close("abort", error));
     for await (const record of turn.events) {
       yield record;
     }
