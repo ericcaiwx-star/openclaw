@@ -201,6 +201,10 @@ export class MemoryWatchPolicy {
     const absolute = path.resolve(group.root.rootDir, relative);
     for (const selection of group.selections) {
       const selected = selection.resolved;
+      if (structural && isPathInside(absolute, selected) && absolute !== selected) {
+        // A replaced prefix can change discovery of missing paths or configured aliases.
+        return { root: group.root, relative, sample: false };
+      }
       if (
         absolute !== selected &&
         (selection.scope.kind !== "tree" || !isPathInside(selected, absolute))

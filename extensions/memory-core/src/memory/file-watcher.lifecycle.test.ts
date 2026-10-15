@@ -52,14 +52,17 @@ describe("Memory observation lifecycle", () => {
     onChange = vi.fn<() => void | Promise<void>>(),
     debounce = 0,
     extraPaths: ConstructorParameters<typeof MemoryFileWatcher>[0]["settings"]["extraPaths"] = [],
-    agentId = "main",
-    images = false,
+    {
+      agentId = "main",
+      workspaceDir = state.workspaceDir,
+      images = false,
+    }: { agentId?: string; workspaceDir?: string; images?: boolean } = {},
   ) {
     const onDirty = vi.fn();
     const onUnavailable = vi.fn();
     const watcher = new MemoryFileWatcher({
       runInBackgroundContext: AsyncLocalStorage.snapshot(),
-      workspaceDir: state.workspaceDir,
+      workspaceDir,
       agentId,
       settings: {
         extraPaths,
@@ -119,7 +122,7 @@ describe("Memory observation lifecycle", () => {
         vi.fn(() => done.resolve()),
         0,
         [extra],
-        `agent-${index}`,
+        { agentId: `agent-${index}` },
       ),
     );
     await Promise.all(agents.map(({ watcher }) => watcher.start()));
@@ -168,11 +171,11 @@ describe("Memory observation lifecycle", () => {
     const parent = state.path("shared");
     const notes = path.join(parent, "notes");
     await fs.mkdir(notes, { recursive: true });
-    const original = owner(undefined, 0, [notes], "original");
+    const original = owner(undefined, 0, [notes], { agentId: "original" });
     await original.watcher.start();
     await fs.rename(parent, state.path("retired"));
     await fs.mkdir(notes, { recursive: true });
-    const replacement = owner(undefined, 0, [notes], "replacement");
+    const replacement = owner(undefined, 0, [notes], { agentId: "replacement" });
     await replacement.watcher.start();
     const entries = observer.observations.filter((entry) => entry.root.rootDir === parent);
     expect(entries).toHaveLength(2);
@@ -187,9 +190,9 @@ describe("Memory observation lifecycle", () => {
     const images = state.path("shared", "images");
     await fs.mkdir(notes, { recursive: true });
     await fs.mkdir(images);
-    const text = owner(undefined, 0, [{ path: notes, pattern: "text/*.md" }], "text");
+    const text = owner(undefined, 0, [{ path: notes, pattern: "text/*.md" }], { agentId: "text" });
     await text.watcher.start();
-    const media = owner(undefined, 0, [notes, images], "media", true);
+    const media = owner(undefined, 0, [notes, images], { agentId: "media", images: true });
     await media.watcher.start();
     const entry = observer.observations.find(
       (observation) => observation.root.rootDir === path.dirname(notes),
@@ -209,6 +212,106 @@ describe("Memory observation lifecycle", () => {
     await media.watcher.close();
     expect(entry.options.exclude?.(image)).toBe(true);
     expect(entry.close).not.toHaveBeenCalled();
+  });
+
+  it.each(["scan", "watch-limit"] as const)(
+    "isolates shared %s failures so a failing scope cannot disable healthy peers",
+    async (failureKind) => {
+      const parent = state.path("shared");
+      const healthyPath = path.join(parent, "healthy");
+      const failingPath = path.join(parent, "unreadable");
+      await fs.mkdir(healthyPath, { recursive: true });
+      await fs.mkdir(failingPath);
+      const healthy = owner(undefined, 0, [healthyPath]);
+      await healthy.watcher.start();
+      const shared = observer.observations.find((entry) => entry.root.rootDir === parent)!;
+      const failure = new Error("new scope cannot be observed");
+      vi.spyOn(shared.subscription, "setScopes").mockImplementationOnce(async () => {
+        if (failureKind === "watch-limit") {
+          shared.health({
+            state: "unavailable",
+            failure: { operation: "watch", code: "watch-limit", error: failure },
+          });
+        }
+        throw failure;
+      });
+      const failing = owner(undefined, 0, [failingPath], { agentId: "failing" });
+      await failing.watcher.start();
+      expect(healthy.onUnavailable).toHaveBeenCalledOnce();
+      expect(failing.onUnavailable).toHaveBeenCalledOnce();
+      expect(healthy.watcher.capacityDegraded).toBe(false);
+      expect(failing.watcher.capacityDegraded).toBe(false);
+      expect(shared.close).toHaveBeenCalledOnce();
+
+      const recovered = createDeferred<void>();
+      const entries = () => observer.observations.filter((entry) => entry.root.rootDir === parent);
+      observer.created = () => {
+        if (entries().length === 3) {
+          recovered.resolve();
+        }
+      };
+      await vi.advanceTimersByTimeAsync(500);
+      await recovered.promise;
+      const independent = entries().slice(1);
+      const healthyEntry = independent.find(
+        (entry) => entry.options.scopes[0]?.path === "healthy",
+      )!;
+      const failingEntry = independent.find(
+        (entry) => entry.options.scopes[0]?.path === "unreadable",
+      )!;
+      failingEntry.health({
+        state: "unavailable",
+        failure: { operation: "watch", code: "watch-limit", error: failure },
+      });
+      expect(failing.watcher.capacityDegraded).toBe(true);
+      const before = healthy.onDirty.mock.calls.length;
+      healthyEntry.dirty([{ path: "healthy/note.md", type: "content" }]);
+      expect(healthy.onDirty).toHaveBeenCalledTimes(before + 1);
+      expect(healthy.onUnavailable).toHaveBeenCalledOnce();
+      await vi.advanceTimersByTimeAsync(20_000);
+      expect(entries()).toHaveLength(3);
+      expect(healthyEntry.close).not.toHaveBeenCalled();
+      await healthy.watcher.close();
+      expect(healthyEntry.close).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("refreshes only selected structural changes while retaining ancestor discovery", async () => {
+    const planning = vi.spyOn(MemoryWatchPolicy.prototype, "observations");
+    const first = owner();
+    const secondWorkspace = path.join(path.dirname(state.workspaceDir), "second-workspace");
+    await fs.mkdir(path.join(secondWorkspace, "memory"), { recursive: true });
+    const second = owner(undefined, 0, [], {
+      agentId: "second",
+      workspaceDir: secondWorkspace,
+    });
+    await first.watcher.start();
+    await second.watcher.start();
+    expect(observer.observations).toHaveLength(1);
+    // Reuse real admission to make event delivery and planning counts deterministic.
+    const plans = new Map(
+      planning.mock.contexts.map((policy, index) => [policy, planning.mock.results[index]!.value]),
+    );
+    planning.mockImplementation(function (this: MemoryWatchPolicy) {
+      return plans.get(this)!;
+    });
+    planning.mockClear();
+    const entry = observer.observations[0]!;
+    entry.dirty([
+      {
+        path: path.relative(entry.root.rootDir, path.join(state.workspaceDir, "memory", "gone.md")),
+        type: "structural",
+      },
+    ]);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(first.onDirty).toHaveBeenCalledOnce();
+    expect(second.onDirty).not.toHaveBeenCalled();
+    expect(planning).toHaveBeenCalledOnce();
+    entry.dirty([{ path: ".", type: "structural" }]);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(first.onDirty).toHaveBeenCalledTimes(2);
+    expect(second.onDirty).toHaveBeenCalledOnce();
+    expect(planning).toHaveBeenCalledTimes(3);
   });
 
   it.each([undefined, "ENOTSUP"])("reports fallback polling once with reason %s", async (code) => {
@@ -452,7 +555,7 @@ describe("Memory observation lifecycle", () => {
     expect(onChange).toHaveBeenCalledTimes(count + 1);
   });
 
-  it("resets recovery only for changed polling facts, not unchanged whole-scope reconciliation", async () => {
+  it("resets recovery only for selected polling facts, not peer or whole-scope invalidations", async () => {
     vi.stubEnv("CHOKIDAR_USEPOLLING", "true");
     const planning = vi.spyOn(MemoryWatchPolicy.prototype, "observations");
     const { watcher } = owner();
@@ -493,6 +596,7 @@ describe("Memory observation lifecycle", () => {
     await vi.advanceTimersByTimeAsync(500);
     expect(observer.watch).toHaveBeenCalledTimes(6);
     observer.observations.at(-1)!.dirty(undefined, "reconcile");
+    observer.observations.at(-1)!.dirty([{ path: "other-agent/note.md", type: "content" }]);
     await vi.advanceTimersByTimeAsync(0);
     fail();
     await vi.advanceTimersByTimeAsync(500);

@@ -228,8 +228,10 @@ recovery scan every five minutes, so a missed native event can take that long to
 be detected. This recovery interval does not change polling cadence. Automatic
 fallback logs one warning per watcher lifetime. Agents in the same process share
 observations of the same admitted root, retaining each agent's file-selection
-rules. More than 128 combined scopes use additional bounded subscriptions. The
-last agent to stop observing a root closes its subscription. A running memory
+rules. More than 128 combined scopes use additional bounded subscriptions. If a
+shared observation fails, its members retry independently for the rest of their
+watcher lifetimes, so one failing scope cannot repeatedly disable healthy peers.
+The last agent to stop observing a root closes its subscription. A running memory
 manager exposes each local observation's
 mode, polling interval, and `pollingFallback` in its status under `custom.watcher`;
 standalone status inspection does not start a watcher. The filesystem

@@ -41,7 +41,8 @@ type ObservationMember = {
   policy: MemoryWatchPolicy;
   invalidate: (hint: WatchInvalidation) => void;
   health: (health: WatchHealth) => void;
-  unavailable: (error: unknown) => void;
+  isolate: () => void;
+  unavailable: (error: unknown, capacityCode?: string) => void;
 };
 type SharedObservation = {
   key: string;
@@ -49,11 +50,27 @@ type SharedObservation = {
   subscription: WatchSubscription;
   mode: "auto" | "poll";
   pollIntervalMs: number;
+  shareable: boolean;
   refreshRequested: boolean;
   refreshing?: Promise<void>;
 };
 type Observation = { id: string; member: ObservationMember; shared: SharedObservation };
 const sharedObservations = new Map<string, Set<SharedObservation>>();
+
+function failShared(shared: SharedObservation, error: unknown, capacityCode?: string): void {
+  shared.shareable = false;
+  const isolate = shared.members.size > 1;
+  if (isolate) {
+    // Retry separately: one unreadable scope or an oversized union must not disable peers.
+    // Mark every member before unavailable callbacks synchronously retire memberships.
+    for (const member of shared.members) {
+      member.isolate();
+    }
+  }
+  for (const member of shared.members) {
+    member.unavailable(error, isolate ? undefined : capacityCode);
+  }
+}
 
 function sharedScopes(members: Iterable<ObservationMember>): WatchScope[] {
   const scopes = new Map<string, WatchScope>();
@@ -77,9 +94,7 @@ function refreshShared(shared: SharedObservation): Promise<void> {
       }
     })
     .catch((error: unknown) => {
-      for (const active of shared.members) {
-        active.unavailable(error);
-      }
+      failShared(shared, error);
     })
     .finally(() => {
       shared.refreshing = undefined;
@@ -93,6 +108,7 @@ function acquireObservation(
   member: ObservationMember,
   mode: "auto" | "poll",
   pollIntervalMs: number,
+  shareable: boolean,
 ): SharedObservation {
   const key = JSON.stringify([
     member.group.root.rootDir,
@@ -102,7 +118,7 @@ function acquireObservation(
   ]);
   const candidates = sharedObservations.get(key) ?? new Set<SharedObservation>();
   for (const shared of candidates) {
-    if (sharedScopes([...shared.members, member]).length <= 128) {
+    if (shareable && shared.shareable && sharedScopes([...shared.members, member]).length <= 128) {
       shared.members.add(member);
       void refreshShared(shared);
       return shared;
@@ -114,6 +130,7 @@ function acquireObservation(
     members,
     mode,
     pollIntervalMs,
+    shareable,
     refreshRequested: false,
     subscription: watch(member.group.root, {
       scopes: member.scopes,
@@ -138,6 +155,14 @@ function acquireObservation(
         }
       },
       onHealth: (health) => {
+        if (health.state === "unavailable") {
+          const code =
+            health.failure?.operation === "watch" && health.failure.code === "watch-limit"
+              ? "watch-limit"
+              : undefined;
+          failShared(shared, health.failure?.error, code);
+          return;
+        }
         for (const active of members) {
           active.health(health);
         }
@@ -168,6 +193,7 @@ export class MemoryFileWatcher {
   private readonly lifetime = new AbortController();
   private readonly observations = new Map<string, Observation>();
   private readonly rootIds = new WeakMap<MemoryObservation["root"], number>();
+  private readonly isolatedRoots = new WeakSet<MemoryObservation["root"]>();
   private nextRootId = 0;
   private readonly pendingPaths: MemoryWatchSettleQueue = new Map();
   private pressureWarningShown = false;
@@ -305,11 +331,22 @@ export class MemoryFileWatcher {
                   this.onHealth(health, mode, pollIntervalMs),
                 );
               },
-              unavailable: (error) => {
-                this.options.runInBackgroundContext(() => this.unavailable(error));
+              isolate: () => {
+                if (!this.isolatedRoots.has(group.root)) {
+                  this.isolatedRoots.add(group.root);
+                  this.retries = 0;
+                }
+              },
+              unavailable: (error, code) => {
+                this.options.runInBackgroundContext(() => this.unavailable(error, code));
               },
             };
-            const shared = acquireObservation(member, mode, pollIntervalMs);
+            const shared = acquireObservation(
+              member,
+              mode,
+              pollIntervalMs,
+              !this.isolatedRoots.has(group.root),
+            );
             this.observations.set(id, { id, member, shared });
             ready.push(shared.refreshing ?? shared.subscription.ready);
           }
@@ -335,16 +372,15 @@ export class MemoryFileWatcher {
       void this.refresh();
       return;
     }
-    // A changed polling snapshot is a file fact too; initial/whole-scope
-    // reconciliation must not refresh the recovery budget.
-    if (hint.changes.length && (hint.reason === "event" || hint.reason === "reconcile")) {
-      this.retries = 0;
-    }
     let structural = false;
     for (const change of hint.changes) {
-      structural ||= change.type === "structural";
       const file = this.policy.select(group, change.path, change.type === "structural");
       if (file) {
+        structural ||= change.type === "structural";
+        // Only selected file facts refresh recovery, not peer or whole-scope events.
+        if (hint.reason === "event" || hint.reason === "reconcile") {
+          this.retries = 0;
+        }
         this.markDirty(file);
       }
     }
@@ -354,14 +390,6 @@ export class MemoryFileWatcher {
   }
 
   private onHealth(health: WatchHealth, mode: "auto" | "poll", pollIntervalMs: number): void {
-    if (health.state === "unavailable") {
-      const code =
-        health.failure?.operation === "watch" && health.failure.code === "watch-limit"
-          ? "watch-limit"
-          : undefined;
-      this.unavailable(health.failure?.error, code);
-      return;
-    }
     if (health.state !== "ready") {
       return;
     }
