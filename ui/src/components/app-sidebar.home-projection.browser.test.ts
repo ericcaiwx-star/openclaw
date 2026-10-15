@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { patchSettings } from "../app/settings.ts";
 import {
   mountRoster,
   settleRoster,
@@ -42,7 +43,7 @@ for (const mode of ["chip", "roster"] as const) {
         label: "Review worker",
       },
     ]);
-    sidebar.sidebarAgentsMode = mode;
+    patchSettings({ sidebarAgentsMode: mode });
     await settleRoster(sidebar);
     const home = sidebar.projectHomeSession(sidebar.mainSessionRow()!, "main");
     expect(home.key).toBe(key);
