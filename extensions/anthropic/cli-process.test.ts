@@ -67,7 +67,7 @@ const STARTUP_HOOK_CHILD = String.raw`
   for await (const line of createInterface({ input: process.stdin })) {
     const message = JSON.parse(line);
     if (message.type === "control_request") {
-      for (let index = 0; index < 34; index++) {
+      for (let index = 0; index < 40; index++) {
         send({ type: "system", subtype: index % 2 ? "hook_response" : "hook_started", hook_id: String(index), pid: process.pid });
       }
       if (process.env.CLAUDE_FIXTURE_SCENARIO === "cancel") continue;
@@ -89,7 +89,10 @@ afterEach(async () => {
   vi.restoreAllMocks();
 });
 
-async function contextForChild(source: string): Promise<CliBackendExecuteContext> {
+async function contextForChild(
+  source: string,
+  signal?: AbortSignal,
+): Promise<CliBackendExecuteContext> {
   const root = await mkdtemp(path.join(os.tmpdir(), "openclaw-claude-stderr-"));
   roots.push(root);
   const command = path.join(root, "claude.mjs");
@@ -104,7 +107,7 @@ async function contextForChild(source: string): Promise<CliBackendExecuteContext
     modelId: "claude-sonnet-4-6",
     useResume: false,
     timeoutMs: 10_000,
-    abortSignal: AbortSignal.timeout(10_000),
+    abortSignal: signal ?? AbortSignal.timeout(10_000),
     requestToolPermission: async () => ({ behavior: "deny", message: "No tools in this probe." }),
     requestUserInput: async () => ({ status: "cancelled", message: "No input in this probe." }),
   };
@@ -184,16 +187,20 @@ async function waitForDescendantExit(pid: number, signal: AbortSignal): Promise<
 }
 
 describe("Claude subprocess diagnostics through the direct CLI transport", () => {
-  it("delivers startup hook bursts in order and completes the first and warm turns", async () => {
-    const context = await contextForChild(STARTUP_HOOK_CHILD);
+  it("delivers startup hook bursts in order and completes the first and warm turns", async ({
+    signal,
+  }) => {
+    const context = await contextForChild(STARTUP_HOOK_CHILD, signal);
     attachLiveSession(context);
     const records = await collect(context);
     expect(
       records.filter((record) => record.type === "system").map((record) => record.hook_id),
-    ).toEqual(Array.from({ length: 34 }, (_, index) => String(index)));
+    ).toEqual(Array.from({ length: 40 }, (_, index) => String(index)));
+    expect(records).toHaveLength(41);
     const first = JSON.parse(String(records.at(-1)?.result));
     expect(first).toMatchObject({ turn: 1, input: context.prompt });
     const second = await collect({ ...context, prompt: "warm input" });
+    expect(second).toHaveLength(1);
     expect(JSON.parse(String(second.at(-1)?.result))).toEqual({
       pid: first.pid,
       turn: 2,
@@ -201,20 +208,37 @@ describe("Claude subprocess diagnostics through the direct CLI transport", () =>
     });
   });
 
-  it("cancels during startup hooks before initialization accepts user input", async ({
-    signal,
-  }) => {
-    const context = await contextForChild(STARTUP_HOOK_CHILD);
-    context.env.CLAUDE_FIXTURE_SCENARIO = "cancel";
-    const current = attachLiveSession(context);
-    const iterator = executeClaudeCli(context)[Symbol.asyncIterator]();
-    const first = await withinTest(iterator.next(), signal);
-    expect(first.value).toMatchObject({ type: "system", subtype: "hook_started", hook_id: "0" });
-    await withinTest(Promise.resolve(iterator.return?.()), signal);
-    expect(current()).toBeUndefined();
-    await expect(access(path.join(context.cwd, "user.received"))).rejects.toThrow();
-    expect(() => process.kill(Number(first.value?.pid), 0)).toThrow();
-  });
+  it.for(["iterator return", "abort"] as const)(
+    "cancels during startup hooks before initialization accepts user input: %s",
+    async (cancellation, { signal }) => {
+      const controller = new AbortController();
+      const context = await contextForChild(
+        STARTUP_HOOK_CHILD,
+        AbortSignal.any([controller.signal, signal]),
+      );
+      context.env.CLAUDE_FIXTURE_SCENARIO = "cancel";
+      const current = attachLiveSession(context);
+      const events = executeClaudeCli(context);
+      const iterator = events[Symbol.asyncIterator]();
+      const first = await withinTest(iterator.next(), signal);
+      expect(first.value).toMatchObject({ type: "system", subtype: "hook_started", hook_id: "0" });
+      if (cancellation === "abort") {
+        const reason = new Error("Synthetic cancellation before initialization.");
+        controller.abort(reason);
+        const remaining = async () => {
+          for await (const record of events) {
+            void record;
+          }
+        };
+        await expect(withinTest(remaining(), signal)).rejects.toBe(reason);
+      } else {
+        await withinTest(Promise.resolve(iterator.return?.()), signal);
+      }
+      expect(current()).toBeUndefined();
+      await expect(access(path.join(context.cwd, "user.received"))).rejects.toThrow();
+      expect(() => process.kill(Number(first.value?.pid), 0)).toThrow();
+    },
+  );
 
   it("waits for startup and child extinction when a session closes during spawn", async ({
     signal,
