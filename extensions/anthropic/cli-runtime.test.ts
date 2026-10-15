@@ -177,32 +177,6 @@ async function waitForProcessExit(pids: number[], signal: AbortSignal): Promise<
 }
 
 describe("Claude native stdio boundary", () => {
-  it("delivers startup hook bursts in order and completes the first and warm turns", async () => {
-    const context = await createContext("startup-hooks");
-    const records = await collect(context);
-    expect(
-      records.filter((record) => record.type === "system").map((record) => record.hook_id),
-    ).toEqual(Array.from({ length: 34 }, (_, index) => String(index)));
-    const first = resultDetail(records);
-    expect(first.user).toBe(context.prompt);
-    const second = resultDetail(await collect({ ...context, prompt: "warm input" }));
-    expect(second).toMatchObject({ pid: first.pid, turn: 2, user: "warm input" });
-  });
-
-  it("cancels during startup hooks before initialization accepts user input", async ({
-    signal,
-  }) => {
-    const context = await createContext("startup-hooks-cancel");
-    const iterator = executeClaudeCli(context)[Symbol.asyncIterator]();
-    const first = await withinTest(iterator.next(), signal);
-    expect(first.value).toMatchObject({ type: "system", subtype: "hook_started", hook_id: "0" });
-    const pid = Number(await readFile(path.join(context.cwd, "fixture.pid"), "utf8"));
-    await withinTest(Promise.resolve(iterator.return?.()), signal);
-    expect(context.liveSession?.current()).toBeUndefined();
-    await expect(access(path.join(context.cwd, "user.received"))).rejects.toThrow();
-    expect(() => process.kill(pid, 0)).toThrow();
-  });
-
   it.for([
     { scenario: "shutdown-ignore", name: "native parent and child ignore EOF and SIGTERM" },
     { scenario: "shutdown-eof", name: "native parent exits immediately on EOF" },

@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { access, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { setTimeout as waitForProcessTick } from "node:timers/promises";
@@ -57,6 +57,26 @@ const PROTOCOL_CHILD = `
       });
     }
   });
+`;
+
+const STARTUP_HOOK_CHILD = String.raw`
+  import { createInterface } from "node:readline";
+  import { writeFileSync } from "node:fs";
+  const send = (message) => process.stdout.write(JSON.stringify(message) + "\n");
+  let turn = 0;
+  for await (const line of createInterface({ input: process.stdin })) {
+    const message = JSON.parse(line);
+    if (message.type === "control_request") {
+      for (let index = 0; index < 34; index++) {
+        send({ type: "system", subtype: index % 2 ? "hook_response" : "hook_started", hook_id: String(index), pid: process.pid });
+      }
+      if (process.env.CLAUDE_FIXTURE_SCENARIO === "cancel") continue;
+      send({ type: "control_response", response: { subtype: "success", request_id: message.request_id, response: {} } });
+    } else if (message.type === "user") {
+      writeFileSync("user.received", message.message.content);
+      send({ type: "result", subtype: "success", result: JSON.stringify({ pid: process.pid, turn: ++turn, input: message.message.content }) });
+    }
+  }
 `;
 
 afterEach(async () => {
@@ -164,6 +184,38 @@ async function waitForDescendantExit(pid: number, signal: AbortSignal): Promise<
 }
 
 describe("Claude subprocess diagnostics through the direct CLI transport", () => {
+  it("delivers startup hook bursts in order and completes the first and warm turns", async () => {
+    const context = await contextForChild(STARTUP_HOOK_CHILD);
+    attachLiveSession(context);
+    const records = await collect(context);
+    expect(
+      records.filter((record) => record.type === "system").map((record) => record.hook_id),
+    ).toEqual(Array.from({ length: 34 }, (_, index) => String(index)));
+    const first = JSON.parse(String(records.at(-1)?.result));
+    expect(first).toMatchObject({ turn: 1, input: context.prompt });
+    const second = await collect({ ...context, prompt: "warm input" });
+    expect(JSON.parse(String(second.at(-1)?.result))).toEqual({
+      pid: first.pid,
+      turn: 2,
+      input: "warm input",
+    });
+  });
+
+  it("cancels during startup hooks before initialization accepts user input", async ({
+    signal,
+  }) => {
+    const context = await contextForChild(STARTUP_HOOK_CHILD);
+    context.env.CLAUDE_FIXTURE_SCENARIO = "cancel";
+    const current = attachLiveSession(context);
+    const iterator = executeClaudeCli(context)[Symbol.asyncIterator]();
+    const first = await withinTest(iterator.next(), signal);
+    expect(first.value).toMatchObject({ type: "system", subtype: "hook_started", hook_id: "0" });
+    await withinTest(Promise.resolve(iterator.return?.()), signal);
+    expect(current()).toBeUndefined();
+    await expect(access(path.join(context.cwd, "user.received"))).rejects.toThrow();
+    expect(() => process.kill(Number(first.value?.pid), 0)).toThrow();
+  });
+
   it("waits for startup and child extinction when a session closes during spawn", async ({
     signal,
   }) => {
