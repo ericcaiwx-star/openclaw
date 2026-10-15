@@ -83,8 +83,10 @@ function refreshShared(shared: SharedObservation): Promise<void> {
     })
     .finally(() => {
       shared.refreshing = undefined;
-      return shared.refreshRequested && shared.members.size ? refreshShared(shared) : undefined;
-    }));
+    })
+    .then(() =>
+      shared.refreshRequested && shared.members.size ? refreshShared(shared) : undefined,
+    ));
 }
 
 function acquireObservation(
