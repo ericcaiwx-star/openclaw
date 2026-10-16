@@ -4,7 +4,7 @@ import {
   COLD_RUNNER_HTTP_TEST_TIMEOUT_MS,
   expectOpenAITransportRequestPolicy,
 } from "../../../../test/helpers/openai-transport-request-policy.js";
-import type { OpenAICompletionsOptions } from "../provider-options.js";
+import { preparedRequestSuffix, type OpenAICompletionsOptions } from "../provider-options.js";
 import { streamSimpleOpenAICompletions } from "../providers/openai-completions.js";
 import type { AssistantMessage, SimpleStreamOptions } from "../types.js";
 import { createZeroUsage } from "../usage.test-support.js";
@@ -78,12 +78,16 @@ describe("openai completions transport requests", () => {
         baseUrl: `http://127.0.0.1:${address.port}/v1`,
       });
       // Unknown calls and ordinary completed tools removed from the catalog share this boundary.
-      for (const names of [
-        ["session_status"],
-        ["wait"],
-        ["read", "session_status", "read"],
-        ["unusable"],
-      ]) {
+      const scenarios: Array<{ names: string[]; suffixOnly?: boolean }> = [
+        { names: ["session_status"] },
+        { names: ["wait"] },
+        { names: ["read", "session_status", "read"] },
+        { names: ["unusable"] },
+        { names: ["wait"], suffixOnly: true },
+        { names: ["read"], suffixOnly: true },
+      ];
+      for (const { names, suffixOnly = false } of scenarios) {
+        const callId = (i: number) => (names.length > 1 ? `call:${i}|fc_item` : `call_${i}`);
         const context = {
           tools: [
             { name: "read", description: "Read", parameters: { type: "object" } },
@@ -98,24 +102,28 @@ describe("openai completions transport requests", () => {
               : []),
           ],
           messages: [
-            {
-              role: "assistant" as const,
-              api: model.api,
-              provider: model.provider,
-              model: model.id,
-              content: names.map((name, i) => ({
-                type: "toolCall" as const,
-                id: `call_${i}`,
-                name,
-                arguments: {},
-              })),
-              usage: createZeroUsage(),
-              stopReason: "toolUse" as const,
-              timestamp: 1,
-            },
+            ...(suffixOnly
+              ? []
+              : [
+                  {
+                    role: "assistant" as const,
+                    api: model.api,
+                    provider: model.provider,
+                    model: model.id,
+                    content: names.map((name, i) => ({
+                      type: "toolCall" as const,
+                      id: callId(i),
+                      name,
+                      arguments: {},
+                    })),
+                    usage: createZeroUsage(),
+                    stopReason: "toolUse" as const,
+                    timestamp: 1,
+                  },
+                ]),
             ...names.map((name, i) => ({
               role: "toolResult" as const,
-              toolCallId: `call_${i}`,
+              toolCallId: suffixOnly && name === "read" ? "call:0|fc_item" : callId(i),
               // Ownership must follow the paired call, not a stale toolName on its result.
               toolName: "stale_metadata",
               content: [{ type: "text" as const, text: `recorded result ${i}` }],
@@ -125,10 +133,30 @@ describe("openai completions transport requests", () => {
             { role: "user" as const, content: "Continue", timestamp: 3 },
           ],
         };
+        const prefixCall =
+          suffixOnly && names.includes("read")
+            ? {
+                role: "assistant",
+                content: null,
+                tool_calls: [
+                  { id: "call_0", type: "function", function: { name: "read", arguments: "{}" } },
+                ],
+              }
+            : undefined;
         const original = structuredClone(context);
+        if (suffixOnly) {
+          // The suffix must follow native prefix IDs, even with stale result names.
+          preparedRequestSuffix.mark(context, new Set(prefixCall ? ["call_0"] : []));
+          preparedRequestSuffix.mark(original, new Set(prefixCall ? ["call_0"] : []));
+        }
         for (let turn = 0; turn < 2; turn += 1) {
           const stream = await createOpenAICompletionsTransportStreamFn()(model, context, {
             apiKey: "synthetic",
+            onPayload(payload) {
+              if (prefixCall) {
+                (payload as { messages: unknown[] }).messages.unshift(prefixCall);
+              }
+            },
           });
           const result = await stream.result();
           expect(result.stopReason).toBe("stop");
@@ -136,7 +164,13 @@ describe("openai completions transport requests", () => {
         }
         expect(context).toEqual(original);
         const serialized = JSON.stringify(requests.at(-1));
-        expect(serialized).toContain(names.find((name) => name !== "read"));
+        expect(serialized).toContain(
+          prefixCall
+            ? "read"
+            : suffixOnly
+              ? "stale_metadata"
+              : names.find((name) => name !== "read"),
+        );
         const native = (
           (requests.at(-1)?.messages ?? []) as Array<{ tool_calls?: unknown[] }>
         ).flatMap((message) => message.tool_calls ?? []);

@@ -62,7 +62,7 @@ export function convertMessages(
   const supportsTools = options.supportsTools !== false;
   const declaredToolNames =
     options.declaredToolNames ?? new Set(context.tools?.map((tool) => tool.name));
-  const textToolCallIds = new Set<string>();
+  const toolNamesByCallId = new Map<string, string>();
 
   const normalizeToolCallId = (id: string): string => {
     // Responses ids can contain a pipe plus a long provider item id. Chat
@@ -178,11 +178,10 @@ export function convertMessages(
         } else if (block.type === "thinking" && block.thinking.trim().length > 0) {
           nonEmptyThinkingBlocks.push(block);
         } else if (block.type === "toolCall") {
+          toolNamesByCallId.set(block.id, block.name);
           if (supportsTools && declaredToolNames.has(block.name)) {
-            textToolCallIds.delete(block.id);
             toolCalls.push(block);
           } else {
-            textToolCallIds.add(block.id);
             assistantTexts.push(
               sanitizeSurrogates(
                 `[tool call id=${block.id} name=${block.name}] ${JSON.stringify(block.arguments)}`,
@@ -277,16 +276,20 @@ export function convertMessages(
         const mediaPlaceholder = describeToolResultMediaPlaceholder(toolMsg.content);
         const images = toolMsg.content.filter(isImageWithMediaPayload);
         const content = textResult.trim() ? textResult : (mediaPlaceholder ?? "(no output)");
-        if (supportsTools && !textToolCallIds.has(toolMsg.toolCallId)) {
+        const normalizedId = normalizeToolCallId(toolMsg.toolCallId);
+        const pairedToolName =
+          toolNamesByCallId.get(toolMsg.toolCallId) ?? toolNamesByCallId.get(normalizedId);
+        const isNativeResult =
+          pairedToolName !== undefined
+            ? declaredToolNames.has(pairedToolName)
+            : preparedRequestSuffix.hasToolCall(context, toolMsg.toolCallId) ||
+              preparedRequestSuffix.hasToolCall(context, normalizedId);
+        if (supportsTools && isNativeResult) {
           const toolResultMsg: ChatCompletionToolMessageParam = {
             role: "tool",
             content,
             tool_call_id: preparedRequestSuffix.has(context)
-              ? preparedRequestSuffix.toolCallId(
-                  context,
-                  toolMsg.toolCallId,
-                  normalizeToolCallId(toolMsg.toolCallId),
-                )
+              ? preparedRequestSuffix.toolCallId(context, toolMsg.toolCallId, normalizedId)
               : toolMsg.toolCallId,
           };
           if (compat.requiresToolResultName && toolMsg.toolName) {

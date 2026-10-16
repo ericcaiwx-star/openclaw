@@ -79,6 +79,10 @@ export const preparedRequestSuffix = {
   has(context: object): boolean {
     return Reflect.has(context, PREPARED_REQUEST_SUFFIX);
   },
+  hasToolCall(context: object, id: string): boolean {
+    const ids = Reflect.get(context, PREPARED_REQUEST_SUFFIX) as ReadonlySet<string> | undefined;
+    return ids?.has(id) ?? false;
+  },
   toolCallId(context: object, id: string, normalized: string): string {
     // SAFETY: Only mark() writes this private carrier, with the captured prefix's wire IDs.
     const ids = Reflect.get(context, PREPARED_REQUEST_SUFFIX) as ReadonlySet<string> | undefined;
