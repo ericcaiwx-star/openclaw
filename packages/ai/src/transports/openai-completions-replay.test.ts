@@ -224,7 +224,7 @@ describe("buildOpenAICompletionsParams sanitizes reasoning replay fields", () =>
           makeTextToolResult("call_1", "lookup", "sunny", false, 1),
           { role: "user", content: "answer" },
         ],
-        tools: [],
+        tools: [{ name: "lookup", description: "Lookup", parameters: { type: "object" } }],
       } as never,
       undefined,
     ) as { messages: unknown };

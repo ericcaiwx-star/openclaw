@@ -7,10 +7,125 @@ import {
 import type { OpenAICompletionsOptions } from "../provider-options.js";
 import { streamSimpleOpenAICompletions } from "../providers/openai-completions.js";
 import type { AssistantMessage, SimpleStreamOptions } from "../types.js";
+import { createZeroUsage } from "../usage.test-support.js";
 import { createOpenAICompletionsTransportStreamFn } from "./openai-completions-transport.js";
 import { makeCompletionsModel } from "./openai-completions.test-support.js";
 
 describe("openai completions transport requests", () => {
+  it("replays unavailable historical tools as text without breaking declared call/result ordering", async () => {
+    const requests: Array<Record<string, unknown>> = [];
+    const server = createServer(async (req, res) => {
+      let input = "";
+      for await (const chunk of req) {
+        input += chunk;
+      }
+      const body = JSON.parse(input);
+      requests.push(body);
+      const declared = new Set(
+        body.tools.map((tool: { function: { name: string } }) => tool.function.name),
+      );
+      let pending = new Set<string>();
+      let valid = true;
+      for (const message of body.messages) {
+        if (message.role === "tool") {
+          valid &&= pending.delete(message.tool_call_id);
+        } else {
+          valid &&= pending.size === 0;
+          pending = new Set((message.tool_calls ?? []).map((call: { id: string }) => call.id));
+          valid &&= (message.tool_calls ?? []).every((call: { function: { name: string } }) =>
+            declared.has(call.function.name),
+          );
+        }
+      }
+      valid &&= pending.size === 0;
+      if (!valid) {
+        res.writeHead(400, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: { message: "Undeclared function or unpaired result" } }));
+        return;
+      }
+      res.writeHead(200, { "content-type": "text/event-stream" });
+      res.end(
+        `data: ${JSON.stringify({
+          id: "history-replay",
+          object: "chat.completion.chunk",
+          created: 1,
+          model: "strict-model",
+          choices: [
+            { index: 0, delta: { role: "assistant", content: "accepted" }, finish_reason: "stop" },
+          ],
+        })}\n\ndata: [DONE]\n\n`,
+      );
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    try {
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        throw new Error("Missing loopback server address");
+      }
+      const model = makeCompletionsModel({
+        id: "strict-model",
+        provider: "custom",
+        reasoning: false,
+        baseUrl: `http://127.0.0.1:${address.port}/v1`,
+      });
+      // Unknown calls and ordinary completed tools removed from the catalog share this boundary.
+      for (const names of [["session_status"], ["wait"], ["read", "session_status", "read"]]) {
+        const context = {
+          tools: [{ name: "read", description: "Read", parameters: { type: "object" } }],
+          messages: [
+            {
+              role: "assistant" as const,
+              api: model.api,
+              provider: model.provider,
+              model: model.id,
+              content: names.map((name, i) => ({
+                type: "toolCall" as const,
+                id: `call_${i}`,
+                name,
+                arguments: {},
+              })),
+              usage: createZeroUsage(),
+              stopReason: "toolUse" as const,
+              timestamp: 1,
+            },
+            ...names.map((name, i) => ({
+              role: "toolResult" as const,
+              toolCallId: `call_${i}`,
+              // Ownership must follow the paired call, not a stale toolName on its result.
+              toolName: "stale_metadata",
+              content: [{ type: "text" as const, text: `recorded result ${i}` }],
+              isError: name === "session_status",
+              timestamp: 2,
+            })),
+            { role: "user" as const, content: "Continue", timestamp: 3 },
+          ],
+        };
+        const original = structuredClone(context);
+        for (let turn = 0; turn < 2; turn += 1) {
+          const stream = await createOpenAICompletionsTransportStreamFn()(model, context, {
+            apiKey: "synthetic",
+          });
+          const result = await stream.result();
+          expect(result.stopReason).toBe("stop");
+          expect(result.content).toEqual([{ type: "text", text: "accepted" }]);
+        }
+        expect(context).toEqual(original);
+        const serialized = JSON.stringify(requests.at(-1));
+        expect(serialized).toContain(names.includes("session_status") ? "session_status" : "wait");
+        const native = (requests.at(-1)?.messages as Array<{ tool_calls?: unknown[] }>).flatMap(
+          (message) => message.tool_calls ?? [],
+        );
+        expect(native).toHaveLength(names.filter((name) => name === "read").length);
+        expect(serialized).toContain("recorded result");
+      }
+    } finally {
+      server.closeAllConnections();
+      await new Promise<void>((resolve, reject) =>
+        server.close((error) => (error ? reject(error) : resolve())),
+      );
+    }
+  });
+
   it.each([
     {
       api: "openai-completions" as const,

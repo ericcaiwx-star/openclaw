@@ -59,6 +59,8 @@ export function convertMessages(
 ): ChatCompletionMessageParam[] {
   const params: ChatCompletionMessageParam[] = [];
   const supportsTools = options.supportsTools !== false;
+  const declaredToolNames = new Set(context.tools?.map((tool) => tool.name));
+  const textToolCallIds = new Set<string>();
 
   const normalizeToolCallId = (id: string): string => {
     // Responses ids can contain a pipe plus a long provider item id. Chat
@@ -174,9 +176,11 @@ export function convertMessages(
         } else if (block.type === "thinking" && block.thinking.trim().length > 0) {
           nonEmptyThinkingBlocks.push(block);
         } else if (block.type === "toolCall") {
-          if (supportsTools) {
+          if (supportsTools && declaredToolNames.has(block.name)) {
+            textToolCallIds.delete(block.id);
             toolCalls.push(block);
           } else {
+            textToolCallIds.add(block.id);
             assistantTexts.push(
               sanitizeSurrogates(
                 `[tool call id=${block.id} name=${block.name}] ${JSON.stringify(block.arguments)}`,
@@ -258,6 +262,7 @@ export function convertMessages(
       const imageContentParts: Array<
         ChatCompletionContentPartText | { type: "image_url"; image_url: { url: string } }
       > = [];
+      const textResults: string[] = [];
       let j = i;
 
       while (j < transformedMessages.length) {
@@ -270,7 +275,7 @@ export function convertMessages(
         const mediaPlaceholder = describeToolResultMediaPlaceholder(toolMsg.content);
         const images = toolMsg.content.filter(isImageWithMediaPayload);
         const content = textResult.trim() ? textResult : (mediaPlaceholder ?? "(no output)");
-        if (supportsTools) {
+        if (supportsTools && !textToolCallIds.has(toolMsg.toolCallId)) {
           const toolResultMsg: ChatCompletionToolMessageParam = {
             role: "tool",
             content,
@@ -290,14 +295,19 @@ export function convertMessages(
           const text = sanitizeSurrogates(
             `[tool result id=${toolMsg.toolCallId} name=${toolMsg.toolName}] ${content}`,
           );
-          // Collapse before recording later cache exclusions and strict-key shaping.
-          const previous = params.at(-1);
-          if (previous?.role !== "assistant") {
-            params.push({ role: "assistant", content: text });
-          } else if (Array.isArray(previous.content)) {
-            previous.content.push({ type: "text", text });
+          // Keep native results contiguous when one assistant called both available and removed tools.
+          if (supportsTools) {
+            textResults.push(text);
           } else {
-            previous.content = previous.content ? `${previous.content}\n${text}` : text;
+            // Collapse before recording later cache exclusions and strict-key shaping.
+            const previous = params.at(-1);
+            if (previous?.role !== "assistant") {
+              params.push({ role: "assistant", content: text });
+            } else if (Array.isArray(previous.content)) {
+              previous.content.push({ type: "text", text });
+            } else {
+              previous.content = previous.content ? `${previous.content}\n${text}` : text;
+            }
           }
         }
 
@@ -319,9 +329,12 @@ export function convertMessages(
       }
 
       i = j - 1;
+      if (textResults.length > 0) {
+        params.push({ role: "assistant", content: textResults.join("\n") });
+      }
 
       if (imageContentParts.length > 0) {
-        if (supportsTools && compat.requiresAssistantAfterToolResult) {
+        if (supportsTools && textResults.length === 0 && compat.requiresAssistantAfterToolResult) {
           params.push({ role: "assistant", content: "I have processed the tool results." });
         }
         params.push({
@@ -330,7 +343,7 @@ export function convertMessages(
         });
         lastRole = "user";
       } else {
-        lastRole = supportsTools ? "toolResult" : "assistant";
+        lastRole = supportsTools && textResults.length === 0 ? "toolResult" : "assistant";
       }
       continue;
     }
