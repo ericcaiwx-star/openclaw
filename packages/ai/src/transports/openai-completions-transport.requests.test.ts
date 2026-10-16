@@ -78,9 +78,25 @@ describe("openai completions transport requests", () => {
         baseUrl: `http://127.0.0.1:${address.port}/v1`,
       });
       // Unknown calls and ordinary completed tools removed from the catalog share this boundary.
-      for (const names of [["session_status"], ["wait"], ["read", "session_status", "read"]]) {
+      for (const names of [
+        ["session_status"],
+        ["wait"],
+        ["read", "session_status", "read"],
+        ["unusable"],
+      ]) {
         const context = {
-          tools: [{ name: "read", description: "Read", parameters: { type: "object" } }],
+          tools: [
+            { name: "read", description: "Read", parameters: { type: "object" } },
+            ...(names.includes("unusable")
+              ? [
+                  {
+                    name: "unusable",
+                    description: "Rejected schema",
+                    parameters: { type: "object", default: 1n },
+                  },
+                ]
+              : []),
+          ],
           messages: [
             {
               role: "assistant" as const,
@@ -120,7 +136,7 @@ describe("openai completions transport requests", () => {
         }
         expect(context).toEqual(original);
         const serialized = JSON.stringify(requests.at(-1));
-        expect(serialized).toContain(names.includes("session_status") ? "session_status" : "wait");
+        expect(serialized).toContain(names.find((name) => name !== "read"));
         const native = (
           (requests.at(-1)?.messages ?? []) as Array<{ tool_calls?: unknown[] }>
         ).flatMap((message) => message.tool_calls ?? []);

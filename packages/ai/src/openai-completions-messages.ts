@@ -55,11 +55,13 @@ export function convertMessages(
     cacheOptOutIndexes?: Set<number>;
     preserveSystemPromptCacheBoundary?: boolean;
     supportsTools?: boolean;
+    declaredToolNames?: ReadonlySet<string>;
   } = {},
 ): ChatCompletionMessageParam[] {
   const params: ChatCompletionMessageParam[] = [];
   const supportsTools = options.supportsTools !== false;
-  const declaredToolNames = new Set(context.tools?.map((tool) => tool.name));
+  const declaredToolNames =
+    options.declaredToolNames ?? new Set(context.tools?.map((tool) => tool.name));
   const textToolCallIds = new Set<string>();
 
   const normalizeToolCallId = (id: string): string => {
