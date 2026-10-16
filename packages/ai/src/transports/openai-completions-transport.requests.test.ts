@@ -14,49 +14,58 @@ import { makeCompletionsModel } from "./openai-completions.test-support.js";
 describe("openai completions transport requests", () => {
   it("replays unavailable historical tools as text without breaking declared call/result ordering", async () => {
     const requests: Array<Record<string, unknown>> = [];
-    const server = createServer(async (req, res) => {
+    const server = createServer((req, res) => {
       let input = "";
-      for await (const chunk of req) {
+      req.setEncoding("utf8");
+      req.on("data", (chunk: string) => {
         input += chunk;
-      }
-      const body = JSON.parse(input);
-      requests.push(body);
-      const declared = new Set(
-        body.tools.map((tool: { function: { name: string } }) => tool.function.name),
-      );
-      let pending = new Set<string>();
-      let valid = true;
-      for (const message of body.messages) {
-        if (message.role === "tool") {
-          valid &&= pending.delete(message.tool_call_id);
-        } else {
-          valid &&= pending.size === 0;
-          pending = new Set((message.tool_calls ?? []).map((call: { id: string }) => call.id));
-          valid &&= (message.tool_calls ?? []).every((call: { function: { name: string } }) =>
-            declared.has(call.function.name),
-          );
+      });
+      req.on("end", () => {
+        const body = JSON.parse(input);
+        requests.push(body);
+        const declared = new Set(
+          body.tools.map((tool: { function: { name: string } }) => tool.function.name),
+        );
+        let pending = new Set<string>();
+        let valid = true;
+        for (const message of body.messages) {
+          if (message.role === "tool") {
+            valid &&= pending.delete(message.tool_call_id);
+          } else {
+            valid &&= pending.size === 0;
+            pending = new Set((message.tool_calls ?? []).map((call: { id: string }) => call.id));
+            valid &&= (message.tool_calls ?? []).every((call: { function: { name: string } }) =>
+              declared.has(call.function.name),
+            );
+          }
         }
-      }
-      valid &&= pending.size === 0;
-      if (!valid) {
-        res.writeHead(400, { "content-type": "application/json" });
-        res.end(JSON.stringify({ error: { message: "Undeclared function or unpaired result" } }));
-        return;
-      }
-      res.writeHead(200, { "content-type": "text/event-stream" });
-      res.end(
-        `data: ${JSON.stringify({
-          id: "history-replay",
-          object: "chat.completion.chunk",
-          created: 1,
-          model: "strict-model",
-          choices: [
-            { index: 0, delta: { role: "assistant", content: "accepted" }, finish_reason: "stop" },
-          ],
-        })}\n\ndata: [DONE]\n\n`,
-      );
+        valid &&= pending.size === 0;
+        if (!valid) {
+          res.writeHead(400, { "content-type": "application/json" });
+          res.end(JSON.stringify({ error: { message: "Undeclared function or unpaired result" } }));
+          return;
+        }
+        res.writeHead(200, { "content-type": "text/event-stream" });
+        res.end(
+          `data: ${JSON.stringify({
+            id: "history-replay",
+            object: "chat.completion.chunk",
+            created: 1,
+            model: "strict-model",
+            choices: [
+              {
+                index: 0,
+                delta: { role: "assistant", content: "accepted" },
+                finish_reason: "stop",
+              },
+            ],
+          })}\n\ndata: [DONE]\n\n`,
+        );
+      });
     });
-    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    await new Promise<void>((resolve) => {
+      server.listen(0, "127.0.0.1", resolve);
+    });
     try {
       const address = server.address();
       if (!address || typeof address === "string") {
@@ -112,17 +121,17 @@ describe("openai completions transport requests", () => {
         expect(context).toEqual(original);
         const serialized = JSON.stringify(requests.at(-1));
         expect(serialized).toContain(names.includes("session_status") ? "session_status" : "wait");
-        const native = (requests.at(-1)?.messages as Array<{ tool_calls?: unknown[] }>).flatMap(
-          (message) => message.tool_calls ?? [],
-        );
+        const native = (
+          (requests.at(-1)?.messages ?? []) as Array<{ tool_calls?: unknown[] }>
+        ).flatMap((message) => message.tool_calls ?? []);
         expect(native).toHaveLength(names.filter((name) => name === "read").length);
         expect(serialized).toContain("recorded result");
       }
     } finally {
       server.closeAllConnections();
-      await new Promise<void>((resolve, reject) =>
-        server.close((error) => (error ? reject(error) : resolve())),
-      );
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
     }
   });
 
