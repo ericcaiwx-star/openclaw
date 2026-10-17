@@ -297,23 +297,11 @@ export function convertMessages(
           }
           params.push(toolResultMsg);
         } else {
-          const text = sanitizeSurrogates(
-            `[tool result id=${toolMsg.toolCallId} name=${toolMsg.toolName}] ${content}`,
+          textResults.push(
+            sanitizeSurrogates(
+              `[tool result id=${toolMsg.toolCallId} name=${toolMsg.toolName}] ${content}`,
+            ),
           );
-          // Keep native results contiguous when one assistant called both available and removed tools.
-          if (supportsTools) {
-            textResults.push(text);
-          } else {
-            // Collapse before recording later cache exclusions and strict-key shaping.
-            const previous = params.at(-1);
-            if (previous?.role !== "assistant") {
-              params.push({ role: "assistant", content: text });
-            } else if (Array.isArray(previous.content)) {
-              previous.content.push({ type: "text", text });
-            } else {
-              previous.content = previous.content ? `${previous.content}\n${text}` : text;
-            }
-          }
         }
 
         if (images.length > 0 && model.input.includes("image")) {
@@ -335,7 +323,21 @@ export function convertMessages(
 
       i = j - 1;
       if (textResults.length > 0) {
-        params.push({ role: "assistant", content: textResults.join("\n") });
+        // Native results must stay contiguous; collapse text before later cache indexes are recorded.
+        const previous = params.at(-1);
+        const text = textResults.join("\n");
+        if (previous?.role !== "assistant") {
+          params.push({ role: "assistant", content: text });
+        } else if (Array.isArray(previous.content)) {
+          previous.content.push(
+            ...textResults.map((result): ChatCompletionContentPartText => ({
+              type: "text",
+              text: result,
+            })),
+          );
+        } else {
+          previous.content = previous.content ? `${previous.content}\n${text}` : text;
+        }
       }
 
       if (imageContentParts.length > 0) {
