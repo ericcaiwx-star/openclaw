@@ -38,9 +38,7 @@ import { getAppSidebarOwner } from "./app-sidebar.tsx";
 import type { SelectPicker } from "./select-picker.ts";
 import type { SidebarSnapshotModel } from "./sidebar-snapshot-model.ts";
 
-type Sidebar = AppSidebarSessionNavigationElement & {
-  sidebarNarrationLines: ReadonlyMap<string, string>;
-};
+type Sidebar = AppSidebarSessionNavigationElement;
 
 const key = (name: string) => `agent:main:${name}`;
 const ada = { type: "human" as const, id: "ada", label: "Ada" };
@@ -470,7 +468,9 @@ describe("sidebar projection memo", () => {
     expect(row()).not.toBeNull();
     const sections = vi.spyOn(SidebarSessionProjection.prototype, "project");
     projectRows.mockClear();
-    sidebar.selectedSessionKeys = new Set([sessionKey]);
+    row()!
+      .querySelector<HTMLAnchorElement>(".sidebar-recent-session__link")!
+      .dispatchEvent(new MouseEvent("click", { altKey: true, bubbles: true, cancelable: true }));
     await settleRoster(mounted.sidebar);
     expect(row()?.classList.contains("sidebar-recent-session--selected")).toBe(true);
     row()!.querySelector<HTMLButtonElement>("[data-sidebar-session-menu]")!.click();
@@ -685,19 +685,29 @@ describe("sidebar projection memo", () => {
       activeRunIds: ["run-memo"],
       status: "running",
     });
-    const { sidebar, row } = await mount([target]);
+    const { sidebar, row, sessions, gateway } = await mount([target]);
     sidebar.sessionsShowPreview = true;
     sidebar.sidebarLiveActivity = true;
-    sidebar.sidebarNarrationLines = new Map([[target.key, "First activity"]]);
+    sidebar.connected = true;
+    await vi.waitFor(() => expect(sessions.subscribeMessages).toHaveBeenCalledOnce());
+    const narrate = (text: string) =>
+      gateway.publishEvent("session.narration", {
+        sessionKey: target.key,
+        runId: "run-memo",
+        text,
+      });
+    narrate("First activity");
     await settleLitElement(sidebar);
     expect(row(target.key)?.textContent).toContain("First activity");
     await vi.advanceTimersByTimeAsync(500);
-    sidebar.sidebarNarrationLines = new Map([[target.key, "Second activity"]]);
+    narrate("Second activity");
     await settleLitElement(sidebar);
     expect(row(target.key)?.textContent).toContain("First activity");
     const parent = sidebar.hostElement.parentElement!;
     sidebar.hostElement.remove();
     parent.append(sidebar.hostElement);
+    await settleLitElement(sidebar);
+    narrate("Second activity");
     await settleLitElement(sidebar);
     projectRows.mockClear();
     const sections = vi.spyOn(SidebarSessionProjection.prototype, "project");

@@ -364,7 +364,6 @@ export async function spawnSubagentDirect(
         childIdem,
         outputSchema: params.outputSchema,
         childSystemPrompt,
-        thinkingOverride: plan.thinkingOverride,
         runTimeoutSeconds,
         lightContext: params.lightContext === true,
         requesterOrigin,
@@ -510,7 +509,6 @@ export async function spawnSubagentDirect(
             isCleanupCurrent,
             isAbortCurrent,
             cleanupOwner,
-            retainAdmission: params.collect ? undefined : admissionReservation?.retain,
           });
         }
         if (!isCleanupCurrent()) {
