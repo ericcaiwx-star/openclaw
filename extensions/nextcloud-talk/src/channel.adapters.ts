@@ -1,4 +1,3 @@
-import { formatAllowFromLowercase } from "openclaw/plugin-sdk/allow-from";
 import {
   adaptScopedAccountAccessor,
   createScopedChannelConfigAdapter,
@@ -13,6 +12,7 @@ import {
   resolveNextcloudTalkAccount,
   type ResolvedNextcloudTalkAccount,
 } from "./accounts.js";
+import { normalizeNextcloudTalkAllowEntry, normalizeNextcloudTalkAllowlist } from "./policy.js";
 import type { CoreConfig } from "./types.js";
 
 export const nextcloudTalkConfigAdapter = createScopedChannelConfigAdapter<
@@ -31,11 +31,7 @@ export const nextcloudTalkConfigAdapter = createScopedChannelConfigAdapter<
   defaultAccountId: resolveDefaultNextcloudTalkAccountId,
   clearBaseFields: ["botSecret", "botSecretFile", "baseUrl", "name"],
   resolveAllowFrom: (account) => account.config.allowFrom,
-  formatAllowFrom: (allowFrom) =>
-    formatAllowFromLowercase({
-      allowFrom,
-      stripPrefixRe: /^(nextcloud-talk|nc-talk|nc):/i,
-    }),
+  formatAllowFrom: normalizeNextcloudTalkAllowlist,
 });
 
 export const nextcloudTalkSecurityAdapter = {
@@ -44,8 +40,7 @@ export const nextcloudTalkSecurityAdapter = {
     resolvePolicy: (account) => account.config.dmPolicy,
     resolveAllowFrom: (account) => account.config.allowFrom,
     policyPathSuffix: "dmPolicy",
-    normalizeEntry: (raw) =>
-      normalizeLowercaseStringOrEmpty(raw.trim().replace(/^(nextcloud-talk|nc-talk|nc):/i, "")),
+    normalizeEntry: normalizeNextcloudTalkAllowEntry,
   }),
 };
 

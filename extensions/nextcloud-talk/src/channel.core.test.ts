@@ -17,6 +17,18 @@ function safeParseNextcloudTalkConfig(value: unknown) {
 }
 
 describe("nextcloud talk channel core", () => {
+  it.each(["users/*", "users/ *", "users/\t*"])(
+    "keeps typed wildcard %s literal for command authorization",
+    (entry) => {
+      expect(
+        nextcloudTalkConfigAdapter.formatAllowFrom?.({
+          cfg: {} as CoreConfig,
+          allowFrom: [entry],
+        }),
+      ).toEqual([entry]);
+    },
+  );
+
   it.each([
     {
       label: "omitted media allowlist",
@@ -99,7 +111,7 @@ describe("nextcloud talk channel core", () => {
     expect(result.success).toBe(true);
   });
 
-  it("normalizes trimmed DM allowlist prefixes to lowercase ids", () => {
+  it("normalizes comparisons without rewriting pairing mutation keys", () => {
     const resolveDmPolicy = nextcloudTalkSecurityAdapter.resolveDmPolicy;
     if (!resolveDmPolicy) {
       throw new Error("resolveDmPolicy unavailable");
@@ -126,9 +138,16 @@ describe("nextcloud talk channel core", () => {
 
     expect(result.policy).toBe("allowlist");
     expect(result.allowFrom).toEqual(["  nc:User-Id  "]);
-    expect(result.normalizeEntry?.("  nc:User-Id  ")).toBe("user-id");
-    expect(nextcloudTalkPairingTextAdapter.normalizeAllowEntry("  nextcloud-talk:User-Id  ")).toBe(
-      "user-id",
-    );
+    expect(result.normalizeEntry?.("  nc:Users/User-Id  ")).toBe("users/user-id");
+    expect(
+      nextcloudTalkConfigAdapter.formatAllowFrom?.({
+        cfg,
+        accountId: "default",
+        allowFrom: ["  nc:User-Id  ", "guests/user-id"],
+      }),
+    ).toEqual(["users/user-id", "guests/user-id"]);
+    expect(
+      nextcloudTalkPairingTextAdapter.normalizeAllowEntry("  nextcloud-talk:users/User-Id  "),
+    ).toBe("users/user-id");
   });
 });
