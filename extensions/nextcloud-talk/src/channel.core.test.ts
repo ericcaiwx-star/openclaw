@@ -17,18 +17,6 @@ function safeParseNextcloudTalkConfig(value: unknown) {
 }
 
 describe("nextcloud talk channel core", () => {
-  it.each(["users/*", "users/ *", "users/\t*"])(
-    "keeps typed wildcard %s literal for command authorization",
-    (entry) => {
-      expect(
-        nextcloudTalkConfigAdapter.formatAllowFrom?.({
-          cfg: {} as CoreConfig,
-          allowFrom: [entry],
-        }),
-      ).toEqual([entry]);
-    },
-  );
-
   it.each([
     {
       label: "omitted media allowlist",

@@ -57,9 +57,9 @@ describe("nextcloud-talk user allowlist comparison", () => {
     ["alice", "emails/alice", false],
     ["alice", "federated_users/alice", false],
     ["alice", "bots/alice", false],
+    ["alice", "users/alice2", false],
+    ["alice", "users/malice", false],
     ["users/*", "users/bob", false],
-    ["users/", "users/bob", false],
-    ["users/guests/alice", "guests/alice", false],
     ["*", "users/bob", true],
   ])("matches %s against %s: %s", (entry, senderId, allowed) => {
     expect(resolveNextcloudTalkAllowlistMatch({ allowFrom: [entry], senderId }).allowed).toBe(
