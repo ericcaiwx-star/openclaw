@@ -341,7 +341,7 @@ describe("nextcloud-talk inbound media behavior", () => {
 
       expect(coreRuntime.channel.media.saveRemoteMedia).not.toHaveBeenCalled();
       expect(runtime.log).toHaveBeenCalledWith(
-        "nextcloud-talk: inbound media non-outcome reason=media_sender_not_allowlisted account=default message=msg-1 sender=user-1",
+        "nextcloud-talk: inbound media non-outcome reason=media_sender_not_allowlisted account=default message=msg-1 sender=users/user-1",
       );
       expect(coreRuntime.channel.inbound.buildContext).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -407,7 +407,7 @@ describe("nextcloud-talk inbound media behavior", () => {
 
       expect(coreRuntime.channel.media.saveRemoteMedia).not.toHaveBeenCalled();
       expect(runtime.log).toHaveBeenCalledWith(
-        "nextcloud-talk: inbound media non-outcome reason=media_sender_not_allowlisted account=default message=msg-1 sender=user-1",
+        "nextcloud-talk: inbound media non-outcome reason=media_sender_not_allowlisted account=default message=msg-1 sender=users/user-1",
       );
       expect(coreRuntime.channel.inbound.buildContext).not.toHaveBeenCalled();
       expect(coreRuntime.channel.inbound.dispatch).not.toHaveBeenCalled();
@@ -447,7 +447,7 @@ describe("nextcloud-talk inbound media behavior", () => {
 
     expect(coreRuntime.channel.media.saveRemoteMedia).not.toHaveBeenCalled();
     expect(runtime.log).toHaveBeenCalledWith(
-      "nextcloud-talk: inbound media non-outcome reason=media_hidden_download account=default message=msg-1 sender=user-1",
+      "nextcloud-talk: inbound media non-outcome reason=media_hidden_download account=default message=msg-1 sender=users/user-1",
     );
     expect(coreRuntime.channel.inbound.buildContext).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -492,7 +492,7 @@ describe("nextcloud-talk inbound media behavior", () => {
 
     expect(coreRuntime.channel.media.saveRemoteMedia).not.toHaveBeenCalled();
     expect(runtime.log).toHaveBeenCalledWith(
-      "nextcloud-talk: inbound media non-outcome reason=media_missing_metadata account=default message=msg-1 sender=user-1",
+      "nextcloud-talk: inbound media non-outcome reason=media_missing_metadata account=default message=msg-1 sender=users/user-1",
     );
     expect(coreRuntime.channel.inbound.buildContext).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -586,7 +586,7 @@ describe("nextcloud-talk inbound media behavior", () => {
 
     expect(coreRuntime.channel.media.saveRemoteMedia).not.toHaveBeenCalled();
     expect(runtime.log).toHaveBeenCalledWith(
-      "nextcloud-talk: inbound media non-outcome reason=media_declared_oversize account=default message=msg-1 sender=user-1 sizeBytes=2097152 maxBytes=1048576",
+      "nextcloud-talk: inbound media non-outcome reason=media_declared_oversize account=default message=msg-1 sender=users/user-1 sizeBytes=2097152 maxBytes=1048576",
     );
     expect(coreRuntime.channel.inbound.buildContext).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -641,7 +641,7 @@ describe("nextcloud-talk inbound media behavior", () => {
 
     expect(coreRuntime.channel.media.saveRemoteMedia).not.toHaveBeenCalled();
     expect(runtime.log).toHaveBeenCalledWith(
-      "nextcloud-talk: inbound media non-outcome reason=media_auth_unavailable account=default message=msg-1 sender=user-1",
+      "nextcloud-talk: inbound media non-outcome reason=media_auth_unavailable account=default message=msg-1 sender=users/user-1",
     );
     expect(coreRuntime.channel.inbound.buildContext).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -663,7 +663,7 @@ describe("nextcloud-talk inbound media behavior", () => {
         { status: 404 },
       ),
       expectedLog:
-        "nextcloud-talk: inbound media non-outcome reason=media_unavailable account=default message=msg-1 sender=user-1 status=404",
+        "nextcloud-talk: inbound media non-outcome reason=media_unavailable account=default message=msg-1 sender=users/user-1 status=404",
     },
     {
       label: "fetch timeout",
@@ -672,13 +672,13 @@ describe("nextcloud-talk inbound media behavior", () => {
         "timeout reading https://cloud.example.com/s/private-token secret-error-detail",
       ),
       expectedLog:
-        "nextcloud-talk: inbound media non-outcome reason=media_fetch_failed account=default message=msg-1 sender=user-1",
+        "nextcloud-talk: inbound media non-outcome reason=media_fetch_failed account=default message=msg-1 sender=users/user-1",
     },
     {
       label: "staging failure",
       error: new Error("stage failed for private-token with secret-error-detail"),
       expectedLog:
-        "nextcloud-talk: inbound media non-outcome reason=media_stage_failed account=default message=msg-1 sender=user-1",
+        "nextcloud-talk: inbound media non-outcome reason=media_stage_failed account=default message=msg-1 sender=users/user-1",
     },
   ])("preserves caption and bounded diagnostics for $label", async ({ error, expectedLog }) => {
     const coreRuntime = createPluginRuntimeMock();

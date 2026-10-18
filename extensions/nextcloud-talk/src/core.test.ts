@@ -220,7 +220,7 @@ describe("nextcloud talk core", () => {
         allowFrom: ["nc:User-Id"],
         senderId: "user-id",
       }),
-    ).toEqual({ allowed: true, matchKey: "user-id", matchSource: "id" });
+    ).toEqual({ allowed: true, matchKey: "users/user-id", matchSource: "id" });
     expect(
       resolveNextcloudTalkAllowlistMatch({
         allowFrom: ["allowed"],
