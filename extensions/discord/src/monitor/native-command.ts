@@ -466,17 +466,6 @@ async function dispatchDiscordCommandInteraction(
       command,
       menu,
       userId: interaction.user?.id ?? "",
-      ctx: {
-        cfg,
-        discordConfig,
-        accountId,
-        sessionPrefix,
-        threadBindings,
-        buildContext,
-        dispatchReplyFromConfig,
-      },
-      safeInteractionCall: safeDiscordInteractionCall,
-      dispatchCommandInteraction: dispatchDiscordCommandInteraction,
     });
     const delivered = await safeDiscordInteractionCall(
       preferFollowUp ? "interaction follow-up" : "interaction reply",
@@ -626,6 +615,7 @@ async function dispatchDiscordCommandInteraction(
   }
 
   const { dispatched, hiddenFinalReply } = await dispatchDiscordNativeAgentReply({
+    assertAuthority: authority.assertActive,
     cfg,
     discordConfig,
     accountId,

@@ -57,6 +57,7 @@ export async function runAnnounceAgentCall(params: {
   controllerInput?: SessionControllerInput;
   privateCompletion?: true;
   replyExpectation?: ReplyExpectation;
+  agentToolCaller?: import("../../../gateway/server-methods/client-types.js").TrustedAgentToolCaller;
   typing?: Omit<GatewayRecoveryTypingParams, "isCurrent">;
   settleWakeSourceSessionKeys?: readonly string[];
   delegatedToolPolicyHandoff?: SubagentCompletionToolHandoffRegistration;
@@ -109,6 +110,7 @@ export async function runAnnounceAgentCall(params: {
         cancelOnDeadline: true,
         privateCompletion: params.privateCompletion,
         replyExpectation: params.replyExpectation,
+        agentToolCaller: params.agentToolCaller,
         settleWakeReplay: params.settleWakeSourceSessionKeys
           ? {
               sourceSessionKeys: params.settleWakeSourceSessionKeys,
@@ -142,6 +144,13 @@ export async function runAnnounceAgentCall(params: {
         onAccepted: (payload) => {
           clearTimeout(timer);
           params.onAccepted?.(payload);
+        },
+        onStartOwner: (owner) => {
+          // Private callers still time out their observation while admission keeps custody.
+          // Public handoffs transfer their cancelling deadline at source registration.
+          if (!params.privateCompletion && owner.observe()) {
+            clearTimeout(timer);
+          }
         },
         onExecutionStarted: () => {
           executionSignal.throwIfAborted();
@@ -522,7 +531,6 @@ export async function deliverCompletionDirect(params: {
         terminal: true,
         disposition: "permanent_failure",
         error: `text completion direct delivery was incomplete; automatic retry would duplicate sent chunks: ${summarizeDeliveryError(err)}`,
-        ...(mediaUrls.length > 0 ? { missingMediaUrls: mediaUrls } : {}),
       };
     }
     if (err instanceof SourceOwnerChangedError) {

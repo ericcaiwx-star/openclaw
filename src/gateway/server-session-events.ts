@@ -4,6 +4,10 @@ import { asPositiveSafeInteger } from "@openclaw/normalization-core/number-coerc
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
+  GATEWAY_CLIENT_CAPS,
+  hasGatewayClientCap,
+} from "../../packages/gateway-protocol/src/client-info.js";
+import {
   readTranscriptDisplayPosition,
   type TranscriptDisplayPosition,
 } from "../chat/transcript-display-position.js";
@@ -14,6 +18,7 @@ import { WorkerTaskError } from "../infra/worker-task-pool.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import type { InternalSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { isPendingAssistantError } from "./chat-display-projection.core.js";
 import {
   prepareForwardedMessageCronJobNameResolver,
   readPluginSteeringId,
@@ -24,6 +29,7 @@ import type {
   SessionEventSubscriberRegistry,
   SessionMessageSubscriberRegistry,
 } from "./server-chat-state.js";
+import type { GatewayClient } from "./server-methods/client-types.js";
 import { resolveVisibleActiveSessionRunState } from "./server-methods/session-active-runs.js";
 import type { GatewayContextResolver } from "./server-methods/types.js";
 import { hasSessionChangeReceivers } from "./session-change-receivers.js";
@@ -81,6 +87,13 @@ export function createTranscriptUpdateBroadcastHandler(params: {
       storePath: string | undefined;
       keyReady: Promise<string | undefined>;
       settled: Promise<void>;
+      task: Promise<false | void>;
+      pending?: {
+        identity?: string;
+        coalesced: boolean;
+        projection: SessionRowProjection | undefined;
+        update: InternalSessionTranscriptUpdate;
+      };
     }
   >();
   const unresolvedQueueKeys = new Set<string>();
@@ -133,6 +146,37 @@ export function createTranscriptUpdateBroadcastHandler(params: {
         : (sessionKey ?? normalizeOptionalString(update.sessionFile) ?? "");
     const queueKey = `${sessionKey ? "key" : "file"}:${laneKey}`;
     const tail = broadcastQueues.get(queueKey);
+    // Only exact committed incarnations may share a reset. Unknown legacy
+    // ownership and diagnostic-only assistant errors retain their existing path.
+    const target = queuedUpdate.target;
+    const identity =
+      target?.storePath &&
+      hasCompleteTranscriptTarget(queuedUpdate) &&
+      lifecycleRevision &&
+      !isPendingAssistantError(queuedUpdate.message)
+        ? JSON.stringify([
+            target.agentId,
+            target.sessionId,
+            path.resolve(target.storePath),
+            lifecycleRevision,
+          ])
+        : undefined;
+    if (
+      identity &&
+      tail?.pending?.identity === identity &&
+      tail.pending.projection === projection
+    ) {
+      tail.pending.coalesced = true;
+      const pending = tail.pending.update;
+      tail.pending.update = {
+        target: pending.target,
+        sessionKey: pending.sessionKey,
+        agentId: pending.agentId,
+        lifecycleRevision: pending.lifecycleRevision,
+      };
+      return tail.task;
+    }
+    const pending = { identity, projection, update: queuedUpdate, coalesced: false };
     // Unresolved legacy updates dispatch through the marker's logical owner.
     const queueAgentId =
       agentScope?.[1] ??
@@ -200,18 +244,22 @@ export function createTranscriptUpdateBroadcastHandler(params: {
       );
     };
     const task = (tail?.settled ?? Promise.resolve()).then(async () => {
+      reservation.pending = undefined;
       try {
         if (sessionKey) {
           await joinQueue(laneKey);
         }
-        return await handleTranscriptUpdateBroadcast(
+        const published = await handleTranscriptUpdateBroadcast(
           params,
-          queuedUpdate,
+          pending.update,
           agentScope,
           projection,
           markerCaptured,
           sessionKey ? undefined : joinQueue,
         );
+        // A reset requests history reconciliation, not delivery of each collapsed
+        // message. Keep its source fallback until history actually replaces it.
+        return pending.coalesced ? false : published;
       } finally {
         keyReady.resolve(undefined);
       }
@@ -220,7 +268,7 @@ export function createTranscriptUpdateBroadcastHandler(params: {
       () => undefined,
       () => undefined,
     );
-    const reservation = {
+    const reservation: NonNullable<ReturnType<typeof broadcastQueues.get>> = {
       get key() {
         return resolvedKey;
       },
@@ -229,6 +277,8 @@ export function createTranscriptUpdateBroadcastHandler(params: {
       storePath: legacyMarker?.storePath,
       keyReady: keyReady.promise,
       settled,
+      task,
+      pending,
     };
     broadcastQueues.set(queueKey, reservation);
     if (!sessionKey) {
@@ -503,11 +553,25 @@ async function handleTranscriptUpdateBroadcast(
         includeSession: true,
         activeRunState,
       });
+      // Read live connection preferences and every exact observer at delivery time.
+      const omitMessage = (client: GatewayClient) =>
+        hasGatewayClientCap(
+          client.connect.caps,
+          GATEWAY_CLIENT_CAPS.ROSTER_MESSAGE_BODIES_OPTIONAL,
+        ) &&
+        !(client.includeSessionMessageBodies ?? client.connect.includeSessionMessageBodies) &&
+        !broadcastKeys.some((key) =>
+          params.sessionMessageSubscribers.get(key).has(client.connId ?? ""),
+        );
       const broadcastOptions = {
         sessionEventSubscriptionKeys: broadcastKeys,
         prepareSessionProjection:
           read && projection
-            ? prepareSessionEventProjection(projection, read, { ancestors, encodeMessage: true })
+            ? prepareSessionEventProjection(projection, read, {
+                ancestors,
+                encodeMessage: true,
+                omitMessage,
+              })
             : undefined,
       };
       const messageProjectionParams =
@@ -554,6 +618,7 @@ async function handleTranscriptUpdateBroadcast(
             prepareSessionProjection: prepareSessionEventProjection(projection, read, {
               ancestors,
               encodeMessage: true,
+              omitMessage,
               controlUiOnly: true,
             }),
           });

@@ -5,6 +5,7 @@ import {
   getSessionMutationCount,
   getSessionControllerWorkCount,
 } from "../../../sessions/session-controller.lifecycle.js";
+import { createSubagentRunParams } from "../../subagent-test-fixtures.test-helpers.js";
 import { enqueueSwarmRun } from "../swarm/swarm-scheduler.js";
 import { registerSubagentRun } from "./subagent-registry.js";
 import { writeSubagentSessionEntry } from "./subagent-registry.persistence.test-support.js";
@@ -41,22 +42,19 @@ export function createControlRunFixture(stateDir: () => string) {
     const sessionKey = options.childSessionKey ?? controlSessionKey(id);
     const agentId = options.childAgentId ?? "main";
     return registerSubagentRun(
-      {
+      createSubagentRunParams({
         runId: id,
+        task: id,
         childSessionKey: sessionKey,
         childAgentId: agentId,
         sessionEntry:
           "sessionEntry" in options
             ? options.sessionEntry
             : loadExactSessionEntryReadOnly({ agentId, storePath, sessionKey })?.entry,
-        requesterSessionKey: "agent:main:main",
         requesterAgentId: "main",
-        requesterDisplayKey: "main",
-        task: id,
-        cleanup: "keep",
         expectsCompletionMessage: false,
         ...options,
-      },
+      }),
       registrationOptions,
     );
   };
@@ -87,11 +85,13 @@ export function beginControlAdmission(
   sessionKey: string,
   sessionId: string,
   onInterrupt?: Parameters<typeof beginSessionEffect>[0]["onInterrupt"],
+  runId?: string,
 ) {
   return beginSessionEffect({
     agentId: "main",
     scope,
     identities: [sessionKey, sessionId],
+    run: runId ? { runId, sessionKey, sessionId, agentId: "main" } : undefined,
     assertAllowed: () => {},
     onInterrupt,
   });

@@ -1,4 +1,4 @@
-import { createSignal, For, onCleanup, Show } from "solid-js";
+import { createSignal, For, onSettled, Show } from "solid-js";
 import type { AgentsAvatarGenerateResult } from "../../../../packages/gateway-protocol/src/index.js";
 import { LobsterSvg } from "../../components/lobster-pet-artwork.tsx";
 import { canonicalLobsterLook, lobsterLookStyle } from "../../components/lobster-pet-identity.ts";
@@ -8,14 +8,17 @@ import {
   LOBSTER_PET_PALETTES,
 } from "../../components/lobster-pet-palettes.ts";
 import { AgentIdentityAvatar } from "../../components/solid/identity-avatar.tsx";
+import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { formatUiError } from "../../lib/format-error.ts";
-import { t } from "../../lib/reactive/i18n.ts";
+import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import {
   imageToAvatarDataUrl,
   svgToAvatarDataUrl,
   type AvatarDataUrlResult,
 } from "./avatar-image.ts";
 import "./avatar-picker.css";
+
+registerEnglishCatalog(registerSettingsEnglish);
 
 export type GeneratedAvatar = AgentsAvatarGenerateResult;
 
@@ -41,7 +44,7 @@ export function AvatarPicker(props: AvatarPickerProps) {
   const [error, setError] = createSignal<string | null>(null);
   let operation = 0;
   let fileInput: HTMLInputElement | undefined;
-  onCleanup(() => {
+  onSettled(() => () => {
     operation += 1;
   });
 
@@ -196,7 +199,11 @@ export function AvatarPicker(props: AvatarPickerProps) {
                   onClick={() => void selectPreset(palette.id)}
                 >
                   <div
-                    class={`avatar-picker__sprite lobster-pet lobster-pet--palette-${palette.id}`}
+                    class={[
+                      "avatar-picker__sprite",
+                      "lobster-pet",
+                      `lobster-pet--palette-${palette.id}`,
+                    ]}
                     style={lobsterLookStyle(canonicalLobsterLook(palette))}
                   >
                     <LobsterSvg look={canonicalLobsterLook(palette)} standalone />

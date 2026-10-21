@@ -55,12 +55,6 @@ function resolveRunWaitDeadlineAtMs(params: { deadlineAtMs?: number; timeoutMs?:
   );
 }
 
-type AgentRunsDrainResult = {
-  timedOut: boolean;
-  pendingRunIds: string[];
-  deadlineAtMs: number;
-};
-
 type RawAgentWaitResponse = {
   status?: string;
   error?: string;
@@ -169,6 +163,8 @@ function readOpenClawMessageMeta(message: unknown): Record<string, unknown> | un
 export async function readLatestAssistantReply(params: {
   sessionKey: string;
   agentId?: string;
+  /** Only rows written by this run qualify. */
+  runId?: string;
   limit?: number;
   callGateway?: GatewayCaller;
 }): Promise<string | undefined> {
@@ -184,11 +180,14 @@ export async function readLatestAssistantReply(params: {
     if (isAssistantReplyTranscriptArtifact(message)) {
       continue;
     }
+    const meta = readOpenClawMessageMeta(message);
+    if (params.runId !== undefined && meta?.runId !== params.runId) {
+      continue;
+    }
     const text = extractStoredAssistantText(message);
     if (!text?.trim()) {
       continue;
     }
-    const meta = readOpenClawMessageMeta(message);
     if (meta?.truncated !== true) {
       return text;
     }
@@ -290,7 +289,7 @@ export async function waitForAgentRunsToDrain(params: {
   timeoutMs?: number;
   deadlineAtMs?: number;
   callGateway?: GatewayCaller;
-}): Promise<AgentRunsDrainResult> {
+}): Promise<void> {
   const deadlineAtMs = resolveRunWaitDeadlineAtMs(params);
   const callGateway = params.callGateway ?? bindAgentToolGatewayRequest({ hostedOnly: true });
 
@@ -325,10 +324,4 @@ export async function waitForAgentRunsToDrain(params: {
       pendingRunIds = normalizePendingRunIds(await params.getPendingRunIds());
     }
   }
-
-  return {
-    timedOut: pendingRunIds.size > 0,
-    pendingRunIds: [...pendingRunIds],
-    deadlineAtMs,
-  };
 }

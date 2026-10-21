@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { createMemo, For } from "solid-js";
+import { For } from "solid-js";
 import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
 import { HubTabs } from "../../components/solid/hub-tabs.tsx";
 import {
@@ -32,12 +32,7 @@ registerEnglishCatalog(registerPluginManagementEnglish);
 registerEnglishCatalog(registerMemoryImportEnglish);
 
 /** One installed plugin that can claim the exclusive `plugins.slots.memory` slot. */
-type MemoryEngineOption = {
-  id: string;
-  label: string;
-  /** False when config names an engine absent from the current plugin catalog. */
-  available: boolean;
-};
+type MemoryEngineOption = ReturnType<typeof buildMemoryEngineOptions>[number];
 
 /**
  * Enablement as the page actually knows it, shared by the engine row and the
@@ -54,7 +49,7 @@ export type MemoryCatalogState =
 export function buildMemoryEngineOptions(
   catalog: MemoryCatalogState,
   selection: MemoryEngineSelection,
-): MemoryEngineOption[] {
+) {
   if (catalog.kind !== "ready") {
     return [];
   }
@@ -115,25 +110,17 @@ export function findMemoryCatalogPlugin(catalog: MemoryCatalogState, pluginId: s
 }
 
 /** Additive memory plugin: no `kind`, so it layers on top of whichever engine wins the slot. */
-type MemoryAddonRow = {
-  id: string;
-  label: string;
-  description: string;
-  state: MemoryPluginState;
-  busy: boolean;
-  error: string | null;
-  notice: string | null;
-};
+type MemoryAddonRow = ReturnType<typeof buildMemoryAddonRows>[number];
 
 export function buildMemoryAddonRows(
   catalog: MemoryCatalogState,
   state: {
-    busy: ReadonlySet<string>;
-    errors: ReadonlyMap<string, string>;
-    notices: ReadonlyMap<string, { message: string }>;
-    refreshWarnings: ReadonlyMap<string, string>;
+    busy: Readonly<Partial<Record<string, true>>>;
+    errors: Readonly<Partial<Record<string, string>>>;
+    notices: Readonly<Partial<Record<string, { message: string }>>>;
+    refreshWarnings: Readonly<Partial<Record<string, string>>>;
   },
-): MemoryAddonRow[] {
+) {
   return memoryAddonPresentations.map((addon) => {
     const entry = findMemoryCatalogPlugin(catalog, addon.id);
     return {
@@ -141,10 +128,10 @@ export function buildMemoryAddonRows(
       label: t(addon.labelKey),
       description: entry?.description ?? addon.id,
       state: resolveMemoryPluginState(catalog, entry),
-      busy: state.busy.has(addon.id),
-      error: state.errors.get(addon.id) ?? null,
+      busy: state.busy[addon.id] === true,
+      error: state.errors[addon.id] ?? null,
       notice:
-        [state.notices.get(addon.id)?.message, state.refreshWarnings.get(addon.id)]
+        [state.notices[addon.id]?.message, state.refreshWarnings[addon.id]]
           .filter(Boolean)
           .join(" ") || null,
     };
@@ -215,7 +202,7 @@ function EngineSection(props: MemoryViewProps) {
     />
   );
   const available = () => props.engineOptions.length > 0;
-  const options = createMemo(() => [
+  const options = () => [
     ...props.engineOptions.map((option) => ({
       value: option.id,
       label: option.available
@@ -223,7 +210,7 @@ function EngineSection(props: MemoryViewProps) {
         : `${option.label} (${t("memoryPage.engine.unavailable")})`,
     })),
     { value: MEMORY_ENGINE_OFF, label: t("memoryPage.engine.off") },
-  ]);
+  ];
   return (
     <SettingsSection
       title={t("memoryPage.engine.title")}

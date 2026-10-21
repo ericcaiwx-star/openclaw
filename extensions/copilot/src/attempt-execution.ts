@@ -327,7 +327,6 @@ export async function runCopilotExecution(context: {
       hookContext,
       modelRef,
       messages,
-      operation: deps.operation,
       poolAcquire,
       ringZeroSystemAgentRun,
       promptToolPolicy,
@@ -570,14 +569,10 @@ export async function runCopilotExecution(context: {
       (bridge?.hasObservedCompaction() || (timedOut && bridge?.hasObservedSessionIdle() === false));
     if (retainSessionForDeferredCleanup && bridge && session && handle) {
       const cleanupAbort = new AbortController();
-      const abortCleanup = () => cleanupAbort.abort();
-      if (params.abortSignal?.aborted) {
-        abortCleanup();
-      } else {
-        params.abortSignal?.addEventListener("abort", abortCleanup, { once: true });
-      }
       const cleanup = deferBackgroundCompactionCleanup({
-        abortSignal: cleanupAbort.signal,
+        abortSignal: params.abortSignal
+          ? AbortSignal.any([params.abortSignal, cleanupAbort.signal])
+          : cleanupAbort.signal,
         awaitSessionIdle: !bridge.hasObservedSessionIdle(),
         bridge,
         cleanupToolBridge,
@@ -589,11 +584,7 @@ export async function runCopilotExecution(context: {
         session,
         timeoutMs: resolveCompactionTimeoutMs(input.config),
       });
-      void cleanup
-        .finally(() => {
-          params.abortSignal?.removeEventListener("abort", abortCleanup);
-        })
-        .catch(() => undefined);
+      void cleanup.catch(() => undefined);
       if (sdkSessionId && !settledToolFinalization) {
         try {
           await deps.onDeferredCompaction?.({

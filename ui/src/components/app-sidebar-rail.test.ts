@@ -405,8 +405,19 @@ describe("personal navigation rail", () => {
     ] as const) {
       await click(sidebar, `[data-navigation-view="${view}"]`);
       expect(sidebar).toMatchObject({ navigationView: view, navigationCollapsed: collapsed });
+      expect(sidebar.activeNavigationViewElement()).toBe(
+        collapsed ? undefined : sidebar.querySelector(`[data-navigation-view="${view}"]`),
+      );
     }
     expect(toggle).toHaveBeenCalledTimes(4);
+    await update(sidebar, { navigationVisible: false });
+    expect(sidebar.activeNavigationViewElement()).toBeUndefined();
+    await update(sidebar, { navigationVisible: true });
+    expect(sidebar.activeNavigationViewElement()).toBe(
+      sidebar.querySelector('[data-navigation-view="online"]'),
+    );
+    sidebar.hostElement.remove();
+    expect(sidebar.activeNavigationViewElement()).toBeUndefined();
   });
 
   it("preserves a mobile drawer when a stored desktop preference is collapsed", async () => {
@@ -559,8 +570,8 @@ describe("personal navigation rail", () => {
   });
 
   it("opens a pinned dashboard on its saved face instead of forcing chat", async () => {
-    const { sidebar, result } = await fixture();
-    result.sessions.find((row) => row.key === "agent:main:mine")!.boardFace = "dashboard";
+    const { sidebar, publish } = await fixture();
+    publish({ boardFace: "dashboard" });
     sidebar.sidebarEntries = ["session:agent:main:mine"];
     sidebar.invalidate();
     await sidebar.updateComplete;
@@ -688,6 +699,40 @@ describe("personal navigation rail", () => {
     expect(dom.query('.sidebar-rail a[aria-label="Current title"]')).not.toBeNull();
   });
 
+  it("uses rows loaded during bootstrap instead of describing queued pins", async () => {
+    const { sidebar, sessions, result, dom } = await fixture();
+    const loadedKey = "agent:main:loaded-during-bootstrap";
+    const outsideKey = "agent:other:outside-window";
+    const bootstrap = sidebar.sessionDataContext!.connectionBootstrap;
+    bootstrap.setForegroundRoute("agent:main:selected");
+    const read = vi.spyOn(sessions.sessions, "describe").mockResolvedValue({
+      session: { ...result.sessions[1]!, key: outsideKey, label: "Outside window" },
+    });
+    sidebar.sidebarEntries = [loadedKey, outsideKey].map((key) => `session:${key}`);
+    await sidebar.updateComplete;
+    expect(read).not.toHaveBeenCalled();
+
+    sessions.publishList({
+      agentId: "main",
+      result: {
+        ...result,
+        sessions: [
+          ...result.sessions,
+          { ...result.sessions[1]!, key: loadedKey, label: "Live row", boardFace: "dashboard" },
+        ],
+      },
+    });
+    await sidebar.updateComplete;
+    bootstrap.setForegroundRoute(null);
+    await bootstrap.run({}, async () => {});
+    await settleLitElement(sidebar);
+
+    expect(read).toHaveBeenCalledExactlyOnceWith({ key: outsideKey });
+    expect(link(sidebar, `session:${loadedKey}`).getAttribute("aria-label")).toBe("Live row");
+    expect(link(sidebar, `session:${loadedKey}`).getAttribute("href")).toContain("dashboard");
+    expect(dom.query('.sidebar-rail a[aria-label="Outside window"]')).not.toBeNull();
+  });
+
   it("paints a burst of unloaded pins together without changing their saved order", async () => {
     const { sidebar, sessions, result, dom } = await fixture();
     const frames = new Map<number, FrameRequestCallback>();
@@ -783,6 +828,30 @@ describe("personal navigation rail", () => {
       expect(showToast).not.toHaveBeenCalled();
     },
   );
+
+  it("discovers MCP apps only while Pages is mounted", async () => {
+    const { sidebar, gateway } = await fixture();
+    const request = vi.spyOn(gateway.gateway.snapshot.client!, "request").mockResolvedValue({
+      servers: [],
+    });
+    const discoveries = () =>
+      request.mock.calls.filter(([method]) => method === "mcp.app.discover");
+    gateway.publish({ hello: gatewayHelloForMethods(["mcp.app.discover"]) });
+    await sidebar.updateComplete;
+    gateway.publishEvent("config.changed", {});
+    await sidebar.updateComplete;
+    expect(discoveries()).toHaveLength(0);
+
+    await click(sidebar, '[data-navigation-view="pages"]');
+    await waitForSolid(() => expect(discoveries()).toHaveLength(1));
+    await click(sidebar, '[data-navigation-view="sessions"]');
+    gateway.publishEvent("config.changed", {});
+    await sidebar.updateComplete;
+    expect(discoveries()).toHaveLength(1);
+
+    await click(sidebar, '[data-navigation-view="pages"]');
+    await waitForSolid(() => expect(discoveries()).toHaveLength(2));
+  });
 
   it("does not recreate catalog observations in an update queued before removal", async () => {
     const { sidebar, sessions, gateway } = await fixture();

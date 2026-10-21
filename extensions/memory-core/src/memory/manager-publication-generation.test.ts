@@ -193,6 +193,13 @@ it("retains published memory facts across session and embedding-cache writes", a
   await withPublishedIndex(async (database) => {
     await database.writeMetadata(metadata);
     const facts = database.facts;
+    const identities = [{ provider: "test", model: "test", providerKey: "test" }];
+    const readCache = () =>
+      database.read(
+        { type: "cache.read", input: { providerIdentities: identities, hashes: ["test"] } },
+        () => {},
+      );
+    expect(await readCache()).toEqual(new Map());
     const messages = recordIndexCommands("messagePort");
     try {
       await upsertSessionEntry({
@@ -216,6 +223,13 @@ it("retains published memory facts across session and embedding-cache writes", a
         () => {},
         () => true,
       );
+      expect(await readCache()).toEqual(new Map([["test", [1]]]));
+      await database.mutateEmbeddingCache(
+        { kind: "clear", identities },
+        () => {},
+        () => true,
+      );
+      expect(await readCache()).toEqual(new Map());
       await database.refreshFacts();
       expect(database.facts).toBe(facts);
       expect(messages.commands).not.toContain("index.facts");
@@ -408,6 +422,7 @@ it("refreshes invalidated source and vector facts after an in-process write", as
       db.prepare(
         "INSERT INTO memory_index_meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
       ).run("memory_vector_rebuild_v1", "1");
+      db.prepare("UPDATE memory_index_state SET revision = revision + 1 WHERE id = 1").run();
     });
     const sql = observeHostDataSql();
     try {
@@ -427,6 +442,7 @@ it("refreshes invalidated source and vector facts after an in-process write", as
         "clean",
         "memory_vector_rebuild_v1",
       );
+      db.prepare("UPDATE memory_index_state SET revision = revision + 1 WHERE id = 1").run();
     });
     await database.refreshFacts();
     expect(database.facts.invalidatedSources).toEqual([]);

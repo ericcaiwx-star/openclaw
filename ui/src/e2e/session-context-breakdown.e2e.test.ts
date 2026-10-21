@@ -4,6 +4,8 @@ import { expect, it } from "vitest";
 import type { SessionSystemPromptReport } from "../../../src/config/sessions/session-system-prompt-report.js";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { openChatDetails } from "./chat-details.test-support.ts";
+import { controlUiE2eBuiltModuleRequest } from "./control-ui-built-module.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Sidebar context breakdown" });
@@ -71,6 +73,15 @@ suite.define(() => {
     { width: 390, height: 844, mode: "light" as const },
   ])("shows a scoped, non-overlapping breakdown ($width px)", async ({ width, height, mode }) => {
     await suite.withPage({ viewport: { width, height }, colorScheme: mode }, async ({ page }) => {
+      const breakdownModule = controlUiE2eBuiltModuleRequest(
+        "ui/src/pages/chat/components/chat-context-breakdown.tsx",
+      );
+      const breakdownRequests: string[] = [];
+      page.on("request", (request) => {
+        if (breakdownModule.test(request.url())) {
+          breakdownRequests.push(request.url());
+        }
+      });
       const gateway = await installMockGateway(page, {
         sessionKey,
         sessions: [
@@ -115,15 +126,17 @@ suite.define(() => {
       });
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
       await gateway.waitForRequest("chat.startup");
+      const panel = await openChatDetails(page);
+      expect(breakdownRequests).toHaveLength(0);
+      const context =
+        width <= 900
+          ? panel.locator('.chat-mobile-details-page[data-details-page="context"]')
+          : panel.locator('[data-details-group="context"]');
       if (width <= 900) {
-        await page.locator(".chat-header-session-menu__trigger").click();
-        await page.getByRole("menuitem", { name: "Session details", exact: true }).click();
+        await panel.locator('[data-details-destination="context"]').click();
       } else {
-        await page.getByRole("button", { name: "Details", exact: true }).click();
+        await context.locator(":scope > summary").click();
       }
-      const panel = page.locator(".chat-details");
-      const context = panel.locator(".chat-details__context");
-      await context.locator(":scope > summary").click();
       const initial = await takeControlUiScreenshotFrame(page, panel, [context], {
         elements: [panel],
         animations: "disabled",
@@ -137,6 +150,7 @@ suite.define(() => {
         initial.elements[0]!.png,
       );
       await context.getByText("Workspace files", { exact: true }).waitFor();
+      expect(breakdownRequests).toHaveLength(1);
       const request = await gateway.waitForRequest("sessions.usage");
       expect(request.params).toMatchObject({
         key: sessionKey,
@@ -171,9 +185,11 @@ suite.define(() => {
         path.join(suite.artifactDir, "context-expanded-" + width + "-panel.png"),
         after.elements[0]!.png,
       );
-      expect(await context.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(
-        true,
-      );
+      const contextScrollport =
+        width <= 900 ? context.locator(".chat-mobile-details-page__body") : context;
+      expect(
+        await contextScrollport.evaluate((element) => element.scrollWidth <= element.clientWidth),
+      ).toBe(true);
       await context.locator('[data-context-details="files"] > summary').click();
       await context.locator('[data-context-details="tools"] > summary').click();
       await context.getByText("System tools", { exact: true }).waitFor();

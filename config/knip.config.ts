@@ -24,6 +24,8 @@ const repositoryScriptEntries = [
   "scripts/lib/plugin-npm-build-and-pack.mts!",
   // Package scripts execute the PostgreSQL schema generator, which consumes state declarations.
   "scripts/generate-postgres-schema.mts!",
+  // src/daemon/systemd-directives.ts documents this node regeneration command.
+  "scripts/generate-systemd-directives.mjs!",
   // ui:validators:gen/check compile canonical payload schemas into browser runtime guards.
   "scripts/generate-control-ui-validators.mts!",
   // Immutable activation and release deployment launch this packaged entry by path.
@@ -70,14 +72,55 @@ const repositoryScriptEntries = [
   "apps/android/scripts/build-release-artifacts.ts!",
   // The cold-load benchmark guide invokes this opt-in CLI by path.
   "scripts/bench-control-ui-cold-load.ts!",
+  // #179175 invokes this development-loop benchmark CLI by path.
+  "scripts/bench-control-ui-dev-loop.mts!",
   // The channel-turn benchmark guide invokes this opt-in CLI by path.
   "scripts/bench-channel-turn.mts!",
+  // docs/reference/test/performance.md invokes the Decision transport comparison driver.
+  "scripts/bench-decision-transport.mts!",
+  // docs/reference/test/performance.md invokes the frozen-revision benchmark builder.
+  "scripts/build-decision-transport-bench.mts!",
+  // scripts/perf/README.md invokes this shared-writer benchmark by path.
+  "scripts/bench-channel-ingress-writer.ts!",
+  // scripts/perf/README.md invokes this cold usage-cache measurement CLI by path.
+  "scripts/perf/chat-metadata-burst-measure.ts!",
+  // docs/ci/checkout.md invokes this checkout materialization benchmark by path.
+  "scripts/perf/ci-preflight-checkout-measure.mjs!",
+  // The narration payload benchmark in #179092 is invoked by path.
+  "scripts/perf/tool-frame-replay.ts!",
+  // scripts/perf/README.md invokes these drivers and their worker-memory preload.
+  "scripts/perf/workboard-read-measure.ts!",
+  "scripts/perf/transcript-hydration-headroom.ts!",
+  "scripts/perf/transcript-worker-memory-preload.ts!",
+  // scripts/perf/README.md invokes this synthetic authority allocation probe by path.
+  "scripts/perf/operator-authority-measure.ts!",
+  // #179149 invokes this synthetic event-dispatch allocation probe by path.
+  "scripts/perf/agent-event-dispatch-measure.ts!",
   // Maintainers invoke this isolated transcript-rewrite benchmark by path.
   "scripts/bench-session-manager-rewrite.ts",
   // The team-shaped fixture README invokes these measurement CLIs by path.
   "scripts/perf/team-shape-measure.ts",
   "scripts/perf/transcript-broadcast-measure.ts",
   "scripts/perf/post-restart-burst-measure.ts",
+  "scripts/perf/catalog-polling-measure.ts",
+  // The history/diff benchmark guide invokes this measurement CLI by path.
+  "scripts/perf/history-diff-measure.ts!",
+  // scripts/perf/README.md invokes this checkout-diff measurement CLI by path.
+  "scripts/perf/checkout-diff-measure.ts!",
+  // scripts/perf/README.md invokes this isolated viewer-presence measurement CLI.
+  "scripts/perf/presence-churn-measure.ts!",
+  // scripts/perf/README.md invokes this isolated session-roster measurement CLI.
+  "scripts/perf/session-roster-churn-measure.ts!",
+  "scripts/perf/seal-version-restart.ts!",
+  // #178599 documents: node --expose-gc scripts/perf/heap-headroom.ts.
+  "scripts/perf/heap-headroom.ts!",
+  // Worker-environment shutdown proof invokes this measurement CLI by path.
+  "scripts/perf/worker-environment-shutdown-measure.ts!",
+  // The branch-rotation guide invokes the driver, which loads its IPC preload by path.
+  "scripts/perf/branch-rotation-measure.ts!",
+  "scripts/perf/branch-rotation-measure-preload.ts!",
+  // The documented placement shutdown reproduction is invoked as a standalone CLI.
+  "scripts/perf/worker-placement-reconcile-shutdown-measure.ts!",
   "scripts/bundle-a2ui.mts!",
   // The standalone build guide invokes this builder by path.
   "scripts/build-bun-standalone.mjs!",
@@ -145,6 +188,9 @@ const repositoryScriptEntries = [
   "scripts/e2e/lib/fixtures/config.mjs!",
   "scripts/e2e/lib/fixtures/plugins.mjs!",
   "scripts/e2e/lib/fixtures/workspace.mjs!",
+  // The Docker custody shell copies the server and mounts the scenario by path.
+  "scripts/e2e/lib/mcp-docker-custody/scenario.mjs!",
+  "scripts/e2e/lib/mcp-docker-custody/server.cjs!",
   // Muse Docker shells invoke auth directly and select deterministic/live by mode.
   "scripts/e2e/lib/muse-runtime/auth.mjs!",
   "scripts/e2e/lib/muse-runtime/deterministic.mjs!",
@@ -195,6 +241,8 @@ const repositoryScriptEntries = [
   "scripts/e2e/lib/upgrade-survivor/native-assignment-app-server.mjs!",
   // package-activation-recovery.sh preloads this observer into the released updater.
   "scripts/e2e/lib/upgrade-survivor/package-activation-fault.mjs!",
+  // run.sh preloads this fixture adapter through NODE_OPTIONS by path.
+  "scripts/e2e/lib/upgrade-survivor/plugin-registry-redirect.mjs!",
   "scripts/e2e/lib/upgrade-survivor/probe-gateway.mjs!",
   "scripts/e2e/lib/upgrade-survivor/probe-volume-gateway.mjs!",
   "scripts/e2e/lib/upgrade-survivor/projects-doctor.mjs!",
@@ -319,12 +367,16 @@ const repositoryScriptEntries = [
   "scripts/verify-full-release-producer-job.mjs!",
   // Staging and signed-app packaging execute this verifier with each bundled Bun.
   "scripts/verify-mac-runtime.mjs!",
+  // App packaging verifies reusable source artifacts before preserving their build identity.
+  "scripts/verify-mac-source-build.mts!",
   "scripts/verify-stable-main-closeout.mjs!",
   "scripts/write-package-dist-inventory.ts!",
   "scripts/write-plugin-sdk-entry-dts.ts!",
   "scripts/write-unified-entry-dts.ts!",
   "security/opengrep/check-rule-metadata.mjs!",
   "security/opengrep/compile-rules.mjs!",
+  // create-claw/SKILL.md invokes this CLI bridge for skills and plugin inventory.
+  "skills/create-claw/scripts/cli.mjs!",
   "skills/meme-maker/scripts/meme.mjs!",
 ] as const;
 
@@ -474,6 +526,7 @@ const rootEntries = [
   // Built as the official image's Docker HEALTHCHECK entrypoint.
   "src/docker-healthcheck.ts!",
   // Deployed in the worker archive and launched by path, without a static host import.
+  "src/worker/worker-deploy-client-credentials.ts!",
   "src/worker/worker-deploy-entry.ts!",
   "src/worker/worker-deploy-file-tool-planning.ts!",
   "src/worker/worker-deploy-file-tool-read.ts!",
@@ -612,7 +665,6 @@ const bundledPluginEntries = [
 
 const bundledPluginIgnoredRuntimeDependencies = [
   "@agentclientprotocol/claude-agent-acp",
-  "@a2ui/lit",
   "@azure/identity",
   "@clawdbot/lobster",
   "@discord/embedded-app-sdk",
@@ -653,7 +705,6 @@ const rootBundledPluginRuntimeDependencies = [
 // Root installation and build workflows deliberately mirror these dependencies from their
 // owning workspace, or invoke their package binaries/loaders without a static module import.
 const rootToolingAndWorkspaceDependencies = [
-  "@a2ui/lit",
   "@copilotkit/aimock",
   // scripts/ui.mts anchors these lookups at ui/package.json before invoking the UI workspace.
   "@vitest/browser-playwright",
@@ -1002,6 +1053,8 @@ const config = {
         "src/test-helpers/proof-video.ts!",
         "index.html!",
         "src/main.{ts,tsx}!",
+        // The generated foreign-locale modules import this factory by absolute path.
+        "src/i18n/lib/lazy-catalog.ts!",
         "src/lib/browser-redact.{ts,tsx}!",
         "vite.config.ts!",
         "vitest*.ts!",

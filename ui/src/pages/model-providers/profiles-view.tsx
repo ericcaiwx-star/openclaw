@@ -3,6 +3,7 @@ import { createMemo, For, onCleanup, Show } from "solid-js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { Icon } from "../../components/solid/icon.tsx";
 import { SettingsStatus } from "../../components/solid/settings-ui.tsx";
+import { StrokeIcon } from "../../components/solid/stroke-icon.tsx";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { moveArrayEntry, type ArrayDropPosition } from "../../lib/array-order.ts";
 import { formatDurationHuman } from "../../lib/format-duration.ts";
@@ -192,6 +193,9 @@ function startPointerDrag(params: {
   event: PointerEvent;
   canMove: boolean;
   provider: string;
+  row: HTMLElement;
+  section: HTMLElement;
+  rows: HTMLElement[];
   move: (targetId: string, position: ArrayDropPosition) => void;
   drag: ReturnType<typeof createPointerDrag>;
 }): void {
@@ -202,15 +206,11 @@ function startPointerDrag(params: {
   if (!(grip instanceof HTMLElement)) {
     return;
   }
-  const row = grip.closest<HTMLElement>(".model-providers__profile");
-  const section = grip.closest<HTMLElement>(".model-providers__profiles");
-  if (!row || !section) {
-    return;
-  }
+  const { row, section } = params;
   const sectionTop = section.getBoundingClientRect().top;
   // Use the original slots for hit testing. Measuring animated neighbors would
   // make the insertion point oscillate as they move out from under the pointer.
-  const slots = [...section.querySelectorAll<HTMLElement>(".model-providers__profile")]
+  const slots = params.rows
     .filter((candidate) => candidate.dataset.profileProvider === params.provider)
     .map((element) => ({ element, bounds: element.getBoundingClientRect() }));
   const source = slots.find((slot) => slot.element === row);
@@ -390,6 +390,8 @@ export function renderProviderAccountSummary(
 }
 
 export function ProviderProfiles(props: ProviderProfilesViewProps & { card: ModelProviderCard }) {
+  let section!: HTMLElement;
+  const rowElements = new Map<string, HTMLElement>();
   const card = () => props.card;
   const groups = createMemo(() => profileGroups(card(), props.profileOrders));
   // Account numbers follow the saved inventory, not the editable priority order.
@@ -415,6 +417,7 @@ export function ProviderProfiles(props: ProviderProfilesViewProps & { card: Mode
     <Show when={card().profiles.length > 0}>
       <section
         class="model-providers__profiles"
+        ref={(element) => (section = element)}
         aria-label={`${t("modelProviders.profiles.title")}: ${card().displayName}`}
       >
         <div class="model-providers__profiles-heading">
@@ -468,6 +471,8 @@ export function ProviderProfiles(props: ProviderProfilesViewProps & { card: Mode
               <ProviderProfileRow
                 {...props}
                 row={row()}
+                section={() => section}
+                rowElements={rowElements}
                 identity={identities().get(row().profile.profileId)!}
               />
             )}
@@ -483,12 +488,19 @@ function ProviderProfileRow(
     row: { profile: ProviderProfile; group: ReturnType<typeof profileGroups>[number] };
     card: ModelProviderCard;
     identity: string;
+    section: () => HTMLElement;
+    rowElements: Map<string, HTMLElement>;
   },
 ) {
+  let rowElement!: HTMLElement;
+  let registeredId: string | undefined;
   const drag = createPointerDrag();
   let releaseUsage: (() => void) | undefined;
   onCleanup(() => {
     releaseUsage?.();
+    if (registeredId) {
+      props.rowElements.delete(registeredId);
+    }
   });
   const profile = () => props.row.profile;
   const group = () => props.row.group;
@@ -537,6 +549,11 @@ function ProviderProfileRow(
   return (
     <div
       class="model-providers__profile"
+      ref={(element) => {
+        rowElement = element;
+        registeredId = profile().profileId;
+        props.rowElements.set(registeredId, element);
+      }}
       role="listitem"
       data-profile-id={profile().profileId}
       data-profile-provider={provider()}
@@ -559,6 +576,12 @@ function ProviderProfileRow(
                 event,
                 canMove: canMove(),
                 provider: provider(),
+                row: rowElement,
+                section: props.section(),
+                rows: group().profiles.flatMap((entry) => {
+                  const element = props.rowElements.get(entry.profileId);
+                  return element ? [element] : [];
+                }),
                 move: reorder,
                 drag,
               });
@@ -620,18 +643,11 @@ function ProviderProfileRow(
               }
             }}
           >
-            <svg
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="2"
-              stroke-linecap="round"
-              stroke-linejoin="round"
-            >
+            <StrokeIcon>
               <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
               <polyline points="16 17 21 12 16 7" />
               <line x1="21" x2="9" y1="12" y2="12" />
-            </svg>
+            </StrokeIcon>
           </button>
         ) : undefined}
       </span>

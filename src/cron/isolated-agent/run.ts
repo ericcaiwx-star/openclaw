@@ -34,6 +34,7 @@ import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generati
 import { isCommandLaneTaskTimeoutError } from "../../process/command-queue.js";
 import { CommandLane } from "../../process/lanes.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
+import { CronSessionLifecycleClaimError } from "../run-authority.js";
 import { removeCronRunContinuationSessionIfIdle } from "../run-continuation-cleanup.js";
 import { createCronRunDiagnosticsFromError, mergeCronRunDiagnostics } from "../run-diagnostics.js";
 import { resolveCronRunErrorReason } from "../run-error-reason.js";
@@ -41,18 +42,22 @@ import {
   normalizeCronRunErrorText,
   resolveCronAbortReasonText,
 } from "../service/execution-errors.js";
+import { isCronOneShotContinuationJob } from "../service/one-shot-schedule.js";
 import type { CronAgentExecutionPhaseUpdate } from "../types.js";
 import type { CronRunExecutionParams } from "./run-execution.types.js";
 import { finalizeCronRun } from "./run-finalize.js";
 import type { RunCronAgentTurnParams } from "./run-prepare-runtime.js";
 import { prepareCronRunContext, type PreparedCronRunContext } from "./run-prepare.js";
-import { CronSessionLifecycleClaimError, type MutableCronSession } from "./run-session-state.js";
+import type { MutableCronSession } from "./run-session-state.js";
 import { applyCronRunUsage, recordCronRunUsage } from "./run-usage.js";
 import { logWarn } from "./run.runtime.js";
 import type { CronCompletedPromptRun, RunCronAgentTurnResult } from "./run.types.js";
 import { cleanupCronRunSessionAfterRun } from "./session-cleanup.js";
 
 const cronExecutorRuntimeLoader = createLazyImportLoader(() => import("./run-executor.runtime.js"));
+const cronOperatorSourceLoader = createLazyImportLoader(
+  () => import("../../gateway/cron-operator-source.js"),
+);
 
 // Release the full session snapshot after persistence and delivery to avoid retaining skill prompts.
 async function disposeCronRunContext(params: {
@@ -129,6 +134,7 @@ async function runCronIsolatedAgentTurnInTrace(
     context: PreparedCronRunContext,
   ): Promise<RunCronAgentTurnResult> {
     const prepared = { context };
+    using operatorLease = new DisposableStack();
     await using _ = {
       [Symbol.asyncDispose]: async () => {
         await prepared.context.workspaceLease?.release();
@@ -261,7 +267,14 @@ async function runCronIsolatedAgentTurnInTrace(
                   agentId: prepared.context.agentId,
                   lifecycleGeneration: runLifecycleGeneration,
                   cronRunsByJobId: new Map([
-                    [params.job.id, { pacingEnabled: params.job.pacing !== undefined }],
+                    [
+                      params.job.id,
+                      {
+                        nextCheckEnabled:
+                          params.job.pacing !== undefined ||
+                          isCronOneShotContinuationJob(params.job),
+                      },
+                    ],
                   ]),
                 },
                 {
@@ -270,8 +283,24 @@ async function runCronIsolatedAgentTurnInTrace(
                 },
               );
               const { executeCronRun } = await cronExecutorRuntimeLoader.load();
+              const operator = params.job.operatorSource
+                ? await (
+                    await cronOperatorSourceLoader.load()
+                  ).restoreCronOperatorSource({
+                    job: params.job,
+                    agentId: prepared.context.agentId,
+                    sessionKey: prepared.context.runSessionKey,
+                    entry: prepared.context.cronSession.sessionEntry,
+                    signal: abortSignal,
+                    deliveryAttemptFence: params.deliveryAttemptFence,
+                  })
+                : undefined;
+              if (operator) {
+                operatorLease.defer(operator.release);
+              }
               const executionParams: Parameters<typeof executeCronRun>[0] = {
                 ...prepared.context,
+                operatorAuthority: operator?.authority,
                 runId,
                 cfg: params.cfg,
                 job: params.job,
@@ -329,6 +358,12 @@ async function runCronIsolatedAgentTurnInTrace(
               if (finalized.status === "error") {
                 outcome = "error";
                 outcomeError = finalized.error;
+                finalized.interruptedByRestart =
+                  resolveAgentRunErrorLifecycleFields(undefined, abortSignal).stopReason ===
+                  "restart";
+                if (finalized.interruptedByRestart) {
+                  finalized.errorClassification = { kind: "aborted" };
+                }
               }
               const delayMs = consumeCronNextCheckProposal(runId, params.job.id);
               return finalized.status !== "ok" || delayMs === undefined
@@ -336,6 +371,8 @@ async function runCronIsolatedAgentTurnInTrace(
                 : { ...finalized, nextCheck: { delayMs } };
             } catch (err) {
               lifecycle.emit("error", err);
+              const interruptedByRestart =
+                resolveAgentRunErrorLifecycleFields(err, abortSignal).stopReason === "restart";
               await promptAdmission?.finish();
               consumeCronNextCheckProposal(runId, params.job.id);
               const isCronLaneTimeout =
@@ -368,9 +405,12 @@ async function runCronIsolatedAgentTurnInTrace(
               return prepared.context.withRunSession({
                 status: "error",
                 error,
-                errorClassification: errorReason
-                  ? { kind: "reason", reason: errorReason }
-                  : undefined,
+                interruptedByRestart,
+                errorClassification: interruptedByRestart
+                  ? { kind: "aborted" }
+                  : errorReason
+                    ? { kind: "reason", reason: errorReason }
+                    : undefined,
                 executionStarted,
                 usage,
                 ...(admissionDisposition ? { admissionDisposition } : {}),

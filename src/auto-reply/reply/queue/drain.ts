@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { runAgentHarnessBeforeMessageWriteHook } from "../../../agents/harness/hook-helpers.js";
 import { runOutsidePreparedModelRuntimePluginGenerationScope } from "../../../agents/prepared-model-runtime-generation-scope.js";
 import { normalizeChatType } from "../../../channels/chat-type.js";
+import { compareChannelAdmissionParticipants } from "../../../channels/message-access/admission-evidence.js";
 import { channelRouteDedupeKey } from "../../../plugin-sdk/channel-route.js";
 import {
   getGatewayRestartDrainSignal,
@@ -19,11 +20,11 @@ import {
   type SessionControllerMailbox,
   type SessionControllerMailboxClaim,
 } from "../../../sessions/session-controller.mailbox.js";
+import { runWithSessionControllerCleanup } from "../../../sessions/session-controller.owner-context.js";
 import type { SessionControllerEntry } from "../../../sessions/session-controller.state.js";
 import { createUserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.js";
 import { AgentDatabaseExecutionAdmissionClosedError } from "../../../state/agent-database-admission-error.js";
 import { buildCollectPrompt, previewQueueSummaryPrompt } from "../../../utils/queue-helpers.js";
-import { resolveCollectedRun } from "./collected-run.js";
 import { collectRuntimeMetadata, resolveFollowupReplyAnchor } from "./delivery-context.js";
 import {
   buildCollectTranscriptInput,
@@ -65,6 +66,32 @@ function buildOverflowTranscriptIdempotencyKey(source: FollowupRun, prompt: stri
     )
     .digest("hex");
   return `followup-overflow:${source.run.sessionId}:${routeHash}:${source.messageId ?? source.enqueuedAt}:${promptHash}`;
+}
+
+function resolveCollectedRun(items: readonly FollowupRun[], source: FollowupRun["run"]) {
+  const participantComparison = compareChannelAdmissionParticipants(
+    items.map((item) => item.channelAdmissionEvidence),
+  );
+  if (
+    participantComparison === "same" ||
+    !items.every(
+      (item) => compareChannelAdmissionParticipants([item.channelAdmissionEvidence]) === "same",
+    )
+  ) {
+    return source;
+  }
+  // Mixed or unverifiable people share no downstream sender authority. The
+  // opaque admission aggregate records unknown identity at the run boundary.
+  return {
+    ...source,
+    senderId: undefined,
+    senderName: undefined,
+    senderUsername: undefined,
+    senderE164: undefined,
+    senderIsOwner: false,
+    traceAuthorized: false,
+    ownerNumbers: [],
+  };
 }
 
 /** Executes an already-selected claim. This adapter never chooses a successor. */
@@ -120,11 +147,8 @@ async function executeClaim(
   });
   const prompt = claim.summary
     ? (previewQueueSummaryPrompt({
-        state: {
-          droppedCount: sources.length,
-          summaryLines: queue.cap > 0 ? summaryLines.slice(-queue.cap) : summaryLines,
-        },
-        noun: "message",
+        droppedCount: sources.length,
+        summaryLines: queue.cap > 0 ? summaryLines.slice(-queue.cap) : summaryLines,
       }) ?? "")
     : buildCollectPrompt({
         title: "[Queued messages while agent was busy]",
@@ -145,6 +169,7 @@ async function executeClaim(
             text: prompt,
             idempotencyKey: buildOverflowTranscriptIdempotencyKey(source, prompt),
             senderIsOwner: source.run.senderIsOwner,
+            requesterOrigin: source.run.requesterOrigin,
             provenance: source.run.inputProvenance,
           },
           pendingInputSources: sources.flatMap((item) => item.userTurnTranscriptRecorder ?? []),
@@ -284,7 +309,8 @@ export function rememberFollowupDrainCallback(
             entered = true;
             // Consume this request; a kick during execution re-enables dispatch.
             mailbox.dispatchEnabled = false;
-            return executeClaim(claim, runFollowup);
+            // The retiring turn may wake this mailbox from its own async context.
+            return runWithSessionControllerCleanup(() => executeClaim(claim, runFollowup));
           }),
         "session:mailbox-turn",
       );

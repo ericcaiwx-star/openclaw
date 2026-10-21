@@ -1,7 +1,7 @@
 import { formatInternationalPhoneNumberForDisplay } from "@openclaw/normalization-core/phone-presentation";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { render } from "@solidjs/web";
-import { createEffect, createSignal, onCleanup, onSettled } from "solid-js";
+import { createSignal, onCleanup, onSettled } from "solid-js";
 import type {
   ControlUiChannelSettingsContext,
   ControlUiChannelSettingsSnapshot,
@@ -14,12 +14,13 @@ import {
 } from "../../app/control-ui-auth.ts";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
+import { i18n } from "../../i18n/lib/translate.ts";
 import { resolveChannelAccounts } from "../../lib/channels/index.ts";
 import { formatDurationHuman } from "../../lib/format-duration.ts";
 import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
 import type { GatewayPageBinding } from "../../lib/gateway-page-binding.ts";
-import { getLocale } from "../../lib/reactive/i18n.ts";
+import { getLocale, projectI18n } from "../../lib/reactive/i18n.ts";
 import { listen } from "../../lib/reactive/listener.ts";
 import { createParkedProjection } from "../../lib/reactive/parked-projection.ts";
 import { controlUiPluginDistributions } from "../../plugins/control-ui-distribution.ts";
@@ -318,13 +319,9 @@ export function createChannelSettingsPresentation(
             return confirmed;
           },
           formatPhoneNumber(value) {
-            current();
             return formatInternationalPhoneNumberForDisplay(value, getLocale()) ?? value;
           },
-          formatDuration(milliseconds) {
-            current();
-            return formatDurationHuman(milliseconds);
-          },
+          formatDuration: formatDurationHuman,
           mountConfig(container) {
             current();
             const stopConfig = render(() => {
@@ -371,18 +368,9 @@ export function createChannelSettingsPresentation(
             }
             await channels.refresh(probe);
           },
-          formatRelativeTimestamp(timestamp) {
-            current();
-            return formatRelativeTimestamp(timestamp);
-          },
-          formatError(error) {
-            current();
-            return formatUiError(error);
-          },
-          formatExternalText(text) {
-            current();
-            return formatUiExternalText(text);
-          },
+          formatRelativeTimestamp,
+          formatError: formatUiError,
+          formatExternalText: formatUiExternalText,
         };
         const mounted = loaded.view.mount(entry.node, context);
         let active = true;
@@ -465,8 +453,16 @@ export function ChannelSettingsSlot(props: {
   presentation: ChannelSettingsPresentation;
 }) {
   let container!: HTMLDivElement;
-  onSettled(() => props.presentation.attach(props.channelId, container));
-  createEffect(getLocale, () => props.presentation.sync());
+  const locale = projectI18n(i18n);
+  onSettled(() => {
+    const detach = props.presentation.attach(props.channelId, container);
+    // Locale receipts refresh the separately mounted channel settings presentation.
+    const stopLocale = locale.subscribe(() => props.presentation.sync());
+    return () => {
+      stopLocale();
+      detach();
+    };
+  });
   return (
     <div
       style={{ display: "contents" }}

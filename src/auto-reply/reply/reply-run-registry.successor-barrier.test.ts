@@ -5,10 +5,10 @@ import { resetCommandQueueStateForTest } from "../../process/command-queue.test-
 import {
   registerReplyOperationSuccessorBarrier,
   ReplyRunSuccessorAdmissionBlockedError,
-  waitForReplyRunSuccessorAdmission,
 } from "../../sessions/session-controller.js";
 import { captureSessionTarget } from "../../sessions/session-controller.lifecycle.js";
 import { testing } from "../../sessions/session-controller.test-support.js";
+import { waitForReplyRunSuccessorAdmission } from "../../sessions/session-controller.wait.js";
 import { createTestReplyOperation } from "./reply-run-registry.test-helpers.js";
 
 async function withFakeReplyTimers<T>(run: () => Promise<T>): Promise<T> {
@@ -157,6 +157,32 @@ describe("reply run successor barriers", () => {
       }
     },
   );
+
+  it("cancels a bounded wait without releasing the successor fence", async () => {
+    const operation = createTestReplyOperation();
+    const release = createDeferred();
+    registerReplyOperationSuccessorBarrier({
+      operation,
+      sessionId: operation.sessionId,
+      sessionKeys: [operation.key],
+      start: () => release.promise,
+    });
+    operation.complete();
+    const controller = new AbortController();
+    try {
+      const wait = waitForReplyRunSuccessorAdmission(operation.key, 100, {
+        signal: controller.signal,
+      });
+      controller.abort();
+      await expect(wait).resolves.toEqual({ settled: false });
+      expect(() => createTestReplyOperation({ sessionKey: operation.key })).toThrow(
+        ReplyRunSuccessorAdmissionBlockedError,
+      );
+    } finally {
+      release.resolve();
+      await waitForReplyRunSuccessorAdmission(operation.key, null);
+    }
+  });
 
   it("waits for the captured physical owner when logical keys are ambiguous", async () => {
     const sessionKey = "global";

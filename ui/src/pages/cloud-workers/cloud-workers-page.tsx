@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { createEffect, createMemo, createSignal, createStore, Show, For } from "solid-js";
+import { createMemo, createSignal, createStore, onCleanup, onSettled, Show, For } from "solid-js";
 import type { EnvironmentsListResult } from "../../../../packages/gateway-protocol/src/index.js";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import {
@@ -21,6 +21,7 @@ import { useApplication } from "../../lib/reactive/context.ts";
 import { projectRuntimeConfig } from "../../lib/reactive/domain-capabilities.ts";
 import { useGatewayPage } from "../../lib/reactive/gateway-page.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
+import { SettingsSelectRow } from "../config/settings-select-row.tsx";
 import { CloudWorkerConfigSave } from "./cloud-worker-config-save.ts";
 import {
   buildCloudWorkerDeletePatch,
@@ -56,6 +57,8 @@ export function CloudWorkersPage() {
     value?: Map<string, ProfileSummary>;
     error?: string;
   }>({ pending: false });
+  let previousCatalogReceipt: ReturnType<typeof catalogReceipt> | undefined;
+  let catalogRequest: AbortController | undefined;
   function clearPresentation() {
     setView((state) => {
       state.editor = null;
@@ -75,24 +78,29 @@ export function CloudWorkersPage() {
         configSave.update({ busy: false, error: null, notice: null });
         clearPresentation();
       }
+      refreshCatalog();
     },
     invalidateRequests: () => configSave.update({ busy: false }),
   });
   void context.runtimeConfig.ensureLoaded();
-  const catalogKey = createMemo(
-    () =>
-      [
-        gateway.snapshot?.client,
-        gateway.snapshot?.phase,
-        gateway.epoch,
-        configProjection.read().state.configSnapshot?.appliedConfigHash,
-      ] as const,
-    { equals: (previous, next) => previous.every((value, index) => value === next[index]) },
-  );
-  // Refresh the Gateway profile catalog for the current connection and config receipt.
-  createEffect(catalogKey, (key) => {
+  function catalogReceipt() {
+    const snapshot = context.gateway.snapshot;
+    return [
+      snapshot.client,
+      snapshot.phase,
+      gateway.readEpoch(),
+      context.runtimeConfig.state.configSnapshot?.appliedConfigHash,
+    ] as const;
+  }
+  function refreshCatalog() {
+    const key = catalogReceipt();
+    if (previousCatalogReceipt?.every((value, index) => value === key[index])) {
+      return;
+    }
+    previousCatalogReceipt = key;
+    catalogRequest?.abort();
     const appliedHash = key[3];
-    const controller = new AbortController();
+    const controller = (catalogRequest = new AbortController());
     // A nested bridge can flush effects while its parent is still rendering.
     queueMicrotask(() => {
       if (controller.signal.aborted) {
@@ -141,8 +149,14 @@ export function CloudWorkersPage() {
           },
         );
     });
-    return () => controller.abort();
+  }
+  onSettled(() => {
+    // Applied-config receipts abort the prior catalog request before refreshing profiles.
+    const stop = configProjection.subscribe(refreshCatalog);
+    refreshCatalog();
+    return stop;
   });
+  onCleanup(() => catalogRequest?.abort());
   function editableConfig(): Record<string, unknown> | null {
     return resolveEditableSnapshotConfig(configProjection.read().state.configSnapshot);
   }
@@ -483,31 +497,20 @@ export function CloudWorkersPage() {
           placeholder: t("cloudWorkersPage.fields.binaryPlaceholder"),
         })}
         <SettingsSection title={t("cloudWorkersPage.advanced")}>
-          <SettingsRow
+          <SettingsSelectRow
             title={t("cloudWorkersPage.fields.warmImage")}
             description={t("cloudWorkersPage.fields.warmImageHelp")}
-            control={
-              <select
-                class="settings-select"
-                aria-label={t("cloudWorkersPage.fields.warmImage")}
-                value={view.draft.warmImage}
-                disabled={saveState().busy}
-                onChange={(event) => {
-                  const value = event.currentTarget.value;
-                  if (value === "auto" || value === "on" || value === "off") {
-                    patchDraft({ warmImage: value });
-                  }
-                }}
-              >
-                <For each={["auto", "on", "off"] as const}>
-                  {(value) => (
-                    <option value={value} selected={view.draft.warmImage === value}>
-                      {t(`cloudWorkersPage.warmImage.${value}`)}
-                    </option>
-                  )}
-                </For>
-              </select>
-            }
+            value={view.draft.warmImage}
+            disabled={saveState().busy}
+            onChange={(value) => {
+              if (value === "auto" || value === "on" || value === "off") {
+                patchDraft({ warmImage: value });
+              }
+            }}
+            options={(["auto", "on", "off"] as const).map((value) => ({
+              value,
+              label: t(`cloudWorkersPage.warmImage.${value}`),
+            }))}
           />
           <For each={["setupEnv", "readyWorkers", "suspendAfter"] as const}>
             {(field) =>

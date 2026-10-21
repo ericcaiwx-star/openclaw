@@ -2,11 +2,12 @@
 
 import { createRouter, definePage } from "@openclaw/uirouter";
 import { render } from "@solidjs/testing-library";
-import { createComponent, createRoot, flush } from "solid-js";
+import { createComponent, createRoot, flush, onSettled } from "solid-js";
 import { expect, it, onTestFinished, vi } from "vitest";
 import type { ControlUiHost, ControlUiReplacement } from "../../../src/plugin-sdk/control-ui.js";
 import { GatewayBrowserClient } from "../api/gateway.ts";
 import "../components/app-sidebar.tsx";
+import * as settingsSidebar from "../components/settings-sidebar-shell.tsx";
 import { ApplicationProvider } from "../lib/reactive/context.ts";
 import type { SolidBridgeElement } from "../lib/solid-bridge.ts";
 import "../plugins/control-ui-view.solid.tsx";
@@ -20,6 +21,7 @@ import { ShellOwner } from "./app-host.tsx";
 import { ApplicationShell } from "./app-shell-view.tsx";
 import { bootstrapApplication } from "./bootstrap.ts";
 import { NATIVE_HISTORY_STATE_EVENT } from "./native-web-chrome.ts";
+import { registerRouteElement } from "./route-elements.ts";
 
 setupSidebarTest();
 
@@ -32,14 +34,16 @@ async function mountShell() {
   owner.routeState = { routeId: "chat" };
   document.body.append(owner.element);
   const view = render(
-    () =>
-      createComponent(ApplicationProvider, {
+    () => {
+      onSettled(() => owner.mountPresentation());
+      return createComponent(ApplicationProvider, {
         host: owner.element,
         value: runtime.context,
         get children() {
           return createComponent(ApplicationShell, { host: owner });
         },
-      }),
+      });
+    },
     {
       container: owner.element,
     },
@@ -109,6 +113,34 @@ it("updates native history buttons only while connected and refreshes them on re
     expect(back.disabled).toBe(false);
     expect(forward.disabled).toBe(true);
   });
+});
+
+it("passes the assistant a live lookup of the selected registered chat pane", async () => {
+  const { owner, view } = await mountShell();
+  const panel = view.container.querySelector("openclaw-assistant-panel")!;
+  const outlet = owner.routeOutlet!;
+  const pane = Object.assign(document.createElement("openclaw-chat-pane"), {
+    sessionKey: "agent:main:main",
+    presented: true,
+  });
+  pane.classList.add("chat-pane-cache__pane--active");
+  outlet.append(pane);
+  const unregister = registerRouteElement(pane);
+  onTestFinished(() => unregister?.());
+
+  expect(panel.getPrimaryChatPane?.("main")).toBe(pane);
+  for (const sessionKey of ["", "agent:other:main"]) {
+    expect(panel.getPrimaryChatPane?.(sessionKey)).toBeUndefined();
+  }
+  pane.presented = false;
+  expect(panel.getPrimaryChatPane?.("main")).toBeUndefined();
+  pane.presented = true;
+  pane.classList.remove("chat-pane-cache__pane--active");
+  expect(panel.getPrimaryChatPane?.("main")).toBeUndefined();
+  pane.classList.add("chat-pane-cache__pane--active");
+  expect(panel.getPrimaryChatPane?.("main")).toBe(pane);
+  pane.remove();
+  expect(panel.getPrimaryChatPane?.("main")).toBeUndefined();
 });
 
 it("reserves session geometry before page mount and clears it on other routes", async () => {
@@ -395,15 +427,21 @@ it.each([false, true])(
       subscribe: () => () => {},
       invalidate: () => {},
     };
+    snapshot.mockReturnValue({ ...disconnected, deferredIntentCount: 1 });
     await settle();
     expect(presentation().querySelector("button")).toBe(retry);
-    expect(retry.getAttribute("aria-label")).toBe("Disconnected · 2 queued — Retry now");
+    expect(retry.getAttribute("aria-label")).toBe("Disconnected · 3 queued — Retry now");
+    expect(view.container.querySelector(".shell > .sr-only[role=status]")?.textContent).toBe(
+      "Disconnected · 3 queued",
+    );
     expect(document.activeElement).toBe(retry);
     queuedCount = 1;
     await settle();
     expect(presentation().querySelector("button")).toBe(retry);
-    expect(retry.getAttribute("aria-label")).toBe("Disconnected · 1 queued — Retry now");
+    expect(retry.getAttribute("aria-label")).toBe("Disconnected · 2 queued — Retry now");
     queuedCount = 0;
+    await settle();
+    expect(retry.getAttribute("aria-label")).toBe("Disconnected · 1 queued — Retry now");
 
     snapshot.mockReturnValue({ ...disconnected, phase: "connecting" });
     await settle();
@@ -513,8 +551,10 @@ it("keeps status in navigation across web layouts without replacing the content 
 
 it("keeps connection retry in the minimal footer when the Settings renderer is unavailable", async () => {
   const { owner, runtime, view } = await mountShell();
-  vi.spyOn(owner.settingsSidebar, "renderer").mockReturnValue(null);
-  vi.spyOn(owner.settingsSidebar, "failed").mockReturnValue(true);
+  const renderer = vi.spyOn(settingsSidebar, "ShellSettingsSidebar").mockImplementation(() => {
+    throw new Error("Settings chunk unavailable");
+  });
+  onTestFinished(() => renderer.mockRestore());
   vi.spyOn(runtime.context.gateway, "snapshot", "get").mockReturnValue({
     ...runtime.context.gateway.snapshot,
     phase: "offline",
@@ -523,6 +563,8 @@ it("keeps connection retry in the minimal footer when the Settings renderer is u
   const connect = vi.spyOn(runtime.context.gateway, "connect").mockImplementation(() => undefined);
   owner.routeState = { routeId: "appearance" };
   owner.invalidate();
+  flush();
+  await vi.dynamicImportSettled();
   flush();
 
   expect(view.container.querySelector(".shell--settings")).not.toBeNull();
@@ -623,6 +665,7 @@ it("checks writing-surface clearance only when the avatar flag would open", asyn
   vi.spyOn(composer, "getBoundingClientRect").mockImplementation(() => bounds);
   footer.append(composer);
   view.container.querySelector("main.content")!.append(footer);
+  owner.shellLayout.registerFooterControlSurface(composer);
   vi.useFakeTimers();
   snapshot.mockReturnValue({ ...connected, phase: "offline", offlineStable: true });
   await settle();
@@ -640,20 +683,12 @@ it("checks writing-surface clearance only when the avatar flag would open", asyn
   vi.advanceTimersByTime(4_000);
   await settle();
 
-  for (const name of [
-    "agent-chat__composer-shell",
-    "new-session-page__composer",
-    "creation-composer",
-    "cron-editor-actions",
-  ]) {
-    composer.className = name;
-    anchor.dispatchEvent(new Event("pointerenter"));
-    flush();
-    expect(flag.hasAttribute("data-open"), name).toBe(false);
-    expect(card.title).toBe(card.getAttribute("aria-label"));
-    anchor.dispatchEvent(new Event("pointerleave"));
-    flush();
-  }
+  anchor.dispatchEvent(new Event("pointerenter"));
+  flush();
+  expect(flag.hasAttribute("data-open")).toBe(false);
+  expect(card.title).toBe(card.getAttribute("aria-label"));
+  anchor.dispatchEvent(new Event("pointerleave"));
+  flush();
   visible = false;
   anchor.dispatchEvent(new Event("pointerenter"));
   flush();
