@@ -5,13 +5,13 @@ import { nextcloudTalkPlugin } from "./channel.js";
 describe("nextcloudTalkApprovalAuth", () => {
   it("authorizes bare approver ids for their Talk user actor only", () => {
     const cfg = { channels: { "nextcloud-talk": { allowFrom: [" nc-talk: Owner "] } } };
-    const approvalCapability = nextcloudTalkPlugin.approvalCapability;
-    if (!approvalCapability?.authorizeActorAction) {
+    const authorizeActorAction = nextcloudTalkPlugin.approvalCapability?.authorizeActorAction;
+    if (!authorizeActorAction) {
       throw new Error("Nextcloud Talk approval authorization unavailable");
     }
 
     const authorize = (senderId: string) =>
-      approvalCapability.authorizeActorAction({
+      authorizeActorAction({
         cfg,
         senderId,
         action: "approve",
