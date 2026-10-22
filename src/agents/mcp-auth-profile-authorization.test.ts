@@ -302,7 +302,8 @@ it.each([undefined, ""])(
               access: "synthetic-access-only",
               ...(refresh === undefined ? {} : { refresh }),
               expires,
-            },
+              // Persisted access-only input intentionally lacks the writer type's refresh field.
+            } as OAuthCredential,
           },
         ],
       });

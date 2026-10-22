@@ -10,6 +10,7 @@ import {
 } from "../agents/auth-profiles/profiles.js";
 import { clearRuntimeAuthProfileStoreSnapshots } from "../agents/auth-profiles/runtime-snapshots.js";
 import { updateAuthProfileStoreWithLock } from "../agents/auth-profiles/store-runtime.js";
+import type { OAuthCredential } from "../agents/auth-profiles/types.js";
 import { persistAuthProfileBatch } from "../agents/auth-profiles/upsert-with-lock.js";
 import { resetPreparedModelRuntimeSnapshotsForTest } from "../agents/prepared-model-runtime.test-support.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
@@ -449,12 +450,12 @@ it.each([
     await withAuthState("cron-adoption-http-180757", async (state) => {
       const requests: Array<{ authorization: string | undefined; url: string | undefined }> = [];
       const http = await import("node:http");
-      const server = http.createServer(async (req, res) => {
+      const responseBody = await completedResponse("gpt-4.1").text();
+      const server = http.createServer((req, res) => {
         req.resume();
         requests.push({ authorization: req.headers.authorization, url: req.url });
-        const response = completedResponse("gpt-4.1");
         res.writeHead(200, { "content-type": "text/event-stream" });
-        res.end(await response.text());
+        res.end(responseBody);
       });
       await new Promise<void>((resolve) => {
         server.listen(0, "127.0.0.1", resolve);
@@ -561,7 +562,8 @@ it.each([
                 ...(refresh === undefined ? {} : { refresh }),
                 expires: Date.now() + 3_600_000,
                 accountId: "synthetic-account",
-              },
+                // Persisted access-only input intentionally lacks the writer type's refresh field.
+              } as OAuthCredential,
             },
           ],
         });
