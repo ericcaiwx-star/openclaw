@@ -3,6 +3,7 @@ import { threadId } from "node:worker_threads";
 import {
   isPostgresSqlConnection,
   sqlPublicationAnchor,
+  type EngineConnection,
   type PostgresSqlConnection,
 } from "./sql-connection.js";
 import {
@@ -10,8 +11,11 @@ import {
   hasSqliteDatabaseSchemaAdmission,
   readSqliteDatabaseFactRevision,
   readSqliteDatabaseGeneration,
+  readSqliteDatabaseAdmissionFact,
+  admitSqliteDatabaseFactValue,
   type Admission,
-  type SqliteDatabaseAdmissionKey,
+  type AdmissionFactValue,
+  type SqliteDatabaseFactKey,
   type StagedAdmissionFact,
   type SqliteDatabaseAdmissionRegistry,
 } from "./sqlite-database-admission-record.js";
@@ -28,6 +32,8 @@ export function createSqliteDatabaseAdmissionReader(owner: {
     schemaDirty: WeakSet<DatabaseSync>;
     rolledBack: WeakSet<DatabaseSync>;
     misses: WeakMap<Admission, Map<string, number>>;
+    openedIdentities: WeakMap<DatabaseSync, string>;
+    localSchemaRevisions: Map<string, number>;
   };
   admission: (database: DatabaseSync, create?: boolean) => Admission | undefined;
   pathAdmission: (location: string) => Admission | undefined;
@@ -36,8 +42,8 @@ export function createSqliteDatabaseAdmissionReader(owner: {
   release: (record: Admission) => void;
   publishFact: <T>(
     record: Admission,
-    key: SqliteDatabaseAdmissionKey<T>,
-    value: T,
+    key: SqliteDatabaseFactKey<T>,
+    value: AdmissionFactValue,
     revision: number,
   ) => void;
 }) {
@@ -60,7 +66,7 @@ export function createSqliteDatabaseAdmissionReader(owner: {
   }
   function getSqliteDatabaseAdmission<T>(
     database: DatabaseSync | PostgresSqlConnection,
-    key: SqliteDatabaseAdmissionKey<T>,
+    key: SqliteDatabaseFactKey<T>,
     options: { existingOnly?: boolean } = {},
   ): T | undefined {
     const anchor = sqlPublicationAnchor(database);
@@ -81,7 +87,7 @@ export function createSqliteDatabaseAdmissionReader(owner: {
       local.revision === readSqliteDatabaseFactRevision(record, local.schemaDependent) &&
       (!local.schemaDependent || local.ddlRevision === (state.ddlRevisions.get(anchor) ?? 0))
     ) {
-      return key.read(local.value);
+      return readSqliteDatabaseAdmissionFact(local, key);
     }
     if (key.schemaDependent && state.schemaDirty.has(anchor)) {
       return undefined;
@@ -104,7 +110,7 @@ export function createSqliteDatabaseAdmissionReader(owner: {
         }
         exchange(record);
         fact = record.facts.get(key.name);
-        return fact && valid(record, fact) ? key.read(fact.value) : undefined;
+        return fact && valid(record, fact) ? readSqliteDatabaseAdmissionFact(fact, key) : undefined;
       }
       const revision = readSqliteDatabaseGeneration(record, "publicationRevision");
       const misses = state.misses.get(record) ?? new Map<string, number>();
@@ -115,12 +121,12 @@ export function createSqliteDatabaseAdmissionReader(owner: {
         misses.set(key.name, readSqliteDatabaseGeneration(record, "publicationRevision"));
       }
     }
-    return fact && valid(record, fact) ? key.read(fact.value) : undefined;
+    return fact && valid(record, fact) ? readSqliteDatabaseAdmissionFact(fact, key) : undefined;
   }
 
   function getOrLoadSqliteDatabaseAdmissionForPath<T>(
     location: string,
-    key: SqliteDatabaseAdmissionKey<T>,
+    key: SqliteDatabaseFactKey<T>,
     load: () => T | undefined,
   ): T | undefined {
     const read = (record: Admission | undefined): T | undefined => {
@@ -128,14 +134,15 @@ export function createSqliteDatabaseAdmissionReader(owner: {
         return load();
       }
       const fact = record.facts.get(key.name);
-      const cached = fact && valid(record, fact) ? key.read(fact.value) : undefined;
+      const cached =
+        fact && valid(record, fact) ? readSqliteDatabaseAdmissionFact(fact, key) : undefined;
       if (cached !== undefined) {
         return cached;
       }
       const generation = readSqliteDatabaseFactRevision(record, key.schemaDependent);
       const value = load();
       if (value !== undefined) {
-        publishFact(record, key, value, generation);
+        publishFact(record, key, admitSqliteDatabaseFactValue(key, value), generation);
       }
       return value;
     };
@@ -143,6 +150,31 @@ export function createSqliteDatabaseAdmissionReader(owner: {
     return key.lifetime === "process"
       ? withPathAdmission(location, read)
       : read(pathAdmission(location));
+  }
+
+  /** Optional preparation consumes only facts already delivered to this isolate. */
+  function peekSqliteDatabaseAdmissionForPath<T>(
+    location: string,
+    key: SqliteDatabaseFactKey<T>,
+  ): T | undefined {
+    const record = state.registry.forLocation(location);
+    const fact = record?.facts.get(key.name);
+    return record && fact && valid(record, fact)
+      ? readSqliteDatabaseAdmissionFact(fact, key)
+      : undefined;
+  }
+
+  function getSqliteDatabaseSchemaRevision(
+    connection: EngineConnection,
+    options: { existingOnly?: boolean } = {},
+  ): number | undefined {
+    const database = sqlPublicationAnchor(connection);
+    const record = admission(database, options.existingOnly !== true);
+    if (record) {
+      return readSqliteDatabaseGeneration(record, "schemaRevision");
+    }
+    const fileIdentity = state.openedIdentities.get(database);
+    return fileIdentity ? (state.localSchemaRevisions.get(fileIdentity) ?? 0) : undefined;
   }
 
   function hasSqliteDatabaseSchemaAdmissionForPath(location: string): boolean {
@@ -165,7 +197,9 @@ export function createSqliteDatabaseAdmissionReader(owner: {
 
   return {
     getSqliteDatabaseAdmission,
+    getSqliteDatabaseSchemaRevision,
     getOrLoadSqliteDatabaseAdmissionForPath,
+    peekSqliteDatabaseAdmissionForPath,
     hasSqliteDatabaseSchemaAdmissionForPath,
     getSqliteDatabaseAdmissionIdentityForPath,
     hasSqliteDatabaseSchemaAdmissionForIdentity,

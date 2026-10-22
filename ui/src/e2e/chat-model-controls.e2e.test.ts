@@ -28,10 +28,8 @@ suite.define(() => {
       const composer = page.locator(".agent-chat__input").first();
       const picker = composer.locator(".chat-controls__model-picker");
       const trigger = picker.locator("[data-chat-model-select]");
-      await expect
-        .poll(() => picker.locator("[data-chat-model-option]").count())
-        .toBe(models.length);
       await expect.poll(() => trigger.getAttribute("aria-disabled")).toBe("false");
+      expect(await picker.locator("[data-chat-model-option]").count()).toBe(0);
       const textarea = composer.locator("textarea").first();
       const cdp = await page.context().newCDPSession(page);
       await cdp.send("Performance.enable");
@@ -63,7 +61,23 @@ suite.define(() => {
         taskMs: metric("TaskDuration"),
       };
       console.log(JSON.stringify({ proof: "model-catalog-typing", ...timings }));
+      const openBefore: typeof before = await cdp.send("Performance.getMetrics");
+      const openStarted = performance.now();
       await trigger.click();
+      await expect
+        .poll(() => picker.locator("[data-chat-model-option]").count())
+        .toBe(models.length);
+      const openAfter: typeof before = await cdp.send("Performance.getMetrics");
+      console.log(
+        JSON.stringify({
+          proof: "model-catalog-open",
+          route,
+          models: models.length,
+          elapsedMs: performance.now() - openStarted,
+          scriptMs: metric("ScriptDuration", openBefore, openAfter),
+          taskMs: metric("TaskDuration", openBefore, openAfter),
+        }),
+      );
       expect(await picker.locator("[data-chat-model-catalog-state]").count()).toBe(0);
       const refresh = picker.locator(".chat-controls__model-search-wrap [data-chat-model-refresh]");
       expect(await refresh.textContent()).toContain("Refreshing models for Example…");
@@ -316,6 +330,7 @@ suite.define(() => {
         const composer = page.locator(".agent-chat__input").first();
         const model = composer.locator('[data-chat-model-select="true"]');
         await expect.poll(() => model.getAttribute("aria-busy")).toBe("false");
+        await composer.locator("textarea").click();
         await model.click();
         const heading = composer.locator('[data-chat-model-provider="openai"]');
         await expect
@@ -617,9 +632,11 @@ suite.define(() => {
         const model = composer.locator('[data-chat-model-select="true"]');
         const effort = composer.locator('[data-chat-thinking-select="true"]');
         await expect.poll(() => model.getAttribute("aria-label")).toContain(longName);
+        await composer.locator("textarea").click();
         await expect.poll(() => effort.isVisible()).toBe(true);
         for (const width of [320, 375, 393, 430, 560, 768, 1280]) {
           await page.setViewportSize({ width, height: 900 });
+          await composer.locator("textarea").click();
           await expect
             .poll(
               async () => {
@@ -689,6 +706,7 @@ suite.define(() => {
           }
         }
         await page.setViewportSize({ width: 393, height: 852 });
+        await composer.locator("textarea").click();
         await page.emulateMedia({ reducedMotion: "no-preference" });
         const needle = effort.locator(".chat-controls__effort-gauge-needle");
         const needleAngle = () =>
@@ -878,6 +896,7 @@ suite.define(() => {
           return;
         }
         await expect.poll(() => effort.getAttribute("aria-label")).toBe("Speed: Standard");
+        await composer.locator("textarea").click();
         const [modelBox, effortBox, actionsBox] = await Promise.all([
           model.boundingBox(),
           effort.boundingBox(),
@@ -934,9 +953,9 @@ suite.define(() => {
         const composer = page.locator(".agent-chat__input").first();
         const picker = composer.locator(".chat-controls__model-picker");
         const trigger = picker.locator('[data-chat-model-select="true"]');
-        await expect.poll(() => picker.locator("[data-chat-model-option]").count()).toBe(2);
         await expect.poll(() => trigger.getAttribute("aria-disabled")).toBe("false");
         await trigger.click();
+        await expect.poll(() => picker.locator("[data-chat-model-option]").count()).toBe(2);
         await revealChatModelOption(picker.locator('[data-chat-model-option="openai/gpt-5.5"]'));
         await revealChatModelOption(
           picker.locator('[data-chat-model-option="anthropic/claude-sonnet-4-6"]'),

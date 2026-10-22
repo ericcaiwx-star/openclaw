@@ -8,11 +8,13 @@ export function CommandPaletteLoading(props: {
   state: CommandPaletteLoadingState;
   onClose: () => void;
 }) {
+  let initialInput!: HTMLTextAreaElement;
   // An unrelated shell refresh must not rewrite the live field's selection.
   const value = createMemo(() => props.state.value());
   return (
     <Show when={props.state.defined()}>
       <openclaw-modal-dialog
+        prop:initialFocus={() => initialInput}
         class="cmd-palette-overlay palette"
         label={t("palette.placeholder")}
         style={COMMAND_PALETTE_DIALOG_STYLE}
@@ -24,10 +26,17 @@ export function CommandPaletteLoading(props: {
           onCompositionStart={() => props.state.handleCompositionStart()}
           onCompositionEnd={() => props.state.handleCompositionEnd()}
           onKeyDown={(event) => props.state.handleKeydown(event)}
+          onDragOver={(event) => props.state.handleDragOver(event)}
+          onDrop={(event) => props.state.handleDrop(event)}
         >
           <CommandPaletteInput
+            onAutofocusRef={(element) => {
+              initialInput = element;
+            }}
             value={value()}
-            placeholder={t("palette.placeholder")}
+            placeholder={t(
+              props.state.hasAttachments() ? "palette.attachmentPrompt" : "palette.placeholder",
+            )}
             onInputRef={(element, previous) => props.state.inputRef(element, previous)}
             onValueChange={(nextValue, event) => props.state.captureInput(nextValue, event)}
             onPaste={(event) => props.state.handlePaste(event)}

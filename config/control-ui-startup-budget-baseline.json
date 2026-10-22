@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 342000,
-  "reason": "Post-Lit startup measured 340081 B gzip on 9fa4e5618912; retain about 2 KB of headroom.",
-  "updatedAt": "2026-10-16"
+  "startupJsGzipBytes": 315737,
+  "reason": "Narrow New Session metadata imports after header deferral; preserve the stricter startup baseline",
+  "updatedAt": "2026-10-22"
 }
