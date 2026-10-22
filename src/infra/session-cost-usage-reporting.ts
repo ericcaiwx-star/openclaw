@@ -293,7 +293,6 @@ export async function loadSessionLogs(
       }
     }
     const limit = scoped.limit ?? 50;
-    const boundedLimit = Number.isInteger(limit);
     const retentionLimit = limit * 2;
     const agentDir = resolveAgentDir(scoped.config ?? {}, scoped.agentId);
     const resolveCost = createUsageCostResolver({ config: scoped.config, agentDir });
@@ -406,7 +405,7 @@ export async function loadSessionLogs(
       });
       // Timestamps can arrive out of order, so keep a bounded sorted window instead
       // of relying on transcript append order or retaining the whole file.
-      if (boundedLimit && logs.length > retentionLimit) {
+      if (logs.length > retentionLimit) {
         logs.sort((a, b) => a.timestamp - b.timestamp);
         logs.splice(0, logs.length - limit);
       }
