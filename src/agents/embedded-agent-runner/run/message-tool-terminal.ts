@@ -104,17 +104,14 @@ export function installToolAuthoredSourceReplyTerminalHook(params: {
 function isCompletedMessageToolOnlySourceReply(params: {
   context: AfterToolCallContext;
   hookResult?: AfterToolCallResult;
+  final: boolean;
 }): boolean {
   const deliveryFact =
     readEmbeddedMessageDeliveryFact(
       readToolResultDetails(params.context.result)?.messageDelivery,
     ) ?? readEmbeddedMessageDeliveryFact(readToolResultDetails(params.hookResult)?.messageDelivery);
   const isError = params.hookResult?.isError ?? params.context.isError;
-  return (
-    resolveMessageToolSourceReplyFinal(argsRecordForToolCall(params.context)) &&
-    !isError &&
-    deliveryFact?.sourceReplyDelivered === true
-  );
+  return params.final && !isError && deliveryFact?.sourceReplyDelivered === true;
 }
 
 export function installMessageToolTerminalHook(
@@ -172,6 +169,7 @@ export function installMessageToolTerminalHook(
       });
     // Presentation hooks cannot revoke delivery or finality already committed by the tool.
     let delivered = isDelivered();
+    const completed = isCompletedMessageToolOnlySourceReply({ context, final });
     let hookResult: AfterToolCallResult | undefined;
     try {
       hookResult = await previousAfterToolCall?.(context, signal);
@@ -182,7 +180,7 @@ export function installMessageToolTerminalHook(
           finalReplyInputs.add(inputScope);
         }
         params.onDeliveredSourceReply?.();
-        if (isCompletedMessageToolOnlySourceReply({ context, hookResult })) {
+        if (completed || isCompletedMessageToolOnlySourceReply({ context, hookResult, final })) {
           params.onCompletedSourceReply?.();
         }
       }

@@ -1,7 +1,7 @@
 import { expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { installMessageToolTerminalHook } from "../../agents/embedded-agent-runner/run/message-tool-terminal.js";
 import type { AfterToolCallContext, Agent } from "../../agents/runtime/index.js";
-import { createDeferred } from "../../../test/helpers/promise.js";
 import { SqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
 import type { TemplateContext } from "../templating.js";
 import {
@@ -260,14 +260,144 @@ async function emitSyntheticSourceReply(
   } as unknown as AfterToolCallContext);
 }
 
+it("does not fallback or surface an error after a completed source reply", async () => {
+  state.runEmbeddedAgentMock
+    .mockImplementationOnce(async (params: EmbeddedAgentParams) => {
+      await emitSyntheticSourceReply(params, "completed");
+      throw new Error("plugin state failed after delivery");
+    })
+    .mockRejectedValueOnce(new Error("401 Unauthorized"));
+  state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => {
+    try {
+      return {
+        result: await params.run("anthropic", "primary", initialFallbackAttemptOptions(params)),
+        provider: "anthropic",
+        model: "primary",
+        attempts: [],
+      };
+    } catch (error) {
+      if (params.canFallbackAfterError?.() === false) {
+        throw error;
+      }
+      return {
+        result: await params.run("xai", "fallback", fallbackAttemptOptions(params, "unknown")),
+        provider: "xai",
+        model: "fallback",
+        attempts: [],
+      };
+    }
+  });
 
-  it("does not fallback or surface an error after a completed source reply", async () => {
+  const result = await executeAgentTurn(messageTurn());
+
+  expect(state.runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
+  expect(result).toMatchObject({ kind: "final", payload: { text: "NO_REPLY" } });
+});
+
+it("does not fallback after a plugin harness returns a completed source receipt", async () => {
+  state.runEmbeddedAgentMock
+    .mockResolvedValueOnce({
+      payloads: [{ text: "NO_REPLY" }],
+      sourceReplyDelivered: true,
+      meta: { error: { message: "native finalization failed after delivery" } },
+    })
+    .mockRejectedValueOnce(new Error("401 Unauthorized"));
+  state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => {
+    const result = await params.run("codex", "gpt-5.4", initialFallbackAttemptOptions(params));
+    expect(params.canFallbackAfterError?.()).toBe(false);
+    return { result, provider: "codex", model: "gpt-5.4", attempts: [] };
+  });
+
+  const result = await executeAgentTurn(messageTurn());
+
+  expect(state.runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
+  expect(result).toMatchObject({
+    kind: "success",
+    runResult: {
+      payloads: [{ text: "NO_REPLY" }],
+      sourceReplyDelivered: true,
+    },
+  });
+});
+
+it("keeps fallback available after a plugin harness returns only source progress", async () => {
+  state.runEmbeddedAgentMock
+    .mockResolvedValueOnce({
+      payloads: [{ text: "NO_REPLY" }],
+      sourceReplyDelivered: true,
+      messagingToolSentTargets: [{ sourceReplyFinal: false }],
+      meta: { error: { message: "native finalization failed after progress" } },
+    })
+    .mockResolvedValueOnce({
+      payloads: [{ text: "Fallback answer" }],
+      meta: {},
+    });
+  state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => {
+    await params.run("codex", "gpt-5.4", initialFallbackAttemptOptions(params));
+    expect(params.canFallbackAfterError?.()).toBe(true);
+    const result = await params.run(
+      "openai",
+      "fallback",
+      fallbackAttemptOptions(params, "unknown"),
+    );
+    return { result, provider: "openai", model: "fallback", attempts: [] };
+  });
+
+  const result = await executeAgentTurn(messageTurn());
+
+  expect(state.runEmbeddedAgentMock).toHaveBeenCalledTimes(2);
+  expect(result).toMatchObject({
+    kind: "success",
+    runResult: { payloads: [{ text: "Fallback answer" }] },
+  });
+});
+
+it("keeps fallback available for legacy-only plugin delivery evidence", async () => {
+  state.runEmbeddedAgentMock
+    .mockResolvedValueOnce({
+      payloads: [{ text: "NO_REPLY" }],
+      sourceReplyDeliveryState: "delivered",
+      meta: { error: { message: "legacy runtime failed after coarse delivery telemetry" } },
+    })
+    .mockResolvedValueOnce({
+      payloads: [{ text: "Fallback answer" }],
+      meta: {},
+    });
+  state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => {
+    await params.run("legacy", "primary", initialFallbackAttemptOptions(params));
+    expect(params.canFallbackAfterError?.()).toBe(true);
+    const result = await params.run(
+      "openai",
+      "fallback",
+      fallbackAttemptOptions(params, "unknown"),
+    );
+    return { result, provider: "openai", model: "fallback", attempts: [] };
+  });
+
+  const result = await executeAgentTurn(messageTurn());
+
+  expect(state.runEmbeddedAgentMock).toHaveBeenCalledTimes(2);
+  expect(result).toMatchObject({
+    kind: "success",
+    runResult: { payloads: [{ text: "Fallback answer" }] },
+  });
+});
+
+it.each(["progress", "partial delivery"])(
+  "keeps fallback available after unfinished source %s",
+  async (sourceReplyKind) => {
     state.runEmbeddedAgentMock
       .mockImplementationOnce(async (params: EmbeddedAgentParams) => {
-        await emitSyntheticSourceReply(params, "completed");
-        throw new Error("plugin state failed after delivery");
+        await emitSyntheticSourceReply(
+          params,
+          sourceReplyKind === "progress" ? "progress" : "partial",
+        );
+        throw new Error("candidate failed before a completed reply");
       })
-      .mockRejectedValueOnce(new Error("401 Unauthorized"));
+      .mockResolvedValueOnce({
+        payloads: [{ text: "Fallback answer" }],
+        meta: {},
+      });
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => {
       try {
         return {
@@ -276,10 +406,8 @@ async function emitSyntheticSourceReply(
           model: "primary",
           attempts: [],
         };
-      } catch (error) {
-        if (params.canFallbackAfterError?.() === false) {
-          throw error;
-        }
+      } catch {
+        expect(params.canFallbackAfterError?.()).toBe(true);
         return {
           result: await params.run("xai", "fallback", fallbackAttemptOptions(params, "unknown")),
           provider: "xai",
@@ -291,149 +419,10 @@ async function emitSyntheticSourceReply(
 
     const result = await executeAgentTurn(messageTurn());
 
-    expect(state.runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
-    expect(result).toMatchObject({ kind: "final", payload: { text: "NO_REPLY" } });
-  });
-
-  it("does not fallback after a plugin harness returns a completed source receipt", async () => {
-    state.runEmbeddedAgentMock
-      .mockResolvedValueOnce({
-        payloads: [{ text: "NO_REPLY" }],
-        sourceReplyDelivered: true,
-        meta: { error: { message: "native finalization failed after delivery" } },
-      })
-      .mockRejectedValueOnce(new Error("401 Unauthorized"));
-    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => {
-      const result = await params.run("codex", "gpt-5.4", initialFallbackAttemptOptions(params));
-      expect(params.canFallbackAfterError?.()).toBe(false);
-      return { result, provider: "codex", model: "gpt-5.4", attempts: [] };
-    });
-
-    const result = await executeAgentTurn(messageTurn());
-
-    expect(state.runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
-    expect(result).toMatchObject({
-      kind: "success",
-      runResult: {
-        payloads: [{ text: "NO_REPLY" }],
-        sourceReplyDelivered: true,
-      },
-    });
-  });
-
-  it("keeps fallback available after a plugin harness returns only source progress", async () => {
-    state.runEmbeddedAgentMock
-      .mockResolvedValueOnce({
-        payloads: [{ text: "NO_REPLY" }],
-        sourceReplyDelivered: true,
-        messagingToolSentTargets: [{ sourceReplyFinal: false }],
-        meta: { error: { message: "native finalization failed after progress" } },
-      })
-      .mockResolvedValueOnce({
-        payloads: [{ text: "Fallback answer" }],
-        meta: {},
-      });
-    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => {
-      await params.run("codex", "gpt-5.4", initialFallbackAttemptOptions(params));
-      expect(params.canFallbackAfterError?.()).toBe(true);
-      const result = await params.run(
-        "openai",
-        "fallback",
-        fallbackAttemptOptions(params, "unknown"),
-      );
-      return { result, provider: "openai", model: "fallback", attempts: [] };
-    });
-
-    const result = await executeAgentTurn(messageTurn());
-
     expect(state.runEmbeddedAgentMock).toHaveBeenCalledTimes(2);
     expect(result).toMatchObject({
       kind: "success",
       runResult: { payloads: [{ text: "Fallback answer" }] },
     });
-  });
-
-  it("keeps fallback available for legacy-only plugin delivery evidence", async () => {
-    state.runEmbeddedAgentMock
-      .mockResolvedValueOnce({
-        payloads: [{ text: "NO_REPLY" }],
-        sourceReplyDeliveryState: "delivered",
-        meta: { error: { message: "legacy runtime failed after coarse delivery telemetry" } },
-      })
-      .mockResolvedValueOnce({
-        payloads: [{ text: "Fallback answer" }],
-        meta: {},
-      });
-    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => {
-      await params.run("legacy", "primary", initialFallbackAttemptOptions(params));
-      expect(params.canFallbackAfterError?.()).toBe(true);
-      const result = await params.run(
-        "openai",
-        "fallback",
-        fallbackAttemptOptions(params, "unknown"),
-      );
-      return { result, provider: "openai", model: "fallback", attempts: [] };
-    });
-
-    const result = await executeAgentTurn(messageTurn());
-
-    expect(state.runEmbeddedAgentMock).toHaveBeenCalledTimes(2);
-    expect(result).toMatchObject({
-      kind: "success",
-      runResult: { payloads: [{ text: "Fallback answer" }] },
-    });
-  });
-
-  it.each(["progress", "partial delivery"])(
-    "keeps fallback available after unfinished source %s",
-    async (sourceReplyKind) => {
-      state.runEmbeddedAgentMock
-        .mockImplementationOnce(async (params: EmbeddedAgentParams) => {
-          await emitSyntheticSourceReply(
-            params,
-            sourceReplyKind === "progress" ? "progress" : "partial",
-          );
-          throw new Error("candidate failed before a completed reply");
-        })
-        .mockResolvedValueOnce({
-          payloads: [{ text: "Fallback answer" }],
-          meta: {},
-        });
-      state.runWithModelFallbackMock.mockImplementationOnce(
-        async (params: FallbackRunnerParams) => {
-          try {
-            return {
-              result: await params.run(
-                "anthropic",
-                "primary",
-                initialFallbackAttemptOptions(params),
-              ),
-              provider: "anthropic",
-              model: "primary",
-              attempts: [],
-            };
-          } catch {
-            expect(params.canFallbackAfterError?.()).toBe(true);
-            return {
-              result: await params.run(
-                "xai",
-                "fallback",
-                fallbackAttemptOptions(params, "unknown"),
-              ),
-              provider: "xai",
-              model: "fallback",
-              attempts: [],
-            };
-          }
-        },
-      );
-
-      const result = await executeAgentTurn(messageTurn());
-
-      expect(state.runEmbeddedAgentMock).toHaveBeenCalledTimes(2);
-      expect(result).toMatchObject({
-        kind: "success",
-        runResult: { payloads: [{ text: "Fallback answer" }] },
-      });
-    },
-  );
+  },
+);

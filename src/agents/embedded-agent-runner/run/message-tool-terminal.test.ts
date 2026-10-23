@@ -292,12 +292,14 @@ describe("message-tool-only source replies", () => {
       // Shape of a cron send: automatic mode, explicit target, confirmed source delivery.
       const agent = {} as unknown as Agent;
       const onDeliveredSourceReply = vi.fn();
+      const onCompletedSourceReply = vi.fn();
       installMessageToolTerminalHook({
         agent,
         currentProvider: "telegram",
         currentChannelId: "-1001234567890",
         ...(finalByDefault === undefined ? {} : { messageToolFinalByDefault: finalByDefault }),
         onDeliveredSourceReply,
+        onCompletedSourceReply,
       });
       const args = {
         action: "send",
@@ -331,6 +333,7 @@ describe("message-tool-only source replies", () => {
       ).resolves.toEqual(terminates ? { terminate: true } : undefined);
       // The send is still recorded as delivered whether or not the turn ends.
       expect(onDeliveredSourceReply).toHaveBeenCalledTimes(1);
+      expect(onCompletedSourceReply).toHaveBeenCalledTimes(terminates ? 1 : 0);
     },
   );
 
@@ -517,7 +520,12 @@ describe("message-tool-only source replies", () => {
   it("preserves a committed final source reply when later presentation fails", async () => {
     const failure = { details: { error: "presentation failed" }, isError: true };
     const agent = { afterToolCall: async () => failure } as unknown as Agent;
-    installMessageToolTerminalHook({ agent, sourceReplyDeliveryMode: "automatic" });
+    const onCompletedSourceReply = vi.fn();
+    installMessageToolTerminalHook({
+      agent,
+      sourceReplyDeliveryMode: "automatic",
+      onCompletedSourceReply,
+    });
 
     await expect(
       agent.afterToolCall?.(
@@ -538,6 +546,7 @@ describe("message-tool-only source replies", () => {
         }),
       ),
     ).resolves.toEqual({ ...failure, terminate: true });
+    expect(onCompletedSourceReply).toHaveBeenCalledOnce();
   });
 
   it.each([false, true])(
