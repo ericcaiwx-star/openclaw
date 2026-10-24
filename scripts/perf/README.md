@@ -1011,6 +1011,77 @@ team-shape fixture. These are instrumented work counts, not measured frame bytes
 allocation, promotion, GC, or latency. Run allocation profiling and uninstrumented
 acceptance pairs separately with matched workloads and runtime versions.
 
+## Calibrating paired GC measurements
+
+Before rejecting an allocation change on GC/work, run identical-source A/A
+controls with the same runtime, fixture, pacing, warmup, capture length, and CPU
+placement as the candidate comparison. Use at least four independent concurrent
+pairs, swapping placements each pair. Keep every valid observation and report
+both sides, absolute and relative paired deltas, and the two-pair gate result for
+pairs 1–2 and 3–4. Four pairs can expose a false rejection; they cannot precisely
+estimate the false-positive rate. A guard-interrupted pair is discarded whole.
+
+Use `transcript-broadcast-measure.ts --diagnostics` **without** GC tracing,
+allocation or CPU profiling for natural-GC timing gates. Each RPC round without
+background polling records `naturalGc`: completed operation count, timing-gate
+eligibility, and GC milliseconds per operation split by kind. `diagnostics.gateway.gc` supplies
+collection counts, pause tails, and maxima; `eventLoopDelay` includes its sample
+count. The diagnostic capture also records Node/V8 versions, process age, and
+heap-space sizes before and after. Compare young-generation capacity: equal
+source does not imply equal nursery size after startup or an idle wait.
+
+Measure promotion separately with `--diagnostics --trace-gc` and matched A/A
+controls. This adds main-isolate `gcTrace` and `promotedBytesPerOperation` but marks
+timing as ineligible for gates. Node's GC event clock spans its prologue/epilogue
+callbacks; V8 prints the trace after stopping its collection-pause clock and
+before the epilogue callback. Trace serialization/output can therefore inflate
+GC-event and loop timings. Retain those raw observations for attribution; do not
+subtract trace overhead or replace total GC cost with the narrower trace-pause
+sum. Tracing also forces an initial identification GC before capture, so compare
+baseline and candidate within the same mode. See the
+[Node callback timer](https://github.com/nodejs/node/blob/v26.12.1/src/node_perf.cc#L166)
+and [V8 trace boundary](https://github.com/nodejs/node/blob/v26.12.1/deps/v8/src/heap/heap.cc#L1716).
+
+The allocation profiler is a separate experiment. Its stop operation forces GC;
+the outer `diagnostics.gateway` window includes that operation. Use allocation
+results for bytes/work, never that outer window as evidence of natural GC cost.
+
+For synchronized warm starts, give both drivers the same new `--start-file` path.
+After both print `PHASE warmed`, atomically publish a future epoch in milliseconds
+to that file. It replaces `--start-at`; missed deadlines fail the run. Keep the
+wait short and record the resulting process ages. This aligns workload start,
+not maintenance phase: repeating maintenance can be scheduled from the preceding
+pass's completion. Keep maintenance enabled and preserve its logs.
+
+```sh
+node --import ./scripts/tsx.mjs scripts/perf/transcript-broadcast-measure.ts \
+  --state-dir /path/to/fresh-team-shape --entry src/entry.ts \
+  --scenario plugin.scope --clients 1 --runs 1 --operations 1000 \
+  --warmup-operations 40 --rpc-interval-ms 132 --rounds 1 \
+  --port 41580 --mock-port 41582 --diagnostics \
+  --start-file /path/to/pair-start --revision <source-sha>
+```
+
+`--scenario cron.list` validates 40 disabled announce/last jobs targeting one
+synthetic session, including their full list and delivery previews. Generate
+fresh fixtures with `--cron 40 --cron-announce-last`; use `--rpc-interval-ms 1100` to
+exercise uncached reads. `--scenario board.get` prepares and validates three HTML
+widgets. `sessions.list` and `plugin.scope` retain their existing response checks.
+Generate both fixtures sequentially with matching inventory and zero transcript
+bulk when testing these metadata reads. Do not reuse the cron fixture across runs.
+
+If A/A crosses the proposed GC or promotion threshold, classify that short-window
+comparison as inconclusive. Select a longer **fixed work count** from the pilot,
+then freeze it before the candidate run and repeat the A/A control. Include
+several natural major collections per side when major-cycle phase drives the
+variance, and report counts even when insufficient. Do not stop each side after
+its own target collection count, force collections inside measurement, discard
+maintenance-overlapping outliers, trim major pauses, or divide cost by major
+cycles: each can remove a real frequency-dependent cost. Keep untrimmed GC/work
+as the primary cost and report pooled absolute cost/work alongside paired deltas.
+Retain the campaign's tail sample requirements and maximum-pause safeguard.
+A noisy control does not establish that a candidate is regression-free.
+
 ## Measure idle Gateway allocation and timer work
 
 `idle-gateway-measure.ts` connects one real Control UI client to an owned Gateway,
@@ -2706,6 +2777,40 @@ while Gateway state and temporary diff indexes remain owned by each side's
 `--state-dir`. The report includes the extra fixture inventories, checkout count,
 and each sample's checkout index. This adds multiple-root contention without
 generating another large filesystem tree; it still does not model a whole fleet.
+
+## Worker module graphs and retained admission facts
+
+`worker-module-graphs-measure.mjs` exercises the Git, plugin-preparation,
+Code Mode, and skill-discovery worker entrypoints through their task protocol.
+It records cold and warm script inventories, retained heap after collection,
+request latency, worker GC, and worker event-loop delay with sample counts.
+Each run owns one isolate. The synthetic fixture has four workspaces with eight
+skills each and plugin admission facts for 100 roots and 5,000 files.
+
+```sh
+node --import ./scripts/tsx.mjs scripts/perf/worker-module-graphs-measure.mjs \
+  --state-dir /path/to/owned-fixture --output /path/to/result.json \
+  --worker git-operation --samples 1200 --start-at <epoch-ms> --trace-gc
+```
+
+Other worker names are `plugin-generation-preparation`, `code-mode-node`, and
+`discovery`. Use one worker per concurrent baseline/candidate pair so `--start-at`
+synchronizes the measured windows after warmup and diagnostic collection. Missed
+start deadlines fail the run; `startedAt` records the actual request-window start.
+Allow enough preparation time for snapshots. Swap CPU placement in the second pair. `--baseline-dir` loads the original versions of the five import/admission
+owners listed in the worker helper, retaining candidate URLs for dependency
+resolution. Store those files at their repository-relative paths beneath that
+directory. `--snapshots` writes warm heap snapshots outside the timed window.
+
+Git replies come from real host-side Git commands, and a newly created branch must
+appear in the worker's inventory. Plugin resolve calls must return the captured
+source bytes, and close must release the artifact. Discovery verifies every
+skill; Code Mode checks the computed result across fresh completed contexts.
+This is a worker-boundary workload, not a full Gateway benchmark. Main-isolate
+heap and total allocated bytes are not measured. GC trace markers delimit each
+workload; identify the worker isolate from the forced collection between the
+identification markers. Report worker and whole-process GC time and promoted
+bytes separately so deferred host work remains visible.
 
 ## Sandbox measurements
 
