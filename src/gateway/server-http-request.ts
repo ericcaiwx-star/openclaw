@@ -276,6 +276,25 @@ export function createGatewayHttpRequestHandler(
       const scopedRequestPath = scopedNodeCapability.pathname;
       const pluginPathContext = resolvePluginRoutePathContext(scopedRequestPath);
       const nodeCapability = resolvePluginNodeCapabilityRoute?.(pluginPathContext);
+      const resolvedAuthValue = getResolvedAuth();
+      // Aggregate probes remain available without client attribution; their owner
+      // still authenticates callers before exposing diagnostic details.
+      if (
+        !remoteIngress &&
+        (await handleGatewayProbeRequest(
+          req,
+          res,
+          scopedRequestPath,
+          resolvedAuthValue,
+          trustedProxies,
+          allowRealIpFallback,
+          rateLimiter,
+          getReadiness,
+          getStartup,
+        ))
+      ) {
+        return undefined;
+      }
       if (ingressAttribution.kind === "unattributable-proxy") {
         opts.reportUnattributableProxy?.(ingressAttribution);
         if (
@@ -292,7 +311,6 @@ export function createGatewayHttpRequestHandler(
         return undefined;
       }
       const requestClientIp = ingressAttribution.clientIp;
-      const resolvedAuthValue = getResolvedAuth();
       const routeAuth = {
         auth: resolvedAuthValue,
         cfg: configSnapshot,
@@ -340,22 +358,7 @@ export function createGatewayHttpRequestHandler(
         }
         return true;
       };
-      const requestStages: GatewayHttpRequestStage[] = remoteIngress
-        ? []
-        : [
-            () =>
-              handleGatewayProbeRequest(
-                req,
-                res,
-                scopedRequestPath,
-                resolvedAuthValue,
-                trustedProxies,
-                allowRealIpFallback,
-                rateLimiter,
-                getReadiness,
-                getStartup,
-              ),
-          ];
+      const requestStages: GatewayHttpRequestStage[] = [];
       const addRequestStage = (
         enabled: boolean,
         stage: GatewayHttpRequestStage,

@@ -302,6 +302,49 @@ describe("gateway probe endpoints", () => {
     }
   });
 
+  it("serves bounded probes from headerless trusted proxies while protecting other routes", async () => {
+    const cfg = { gateway: { trustedProxies: ["10.0.0.8"] } };
+    let healthy = true;
+    await withProbeServer(
+      {
+        getRuntimeConfig: () => cfg,
+        getReadiness: () => ({ ...unready, ready: healthy }),
+        getStartup: () =>
+          healthy
+            ? { ok: true, status: "started", uptimeMs: 8_000 }
+            : {
+                ok: false,
+                status: "starting",
+                uptimeMs: 8_000,
+                pendingReason: "private-startup-detail",
+              },
+      },
+      async (probe) => {
+        for (const ready of [true, false]) {
+          healthy = ready;
+          for (const path of ["/ready", "/readyz", "/startup", "/startupz"]) {
+            const body = path.startsWith("/ready")
+              ? { ready }
+              : { ok: ready, status: ready ? "started" : "starting" };
+            for (const method of ["GET", "HEAD"]) {
+              const response = await probe.request({ ...remote(path), method });
+              expect(response.res.statusCode, `${method} ${path}`).toBe(ready ? 200 : 503);
+              expect(response.getBody()).toBe(method === "HEAD" ? "" : JSON.stringify(body));
+              expect(response.setHeader).toHaveBeenCalledWith(
+                "Content-Length",
+                String(Buffer.byteLength(JSON.stringify(body))),
+              );
+            }
+          }
+        }
+        const protectedResponse = await probe.request(remote("/tools/invoke"));
+        expect(protectedResponse.res.statusCode).toBe(403);
+        expect(protectedResponse.getBody()).toContain("proxy_attribution_required");
+      },
+      AUTH_TOKEN,
+    );
+  });
+
   it("rejects unattributable proxy ingress before hooks and watch-node handlers", async () => {
     const handleHooksRequest = vi.fn(async () => true);
     const handleWatchNodeRequest = vi.fn(async () => true);
