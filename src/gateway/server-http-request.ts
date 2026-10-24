@@ -58,6 +58,7 @@ import {
   markGatewayIngressTransport,
   prepareGatewayIngressAttribution,
 } from "./ingress-attribution.js";
+import { isTrustedProxyAddress } from "./net.js";
 import { normalizePluginNodeCapabilityScopedUrl } from "./plugin-node-capability.js";
 import {
   handleProviderOAuthCallback,
@@ -277,10 +278,12 @@ export function createGatewayHttpRequestHandler(
       const pluginPathContext = resolvePluginRoutePathContext(scopedRequestPath);
       const nodeCapability = resolvePluginNodeCapabilityRoute?.(pluginPathContext);
       const resolvedAuthValue = getResolvedAuth();
-      // Aggregate probes remain available without client attribution; their owner
-      // still authenticates callers before exposing diagnostic details.
+      // Configured proxies can probe without a client identity; diagnostic details
+      // still require attribution and authorization in the probe owner.
       if (
         !remoteIngress &&
+        (ingressAttribution.kind !== "unattributable-proxy" ||
+          isTrustedProxyAddress(ingressAttribution.remoteAddress, trustedProxies)) &&
         (await handleGatewayProbeRequest(
           req,
           res,

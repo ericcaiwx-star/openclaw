@@ -303,7 +303,7 @@ describe("gateway probe endpoints", () => {
   });
 
   it("serves bounded probes from headerless trusted proxies while protecting other routes", async () => {
-    const cfg = { gateway: { trustedProxies: ["10.0.0.8"] } };
+    const cfg = { gateway: { trustedProxies: ["10.0.0.0/24"] } };
     let healthy = true;
     await withProbeServer(
       {
@@ -345,13 +345,13 @@ describe("gateway probe endpoints", () => {
     );
   });
 
-  it("rejects unattributable proxy ingress before hooks and watch-node handlers", async () => {
+  it("rejects untrusted proxy ingress before probes, hooks, and watch-node handlers", async () => {
     const handleHooksRequest = vi.fn(async () => true);
     const handleWatchNodeRequest = vi.fn(async () => true);
     await withProbeServer(
       { handleHooksRequest, handleWatchNodeRequest },
       async (probe) => {
-        for (const path of ["/hooks/test", "/api/nodes/watch/node-1"]) {
+        for (const path of ["/readyz", "/startupz", "/hooks/test", "/api/nodes/watch/node-1"]) {
           const { res, getBody } = await probe.request({
             path,
             remoteAddress: "127.0.0.1",
