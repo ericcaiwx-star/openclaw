@@ -478,6 +478,7 @@ async function sendSubagentAnnounceDirectlyBound(
             return await runAnnounceAgentCall({
               agentParams: directAgentParams,
               controllerInput: params.controllerInput,
+              agentToolCaller: params.agentToolCaller,
               replyExpectation: inputReplyExpectation,
               // A resumed parent has no inbound channel dispatcher to keep activity visible.
               typing:

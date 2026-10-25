@@ -18,6 +18,7 @@ import { intersectOperatorScopes } from "../../../shared/operator-scope-compat.j
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import { normalizeDeliveryContext } from "../../../utils/delivery-context.shared.js";
 import { resolveSubagentRequesterAgentId } from "../../subagent-requester-owner.js";
+import { getGatewayToolCallerIdentity } from "../../tools/gateway-caller-context.js";
 import {
   prepareTerminatedCollectorLaunch,
   prepareSwarmCollectorCompletion,
@@ -83,6 +84,16 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
     const lifecycleGeneration = getAgentEventLifecycleGeneration();
     const cfg = this.options.getRuntimeConfig();
     const requesterAgentId = resolveSubagentRequesterAgentId(cfg, registerParams);
+    const requesterCaller = getGatewayToolCallerIdentity();
+    // Accounting only: never retain the spawning invocation's executable authority.
+    const originalSpawnInstance =
+      requesterCaller?.operationalRunInstance?.runId === registerParams.requesterTurnRunId &&
+      requesterCaller?.sessionKey === requesterSessionKey &&
+      requesterCaller?.agentId === requesterAgentId &&
+      !registerParams.collect &&
+      !registerParams.queued
+        ? requesterCaller.operationalRunInstance
+        : undefined;
     const controllerSessionKey = registerParams.controllerSessionKey?.trim() || requesterSessionKey;
     const childAgentId = resolveSubagentChildAgentId(registerParams);
     if (registerParams.childAgentId === undefined || !childAgentId) {
@@ -220,7 +231,9 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
               settleFailedLaunch,
             }),
       );
-      authority = await captureOperatorToolGatewayContinuationContext();
+      authority = await captureOperatorToolGatewayContinuationContext(undefined, {
+        retainRequester: true,
+      });
       const operator = authority?.operatorAuthority;
       let operatorRecoverySource: SubagentRunRecord["operatorRecoverySource"];
       if (
@@ -384,7 +397,12 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
                 ),
               });
               if (authority && !registerParams.collect) {
-                subagentRuns.bindCompletionAuthority(entry, authority);
+                subagentRuns.bindCompletionAuthority(
+                  entry,
+                  authority,
+                  false,
+                  originalSpawnInstance,
+                );
                 custodyTransferred = true;
               }
             } finally {
