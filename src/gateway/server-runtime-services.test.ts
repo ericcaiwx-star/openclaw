@@ -467,7 +467,9 @@ describe("server-runtime-services", () => {
     const log = createLog();
     const recoveryLog = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
     log.child.mockReturnValue(recoveryLog);
-    hoisted.countPendingDeliveryQueueEntries.mockResolvedValue(2);
+    hoisted.countPendingDeliveryQueueEntries.mockImplementation(async (names) =>
+      names.includes("outbound") ? 2 : 0,
+    );
     const { services } = activateScheduledServicesForTest({ log });
     await vi.dynamicImportSettled();
     expect(hoisted.recoverPendingDeliveries).toHaveBeenCalledOnce();

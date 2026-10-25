@@ -349,6 +349,23 @@ function startPendingOutboundDeliveryRecovery(params: {
         deliver,
         recoveryContext,
       );
+      if (!signal.aborted && !pending) {
+        // A live platform lease is skipped before the drain reports eligible work.
+        // Keep this existing recovery owner awake until its pending rows can be inspected.
+        const { countPendingDeliveryQueueEntries } =
+          await import("../infra/delivery-queue-sqlite.js");
+        const { OUTBOUND_EXECUTABLE_QUEUE_NAMES } =
+          await import("../infra/outbound/delivery-queue-namespaces.js");
+        if (
+          (await countPendingDeliveryQueueEntries(
+            OUTBOUND_EXECUTABLE_QUEUE_NAMES,
+            undefined,
+            recoveryContext,
+          )) > 0
+        ) {
+          schedule();
+        }
+      }
     }, "runtime:delivery-recovery").catch((err: unknown) => {
       pending = true;
       params.log.error(`Delivery recovery failed: ${String(err)}`);
