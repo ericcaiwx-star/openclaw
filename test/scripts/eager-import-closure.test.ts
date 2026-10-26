@@ -476,6 +476,18 @@ it.each([
     ],
   },
   {
+    name: "cold archive preparation",
+    entrypoints: [
+      "src/config/sessions/session-cold-storage-selection.ts",
+      "src/config/sessions/session-cold-storage-prepare.ts",
+    ],
+    dynamic: false,
+    deferredOwners: [
+      "src/state/openclaw-agent-db.ts",
+      "src/config/sessions/session-turn.kernel.ts",
+    ],
+  },
+  {
     name: "Ollama config metadata",
     entrypoints: ["extensions/ollama/src/defaults.ts", "extensions/ollama/provider-policy-api.ts"],
     dynamic: false,
