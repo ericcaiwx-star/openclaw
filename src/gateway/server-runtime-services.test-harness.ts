@@ -5,8 +5,6 @@ import type { scheduleGatewayPostReadyMaintenance } from "./server-runtime-servi
 
 type StartSessionDeliveryRuntime =
   typeof import("../infra/session-delivery-queue-runtime.js").startSessionDeliveryRuntime;
-type CountPendingDeliveries =
-  typeof import("../infra/delivery-queue-sqlite.js").countPendingDeliveryQueueEntries;
 type DrainPendingDeliveries =
   typeof import("../infra/outbound/delivery-queue-recovery.js").drainPendingDeliveriesCore;
 type RecoverPendingDeliveries =
@@ -35,7 +33,7 @@ const runtimeServiceMocks = vi.hoisted(() => {
       skippedMaxRetries: 0,
       deferredBackoff: 0,
     })),
-    countPendingDeliveryQueueEntries: vi.fn<CountPendingDeliveries>(async () => 0),
+    countPendingDeliveryQueueEntries: vi.fn(async () => 0),
     drainPendingDeliveries: vi.fn<DrainPendingDeliveries>(async () => undefined),
     recoverPendingRestartContinuationDeliveries: vi.fn(async () => undefined),
     deliverQueuedSessionDelivery: vi.fn(async () => undefined),
