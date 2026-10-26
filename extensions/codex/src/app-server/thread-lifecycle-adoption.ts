@@ -105,7 +105,8 @@ export async function withCodexThreadLifecycleBinding(
           ) {
             // Cold app preparation can publish while the first reply waits. Release
             // this selection before taking the published thread's native queue.
-            reselect = retry && !snapshot && binding?.clientId === params.client.getInstanceId();
+            // Preparation still owns replacement eligibility across physical clients.
+            reselect = retry && !snapshot && Boolean(binding);
             throw new CodexThreadBindingConflictError(
               binding?.threadId ?? snapshot?.threadId ?? params.params.sessionId,
               "acquiring thread lifecycle ownership",
