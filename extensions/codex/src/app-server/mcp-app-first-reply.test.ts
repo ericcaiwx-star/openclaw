@@ -186,31 +186,24 @@ it.each([
     await lease!.runtime.joinCleanup?.();
   }
   try {
-    const outcome = await (
+    const attempt =
       reply ??
       runCodexAppServerAttempt(params, {
         pluginConfig,
         clientFactory: async () => acquire(replyWire?.acquireOptions ?? wire.acquireOptions),
-      })
-    ).then(
-      (result) => ({ result }),
-      (error: unknown) => ({ error }),
-    );
-    if (cancelled) {
-      expect(outcome).toMatchObject({ error: { code: "CODEX_APP_SERVER_STARTUP_CANCELLED" } });
-    } else if (protectedOtherClient) {
-      expect(outcome).toMatchObject({
-        error: { message: "Codex thread app-thread is claimed by active work; stop it first." },
       });
+    if (cancelled) {
+      await expect(attempt).rejects.toMatchObject({ code: "CODEX_APP_SERVER_STARTUP_CANCELLED" });
+    } else if (protectedOtherClient) {
+      await expect(attempt).rejects.toThrow(
+        "Codex thread app-thread is claimed by active work; stop it first.",
+      );
     } else {
-      expect(outcome).not.toHaveProperty("error");
+      await expect(attempt).resolves.toMatchObject({ terminal: { kind: "ok" } });
     }
     expect((replyWire ?? wire).request.mock.calls.some(([method]) => method === "turn/start")).toBe(
       !cancelled && !protectedOtherClient,
     );
-    if ("result" in outcome) {
-      expect(outcome.result.terminal.kind).toBe(cancelled ? "aborted" : "ok");
-    }
     const messages = await readTranscriptMessagesByIdentity(params);
     expect(
       messages.filter((message) => message.role === "assistant").map((message) => message.content),
