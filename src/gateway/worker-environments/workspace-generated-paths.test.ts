@@ -113,6 +113,31 @@ it("excludes only generated runtime roots from capture and transfer", async () =
   }
 });
 
+it("excludes nested Git metadata from local and remote capture without hiding similarly named source files", async () => {
+  const retained = {
+    "source.txt": "source edit\n",
+    ".gitignore": "user ignore rules\n",
+    "cache/.git-notes": "user notes\n",
+    "cache/.git\n": "user file with trailing newline\n",
+    "cache/.gitmodules": "user submodule definitions\n",
+    [`${stagedRoot}/.gitignore`]: STAGED_INPUT_GITIGNORE,
+  };
+  const { workspace, capture } = await makeWorkspace({
+    ...retained,
+    ".git": "checkout metadata\n",
+    "cache/sdists/.git": "gitdir: elsewhere\n",
+    "fixtures/repository/.git/config": "nested repository metadata\n",
+    [`${stagedRoot}/repository/.git`]: "admitted metadata\n",
+  });
+  const { local, files } = await capture();
+  for (const entries of [local.manifest.entries, files]) {
+    expect(entries.map((entry) => entry.path).toSorted()).toEqual(Object.keys(retained).toSorted());
+  }
+  await expect(
+    fs.readFile(path.join(workspace, "fixtures/repository/.git/config"), "utf8"),
+  ).resolves.toBe("nested repository metadata\n");
+});
+
 it("omits cache-only ancestry from remote capture while retaining empty directories", async () => {
   const { workspace, capture } = await makeWorkspace(
     Object.fromEntries([...generatedPaths, workerPackage].map((name) => [name, "cache"])),

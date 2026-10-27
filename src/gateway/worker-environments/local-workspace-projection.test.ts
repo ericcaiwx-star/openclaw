@@ -173,6 +173,15 @@ it.each([false, true])(
   },
 );
 
+it.each([1, 2] as const)(
+  "settles historical nested Git v%s receipts without losing source edits",
+  async (version) => {
+    const { proveNestedGitWorkspaceRecovery } =
+      await import("./local-workspace-generated-paths.test-support.js");
+    await proveNestedGitWorkspaceRecovery(owner, version);
+  },
+);
+
 it("preserves host-admitted build-root inputs while excluding guest cache churn", async () => {
   const inputs = [
     ".artifacts/build-all-cache/compile/outputs/dist/authored.txt",
