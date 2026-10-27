@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
@@ -175,7 +176,7 @@ it("rejects stale journal absence when deletion arrives during native read clean
       .mockImplementation(() => {
         const source = captureSource();
         return {
-          ...source,
+          own: (close) => source.own(close),
           createTransport(command) {
             const owned = source.createTransport(command);
             if (selected || command.type !== "agentDeletionJournal.status") {
@@ -183,7 +184,7 @@ it("rejects stale journal absence when deletion arrives during native read clean
             }
             selected = true;
             return {
-              ...owned,
+              startValidateFresh: (...args) => owned.startValidateFresh(...args),
               async startRead(...args) {
                 const outcome = await owned.startRead(...args);
                 expect(outcome).toMatchObject({
@@ -245,7 +246,10 @@ function agentFixture(state: OpenClawTestState, agentId = "doomed") {
     paths,
     read: () => readJournalStatus(agentId, options),
     blocked(expected: boolean) {
+      using exits = vi.spyOn(AsyncLocalStorage.prototype, "exit");
       expect(isAgentDeletionBlocked(agentId, options)).toBe(expected);
+      // Published authority must not switch discovery contexts on each effect guard.
+      expect(exits).not.toHaveBeenCalled();
     },
     async deleting(run: () => Promise<void>) {
       await withAgentDeletion(

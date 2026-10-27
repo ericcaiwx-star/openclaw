@@ -18,7 +18,7 @@ import { modelAuthEventInvalidates } from "../../lib/model-auth-request-state.ts
 import { isSessionReactionEvent } from "../../lib/protocol-validators.generated/activity.js";
 import { listen } from "../../lib/reactive/listener.ts";
 import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
-import { resolveSessionKey } from "../../lib/sessions/index.ts";
+import { resolveSessionKey } from "../../lib/sessions/navigation.ts";
 import { parseAgentSessionKey } from "../../lib/sessions/session-key.ts";
 import { takeCreatedComposer } from "../new-session/creation-composer-registry.ts";
 import * as chatAvatars from "./chat-avatar.ts";
@@ -352,6 +352,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
         });
         if (snapshot && this.ownsChatSnapshot({ sessionKey: initialSessionKey })) {
           applyChatCacheSnapshot(pageState, snapshot);
+          this.syncSessionReactions();
           const target = this.resolveChatReadTarget();
           if (target && snapshot.progressCard !== undefined) {
             this.progressCards.hydrate(target, snapshot.progressCard);
@@ -398,6 +399,11 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
     if (this.draft !== undefined) {
       this.state.handleChatDraftChange(this.draft, []);
     }
+    // Admit the initial history read before installing secondary observers.
+    // Its replies run after this task, when all subscriptions below are in place.
+    this.applyApplicationConfig(this.context.config.current);
+    this.applySessionsState(this.context.sessions.state);
+    this.applyGatewaySnapshot(this.context.gateway.snapshot);
     const handleBrowserAnnotation = (event: Event) => this.receiveBrowserAnnotation(event);
     chatState.addCleanup(listen(window, BROWSER_ANNOTATION_EVENT, handleBrowserAnnotation));
     // Each connection edge retires media custody and transcript subscriptions synchronously.
@@ -505,10 +511,8 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
         }
       }),
     );
-    this.applyApplicationConfig(this.context.config.current);
     // Apply execution/media policy at publication, not at Solid's deferred render boundary.
     chatState.addCleanup(this.context.config.subscribe(this.applyApplicationConfig.bind(this)));
-    this.applySessionsState(this.context.sessions.state);
     // Roster receipts also evict deleted history, settle pending aborts, and admit queued sends.
     chatState.addCleanup(this.context.sessions.subscribe(this.applySessionsState.bind(this)));
     chatState.addCleanup(
@@ -538,7 +542,6 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
         },
       ),
     );
-    this.applyGatewaySnapshot(this.context.gateway.snapshot);
     this.synchronizeForegroundTranscript();
     const composerPresentation = new ChatPaneComposerHandoff(this.context, {
       state: () => this.state,

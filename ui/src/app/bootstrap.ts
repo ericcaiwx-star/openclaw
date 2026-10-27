@@ -22,7 +22,7 @@ import { sessionRefFromPath } from "../app-session-route-paths.ts";
 import { i18n, isSupportedLocale } from "../i18n/index.ts";
 import { createAgentIdentityCapability } from "../lib/agents/identity.ts";
 import { createAgentCapability } from "../lib/agents/index.ts";
-import { createChannelCapability } from "../lib/channels/index.ts";
+import type { ChannelCapability, createChannelCapability } from "../lib/channels/index.ts";
 import { createRuntimeConfigCapability } from "../lib/config/runtime-config-capability.ts";
 import { loadCurrentDeviceAuthToken } from "../lib/nodes/index.ts";
 import { createSessionCapability } from "../lib/sessions/index.ts";
@@ -222,6 +222,10 @@ export function bootstrapApplication(): ApplicationRuntime {
   if (bootRecord) {
     prewarmBootChat(bootRecord, settings.sessionKey, applicationLocation, basePath);
   }
+  if (startsApplicationRouter && !firstRunDefaultLanding) {
+    // Explicit routes download alongside snapshot reads, before shell construction.
+    warmApplicationRouteModule(router, applicationLocation, basePath);
+  }
   const stopWarmBootConnection = ownsWarmBoot
     ? subscribeWarmBootConnection(gateway, bootRecord, () => {
         warmBoot = false;
@@ -337,7 +341,17 @@ export function bootstrapApplication(): ApplicationRuntime {
     undefined,
     { requireConfiguredAgent: true },
   );
-  const channels = createChannelCapability(gateway);
+  let channels: ChannelCapability | undefined;
+  const acquireChannels = (create: typeof createChannelCapability): ChannelCapability => {
+    // A lazy route can finish importing after application teardown.
+    startupLifecycle.signal.throwIfAborted();
+    if (!channels) {
+      const owner = create(gateway);
+      channels = owner;
+      startupLifecycle.addDisposer(() => owner.dispose());
+    }
+    return channels;
+  };
   const stopForegroundBootstrap = subscribeForegroundChatBootstrap({
     router,
     chatSubmissions,
@@ -562,7 +576,7 @@ export function bootstrapApplication(): ApplicationRuntime {
     agentIdentity,
     agentSelection,
     settingsAgentSelection,
-    channels,
+    acquireChannels,
     config,
     scopeUpgrade,
     sidebarAttention,
@@ -635,11 +649,6 @@ export function bootstrapApplication(): ApplicationRuntime {
           return () => plugins.dispose();
         },
       ];
-      if (startsApplicationRouter && !firstRunDefaultLanding) {
-        // Download explicit-route chunks alongside startup. Default landing must
-        // wait for setup's decision before fetching the Chat workspace graph.
-        steps.unshift(() => warmApplicationRouteModule(router, applicationLocation, basePath));
-      }
       // Native bridge parsers and listeners stay out of browser startup.
       // SAFETY: WebKit supplies the optional handler map; the native initializer checks each callable.
       const nativeWindow = window as Window & { webkit?: { messageHandlers?: unknown } };
@@ -730,7 +739,6 @@ export function bootstrapApplication(): ApplicationRuntime {
       agents.dispose();
       agentSelection.dispose();
       settingsAgentSelection.dispose();
-      channels.dispose();
       scopeUpgrade.dispose();
       sidebarAttention.dispose();
       placementStartup.dispose();

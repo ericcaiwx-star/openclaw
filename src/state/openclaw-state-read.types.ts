@@ -93,6 +93,10 @@ export type OpenClawStateReadCommand =
       input: ListTerminalOperatorApprovalsInput;
     }
   | {
+      type: "operatorApprovals.pendingSnapshot";
+      input: { cursor?: string };
+    }
+  | {
       type: "operatorApprovals.pending";
       input: Parameters<
         typeof import("../gateway/operator-approval-store.kernel.worker.js").readPendingOperatorApprovalsInDatabase
@@ -160,6 +164,7 @@ export type OpenClawStateReadCommand =
       type: "userModelAccounts.catalog";
       selection: import("./user-model-accounts.js").PersonalCatalogSelection;
     }
+  | { type: "userPreferences.sessionPins" }
   | { type: "userPreferences.values"; profileIds: readonly string[]; key: string }
   | { type: "userPreferences.read"; profileId: string; keys?: readonly string[] }
   | {
