@@ -125,8 +125,7 @@ async function sendSubagentAnnounceDirectlyBound(
       params.targetRequesterSessionKey,
       params.requesterAgentId,
     );
-    const requesterEntry = requester.entry;
-    const requesterCanonicalKey = requester.canonicalKey;
+    const { entry: requesterEntry, canonicalKey: requesterCanonicalKey } = requester;
     const requesterAgentId = requester.agentId;
     const requesterStorePath = requester.storePath;
     const requesterSessionId = requesterEntry?.sessionId;
