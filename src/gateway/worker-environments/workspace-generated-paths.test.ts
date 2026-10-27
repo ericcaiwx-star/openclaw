@@ -118,7 +118,6 @@ it("excludes nested Git metadata from local and remote capture without hiding si
     "source.txt": "source edit\n",
     ".gitignore": "user ignore rules\n",
     "cache/.git-notes": "user notes\n",
-    "cache/.git\n": "user file with trailing newline\n",
     "cache/.gitmodules": "user submodule definitions\n",
     [`${stagedRoot}/.gitignore`]: STAGED_INPUT_GITIGNORE,
   };
@@ -232,6 +231,7 @@ it("compares workspace inventories without allocating path-segment arrays", () =
 it("matches derived names and suffixes only at exact segment boundaries", () => {
   const attachment = "openclaw-inbound-12345678-1234-4234-8234-123456789abc";
   for (const segment of [
+    ".git",
     "__pycache__",
     ".pytest_cache",
     ".mypy_cache",
