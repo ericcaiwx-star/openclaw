@@ -112,8 +112,8 @@ export class TranscriptLayoutOwner {
     return Math.max(size, this.rowMinimum(instance.indexFromElement(element)));
   };
 
-  persistRows(instance: Virtualizer<HTMLDivElement, HTMLElement>): void {
-    if (this.recordingRows || !this.rowLayout) {
+  persistRows(instance: Virtualizer<HTMLDivElement, HTMLElement>, positionPending: boolean): void {
+    if (positionPending || !this.ready || this.recordingRows || !this.rowLayout) {
       return;
     }
     this.recordingRows = true;
@@ -131,18 +131,22 @@ export class TranscriptLayoutOwner {
         this.rowLayout?.writeRows(
           Object.fromEntries(
             [...instance.elementsCache].flatMap(([id, element]) => {
+              if (!element.isConnected) {
+                return [];
+              }
+              const key = this.rowLayoutKey(instance.indexFromElement(element));
+              const size = instance.itemSizeCache.get(id) ?? 0;
               // Local disclosure state is not restored on reload.
               if (
-                !element.isConnected ||
+                !key ||
+                !(size > 0 && size <= 8000) ||
                 element.matches(
                   ":has(details[open], .chat-tool-card__raw-toggle[aria-expanded='true'], .code-block-wrapper:is(.is-expanded, .is-wrapped, .is-json-raw))",
                 )
               ) {
                 return [];
               }
-              const key = this.rowLayoutKey(instance.indexFromElement(element));
-              const size = instance.itemSizeCache.get(id) ?? 0;
-              return key && size > 0 && size <= 8000 ? [[key, size]] : [];
+              return [[key, size]];
             }),
           ),
         );
