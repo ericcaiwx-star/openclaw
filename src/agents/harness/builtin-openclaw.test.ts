@@ -40,9 +40,8 @@ it.each([true, false])(
   "captures live support=%s and invocation state in async custody",
   async (liveSupport) => {
     const scope = new AsyncLocalStorage<object>();
-    const owner = {};
     const onAgentEvent = vi.fn(() => {
-      expect(scope.getStore()).toBe(owner);
+      expect(scope.getStore()).toBe(harness);
     });
     harness.supportsTurnScopedToolRestrictions = liveSupport;
     const params = {
@@ -50,7 +49,7 @@ it.each([true, false])(
       onAgentEvent,
       supportsTurnScopedToolRestrictions: true,
     };
-    const pending = scope.run(owner, () => harness.runAttempt(params as never));
+    const pending = scope.run(harness, () => harness.runAttempt(params as never));
     params.thinkLevel = "off";
     harness.supportsTurnScopedToolRestrictions = !liveSupport;
     await pending;
@@ -64,12 +63,9 @@ it.each([true, false])(
   },
 );
 
-it.each([true, false])(
-  "enforces tool-free finalization using captured context=%s while forwarding lifecycle notifications",
-  async (captured) => {
-    const onAttemptDeadlineChanged = vi.fn();
-    const onAttemptTimeoutArmed = vi.fn();
-    const onAgentEvent = vi.fn<NonNullable<EmbeddedRunAttemptParams["onAgentEvent"]>>();
+it.each([undefined, "openclaw-transcript", "unavailable", "harness", null])(
+  "enforces isolated finalization context=%s and lifecycle custody",
+  async (source) => {
     const ambient = {
       extraSystemPrompt: "ambient system context",
       skillsSnapshot: { prompt: "ambient skills" },
@@ -78,51 +74,49 @@ it.each([true, false])(
       trigger: "heartbeat",
       onPartialReply: vi.fn(),
     };
-    const attempt = {
-      ...ambient,
+    const forwarded = {
       prompt: "finalize",
       sessionManager: { owner: "host" },
       sessionPersistence: "detached",
-      disableTools: false,
       prepareAssistantTranscriptMessage: vi.fn(),
-      onAttemptDeadlineChanged,
-      onAttemptTimeoutArmed,
-      onAgentEvent,
+      onAttemptDeadlineChanged: vi.fn(),
+      onAttemptTimeoutArmed: vi.fn(),
+      onAgentEvent: vi.fn<NonNullable<EmbeddedRunAttemptParams["onAgentEvent"]>>(),
       deferTerminalLifecycle: true,
     };
-    const messages = Object.freeze([
-      { role: "user" as const, content: "assembled context", timestamp: 1 },
-    ]);
+    const attempt = { ...ambient, ...forwarded, disableTools: false };
+    const messages = Object.freeze([{ role: "user" as const, content: "assembled", timestamp: 1 }]);
     const pending = harness.finalizeSettledTurn?.({
       attempt: attempt as never,
       settledAttempt: {
-        messagesSnapshot: messages,
-        ...(captured
-          ? { settledTurnFinalizationContext: { source: "openclaw-transcript", messages } }
-          : {}),
+        messagesSnapshot: source === null ? undefined : messages,
+        settledTurnFinalizationContext: source ? { source, messages } : undefined,
       } as never,
     });
+    if (source === "unavailable" || source === "harness" || source === null) {
+      await expect(pending).rejects.toThrow("requires the settled attempt transcript view");
+      expect(runEmbeddedAttempt).not.toHaveBeenCalled();
+      return;
+    }
     attempt.prompt = "changed after invocation";
     attempt.sessionManager = { owner: "other" };
     attempt.onAgentEvent = vi.fn();
     await pending;
 
-    expect(onAttemptDeadlineChanged).toHaveBeenCalledExactlyOnceWith(deadline);
-    expect(onAttemptTimeoutArmed).toHaveBeenCalledOnce();
-    expect(onAgentEvent.mock.calls).toEqual([[lifecycle("start")], [lifecycle("finishing")]]);
+    expect(forwarded.onAttemptDeadlineChanged).toHaveBeenCalledExactlyOnceWith(deadline);
+    expect(forwarded.onAttemptTimeoutArmed).toHaveBeenCalledOnce();
+    const events = forwarded.onAgentEvent.mock.calls;
+    expect(events).toEqual([[lifecycle("start")], [lifecycle("finishing")]]);
     const finalizationAttempt = runEmbeddedAttempt.mock.calls[0]?.[0] as Record<string, unknown>;
     expect(finalizationAttempt).toMatchObject({
-      prompt: "finalize",
+      ...forwarded,
       settledTurnFinalizationMessages: messages,
-      sessionManager: { owner: "host" },
-      sessionPersistence: "detached",
       disableTools: true,
       disableTrajectory: true,
       skipPreparedUserTurnMessage: true,
       suppressNextUserMessagePersistence: true,
       initialReplayState: { replayInvalid: false, hadPotentialSideEffects: false },
       operation: "settled-tool-finalization",
-      prepareAssistantTranscriptMessage: attempt.prepareAssistantTranscriptMessage,
     });
     for (const key of Object.keys(ambient)) {
       expect(finalizationAttempt).not.toHaveProperty(key);
@@ -149,16 +143,3 @@ it("rejects harness-owned isolated authorization", async () => {
   );
   expect(completeWithPreparedSimpleCompletionModel).not.toHaveBeenCalled();
 });
-
-it.each([undefined, { source: "unavailable" }, { source: "harness", data: {} }])(
-  "refuses finalization without a source transcript view: %j",
-  async (context) => {
-    await expect(
-      harness.finalizeSettledTurn?.({
-        attempt: {} as never,
-        settledAttempt: { settledTurnFinalizationContext: context } as never,
-      }),
-    ).rejects.toThrow("requires the settled attempt transcript view");
-    expect(runEmbeddedAttempt).not.toHaveBeenCalled();
-  },
-);
