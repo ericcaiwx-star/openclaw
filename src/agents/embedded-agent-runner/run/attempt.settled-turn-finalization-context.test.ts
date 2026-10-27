@@ -18,12 +18,20 @@ const { hoisted, runAttempt } = useContextEngineAttemptHarness(sessionKey);
 const getContext = useFinalizationAdmission([]);
 
 describe("settled post-tool turn finalization context", () => {
-  it("keeps detached tool receipts and hidden prompts across empty finalization retries", async () => {
+  it("keeps assembled detached context and tool receipts across empty finalization retries", async () => {
     const { guardSessionManager } = await vi.importActual<
       typeof import("../../session-tool-result-guard-wrapper.js")
     >("../../session-tool-result-guard-wrapper.js");
     hoisted.guardSessionManagerMock.mockImplementation(guardSessionManager);
     const manager = SessionManager.inMemory();
+    const rawHistory = {
+      role: "user" as const,
+      content: "Old history omitted by the context engine",
+      timestamp: 0,
+    };
+    const historicalAnswer = textAssistant("Earlier answer.");
+    manager.appendMessage(rawHistory);
+    manager.appendMessage(historicalAnswer);
     const call = toolAssistant(["call-read", "read"]);
     const toolResult = makeTextToolResult("call-read", "read", "file contents", false, 3);
     const subscription = createSubscriptionMock();
@@ -35,7 +43,15 @@ describe("settled post-tool turn finalization context", () => {
     });
     hoisted.subscribeEmbeddedAgentSessionMock.mockReturnValue(subscription);
     const settled = await runAttempt({
-      sessionMessages: [],
+      sessionMessages: [rawHistory, historicalAnswer],
+      contextEngine: {
+        assemble: async ({ messages }) => ({
+          messages: messages.filter(
+            (message) => message.role !== "user" || message.content !== rawHistory.content,
+          ),
+          estimatedTokens: 1,
+        }),
+      },
       attemptOverrides: { sessionManager: manager, sessionPersistence: "detached" },
       sessionPrompt: async (session, prompt) => {
         const user = { role: "user" as const, content: prompt, timestamp: 1 };
@@ -49,7 +65,12 @@ describe("settled post-tool turn finalization context", () => {
       },
     });
     expect(settled.terminal.kind).toBe("failed");
-    expect(settled.itemLifecycle).toEqual({ startedCount: 1, completedCount: 1, activeCount: 0 });
+    expect(
+      settled.itemLifecycle,
+      JSON.stringify(settled.terminal, (_, value) =>
+        value instanceof Error ? value.message : value,
+      ),
+    ).toEqual({ startedCount: 1, completedCount: 1, activeCount: 0 });
 
     const finalizerContexts: unknown[][] = [];
     finalizationRunner.mockImplementation(async (attempt: EmbeddedRunAttemptParams) => {
@@ -90,6 +111,7 @@ describe("settled post-tool turn finalization context", () => {
     expect(finalizerContexts).toHaveLength(2);
     for (const messages of finalizerContexts) {
       expect(messages).toContainEqual(expect.objectContaining(toolResult));
+      expect(messages).not.toContainEqual(expect.objectContaining(rawHistory));
     }
     const userMessages = manager
       .buildSessionContext()
@@ -99,8 +121,13 @@ describe("settled post-tool turn finalization context", () => {
       display: false,
       provenance: { kind: "internal_system" },
     };
-    expect(userMessages).toMatchObject([{ content: "hello" }, internalPrompt, internalPrompt]);
-    expect(userMessages[0]).not.toHaveProperty("display", false);
+    expect(userMessages).toMatchObject([
+      rawHistory,
+      { content: "hello" },
+      internalPrompt,
+      internalPrompt,
+    ]);
+    expect(userMessages[1]).not.toHaveProperty("display", false);
     const genuineUser = { role: "user" as const, content: "Read the next file", timestamp: 5 };
     manager.appendMessage(genuineUser);
     expect(manager.buildSessionContext().messages).toContainEqual(
