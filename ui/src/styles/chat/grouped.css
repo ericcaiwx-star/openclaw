@@ -158,6 +158,7 @@
 
 /* Delivery recovery stays visible even when identity metadata is collapsed. */
 .chat-group-footer.chat-group-footer--send-status {
+  --chat-footer-detail-position: static;
   --chat-footer-disclosure-opacity: 1;
   --chat-footer-disclosure-pointer-events: auto;
   opacity: 1;
@@ -737,6 +738,7 @@
 }
 .chat-divider__rule {
   display: flex;
+  min-width: 0;
   align-items: center;
   gap: 10px;
 }
@@ -768,6 +770,30 @@
 .chat-divider__icon svg {
   width: 100%;
   height: 100%;
+}
+
+.chat-divider__model {
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  vertical-align: middle;
+}
+
+.chat-divider__model .chat-divider__icon {
+  flex-shrink: 0;
+  margin-inline-end: 4px;
+}
+
+.chat-divider__model-affix {
+  flex-shrink: 0;
+  white-space: pre;
+}
+
+.chat-divider__model bdi {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .chat-divider__separator,
@@ -811,6 +837,24 @@
   flex-wrap: wrap;
   justify-content: center;
   overflow-wrap: anywhere;
+}
+
+.chat-notice .chat-divider__title {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.chat-notice--model-change .chat-divider__label {
+  letter-spacing: normal;
+  text-transform: none;
+}
+
+.chat-notice--model-change .chat-divider__title {
+  text-wrap: balance;
+}
+
+.chat-notice--model-change .provider-brand-icon {
+  color: inherit;
 }
 
 .chat-notice .chat-text {
@@ -1060,29 +1104,6 @@ img.chat-avatar {
    exactly where it punched. Direct threads have no avatar indent to match. */
 .chat-group--working .chat-group-messages {
   padding-inline-start: var(--chat-avatar-gutter);
-}
-
-.chat-duplicate-count {
-  display: inline-flex;
-  align-items: center;
-  align-self: baseline;
-  min-height: 22px;
-  margin-top: 0;
-  padding: 2px 7px;
-  border: 1px solid color-mix(in srgb, var(--border) 75%, transparent);
-  border-radius: var(--radius-sm);
-  background: color-mix(in srgb, var(--panel) 72%, transparent);
-  color: var(--muted);
-  font-size: 12px;
-  font-weight: 700;
-  line-height: 1;
-  vertical-align: 0.08em;
-  white-space: nowrap;
-}
-
-.chat-group.user .chat-duplicate-count {
-  background: color-mix(in srgb, var(--primary) 12%, transparent);
-  color: color-mix(in srgb, var(--text) 80%, var(--primary) 20%);
 }
 
 .chat-group.chat-group--reply {

@@ -219,7 +219,6 @@ export type ChatItem =
       kind: "message";
       key: string;
       message: unknown;
-      duplicateCount?: number;
       /** A distinct input remains a presentation boundary before execution starts. */
       startsTurn?: true;
     }
@@ -230,6 +229,7 @@ export type ChatItem =
       timestamp: number;
       icon?: IconName;
       label?: string;
+      modelChange?: { from: string; to: string };
       startsTurn?: true;
       boundaryId?: string;
       tone?: "danger";
@@ -374,7 +374,6 @@ export type MessageGroup = {
   messages: Array<{
     message: unknown;
     key: string;
-    duplicateCount?: number;
     replyTarget?: NormalizedMessage["replyTarget"];
     /** Rendered reply content, excluding assistant thinking tags. */
     hasVisibleContent: boolean;
