@@ -73,6 +73,12 @@ describe("toolCallXmlTextFilter streamed projection work", () => {
     ["multiline HTML", htmlAnswer(16_000), CHUNK, false],
     ["single-line HTML", htmlAnswer(16_000, false), CHUNK, false],
     [
+      "inline-code comparisons",
+      "The guard uses `min` and `max`, so `a < b` returns false. ".repeat(300),
+      CHUNK,
+      false,
+    ],
+    [
       "a fenced tool-call example",
       `\`\`\`xml\n<tool_call>{"path":"a.ts"}</tool_call>\n\`\`\`\n\n${htmlAnswer(16_000)}`,
       98,
