@@ -1,0 +1,75 @@
+{
+  "name": "Author exact-head Linux evidence",
+  "on": { "push": { "branches": ["codex/ci-evidence-198696-200765-20261118"] } },
+  "permissions": { "contents": "read" },
+  "jobs":
+    {
+      "evidence":
+        {
+          "name": "PR ${{ matrix.pr }} exact-head checks",
+          "runs-on": "ubuntu-24.04",
+          "timeout-minutes": 45,
+          "strategy":
+            {
+              "fail-fast": false,
+              "max-parallel": 2,
+              "matrix":
+                {
+                  "include":
+                    [
+                      { "pr": 198696, "sha": "3993aff1b32aeb966150e04065ae1759af491325" },
+                      { "pr": 200765, "sha": "4c22b3688fce0188e6d454631c4b0e3d3948b920" },
+                    ],
+                },
+            },
+          "env":
+            {
+              "PR": "${{ matrix.pr }}",
+              "EXPECTED_HEAD": "${{ matrix.sha }}",
+              "NODE_OPTIONS": "--max-old-space-size=4096",
+              "OPENCLAW_VITEST_MAX_WORKERS": "1",
+            },
+          "steps":
+            [
+              {
+                "name": "Checkout exact public PR head",
+                "uses": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+                "with":
+                  {
+                    "repository": "ericcaiwx-star/openclaw",
+                    "ref": "${{ matrix.sha }}",
+                    "persist-credentials": false,
+                    "submodules": false,
+                    "fetch-depth": 1,
+                  },
+              },
+              {
+                "name": "Verify source identity",
+                "run": "set -euo pipefail\ntest \"$(git rev-parse HEAD)\" = \"$EXPECTED_HEAD\"\ntest -z \"$(git status --porcelain)\"\nprintf \"PR=%s source=%s harness=%s\\n\" \"$PR\" \"$EXPECTED_HEAD\" \"${{ github.sha }}\"",
+              },
+              {
+                "name": "Setup pinned source toolchain",
+                "id": "setup",
+                "uses": "./.github/actions/setup-node-env",
+                "with":
+                  { "semantic-checks": "true", "cache-mode": "off", "dependency-cache": "false" },
+              },
+              {
+                "name": "Production and affected test types, lint and format",
+                "if": "${{ !cancelled() && steps.setup.outcome == 'success' }}",
+                "run": "set -uo pipefail\nresult=0\ncorepack pnpm tsgo:core || result=1\nif [[ \"$PR\" == \"198696\" ]]; then\n  node scripts/run-oxlint.mjs --tsconfig config/tsconfig/oxlint.core.json src/gateway/operator-session-run.ts src/gateway/server-http.openai-sandbox.test.ts || result=1\n  corepack pnpm exec oxfmt --check src/gateway/operator-session-run.ts src/gateway/server-http.openai-sandbox.test.ts || result=1\n  node scripts/run-tsgo-core-test-shards.mjs --changed-paths-json '[\"src/gateway/server-http.openai-sandbox.test.ts\"]' --concurrency 1 || result=1\nelse\n  node scripts/run-oxlint.mjs --tsconfig config/tsconfig/oxlint.core.json src/state/agent-deletion-journal-recovery.kernel.ts src/state/agent-deletion-journal-recovery.test.ts src/gateway/agent-list.test.ts || result=1\n  corepack pnpm exec oxfmt --check src/state/agent-deletion-journal-recovery.kernel.ts src/state/agent-deletion-journal-recovery.test.ts src/gateway/agent-list.test.ts || result=1\n  node scripts/run-tsgo-core-test-shards.mjs --changed-paths-json '[\"src/state/agent-deletion-journal-recovery.test.ts\",\"src/gateway/agent-list.test.ts\"]' --concurrency 1 || result=1\nfi\nexit \"$result\"",
+              },
+              {
+                "name": "Affected regression and boundary tests",
+                "if": "${{ !cancelled() && steps.setup.outcome == 'success' }}",
+                "run": "set -euo pipefail\nif [[ \"$PR\" == \"198696\" ]]; then\n  node scripts/run-vitest.mjs src/gateway/server-http.openai-sandbox.test.ts src/agents/command/attempt-execution.shared.test.ts src/gateway/session-sharing.creator-namespace.test.ts src/gateway/openai-compatible-agent-run.test.ts src/gateway/operator-session-run.test.ts --maxWorkers=1\nelse\n  node scripts/test-projects.mts src/state/agent-deletion-journal-recovery.test.ts src/gateway/agent-list.test.ts src/agents/agent-create.integration.test.ts src/agents/agent-create.retained-schema.test.ts src/gateway/server-methods/sessions-read.test.ts src/infra/backup-volatile-filter.test.ts src/state/agent-deletion-journal-initialization.test.ts src/state/agent-deletion-journal.snapshot.test.ts src/state/openclaw-state-db.paths.windows.test.ts src/commands/doctor-agent-deletion-journal-restore.test.ts src/commands/doctor-agent-deletion-journal.test.ts --maxWorkers=1\nfi",
+              },
+              {
+                "name": "Full product build",
+                "if": "${{ !cancelled() && steps.setup.outcome == 'success' }}",
+                "run": "corepack pnpm build",
+              },
+            ],
+        },
+    },
+}
